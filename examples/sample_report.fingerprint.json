@@ -1,0 +1,86 @@
+{
+  "edgelens_version": "0.1.0",
+  "generated_at": "2026-09-23T01:41:35",
+  "hardware": {
+    "is_jetson": false,
+    "model": "Non-Jetson host (vm)",
+    "l4t_release_raw": null
+  },
+  "software": {
+    "os": "Linux-6.18.44-fc-v37-x86_64-with-glibc2.39",
+    "python": "3.12.3",
+    "jetpack_l4t": null,
+    "cuda": null,
+    "tensorrt": null,
+    "packages": {
+      "torch": null,
+      "onnx": null,
+      "onnxruntime": "1.24.4",
+      "numpy": "2.4.4",
+      "cv2": "4.13.0",
+      "pycuda": null
+    }
+  },
+  "benchmark": {
+    "mode": "demo",
+    "pipeline_source": "simulated",
+    "iterations": 60,
+    "stage_avg_ms": {
+      "capture": 2.967,
+      "preprocess": 13.775,
+      "h2d_copy": 2.806,
+      "inference": 12.06,
+      "d2h_copy": 1.528,
+      "postprocess": 2.884
+    },
+    "total_latency_ms": 36.02,
+    "latency_p50_ms": 35.814,
+    "latency_p95_ms": 40.32,
+    "latency_p99_ms": 42.912,
+    "fps": 27.76,
+    "telemetry": {
+      "cpu_percent": 93.0,
+      "gpu_percent": 38.0,
+      "mem_percent": 42.0,
+      "mem_used_gb": 3.36,
+      "mem_total_gb": 8.0,
+      "swap_used_gb": 0.0,
+      "temps_c": {
+        "CPU-therm": 52.0,
+        "GPU-therm": 49.0
+      }
+    }
+  },
+  "diagnosis": {
+    "stage_pct": {
+      "capture": 8.2,
+      "preprocess": 38.2,
+      "h2d_copy": 7.8,
+      "inference": 33.5,
+      "d2h_copy": 4.2,
+      "postprocess": 8.0
+    },
+    "resource_snapshot": {
+      "cpu_percent": 93.0,
+      "gpu_percent": 38.0,
+      "mem_percent": 42.0,
+      "max_temp_c": 52.0
+    },
+    "primary": {
+      "type": "CPU_BOUND_PREPROCESS",
+      "confidence": 0.78,
+      "detail": "Preprocessing consumes 38.2% of total pipeline latency while CPU utilization is 93.0%.",
+      "recommendation": "Move resize/color-conversion to the GPU (CUDA/VPI) or use hardware-accelerated decode instead of CPU-side OpenCV."
+    },
+    "secondary": [],
+    "all_findings": [
+      {
+        "type": "CPU_BOUND_PREPROCESS",
+        "confidence": 0.78,
+        "detail": "Preprocessing consumes 38.2% of total pipeline latency while CPU utilization is 93.0%.",
+        "recommendation": "Move resize/color-conversion to the GPU (CUDA/VPI) or use hardware-accelerated decode instead of CPU-side OpenCV."
+      }
+    ]
+  },
+  "fingerprint_id": "9829158df29b"
+}

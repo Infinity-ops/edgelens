@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+edgelens_benchmark*.json
+edgelens_report*.html
+edgelens_report*.json
+*.diagnosis.json
+.venv/
+venv/
