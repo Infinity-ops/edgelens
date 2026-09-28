@@ -1,7 +1,7 @@
 """
 edgelens.cli
 -------------
-Command-line interface: doctor, monitor, benchmark, diagnose, report.
+Command-line interface: doctor, monitor, benchmark, diagnose, report, compare.
 """
 
 import json
@@ -17,6 +17,7 @@ from rich.table import Table
 from . import __version__
 from .benchmark.fingerprint import build_fingerprint
 from .benchmark.runner import run_benchmark
+from .compare.engine import compare as run_compare
 from .diagnose.engine import diagnose as run_diagnose
 from .hardware import detector, telemetry
 from .report.generator import generate_html_report
@@ -26,6 +27,15 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+DEMO_WARNING = (
+    "SIMULATED DATA — NOT A REAL MEASUREMENT. Every number below is synthetic, "
+    "generated only to preview EdgeLens' output format."
+)
+
+
+def _demo_banner():
+    console.print(Panel(f"⚠️  {DEMO_WARNING}", style="bold red", border_style="red"))
 
 
 def _non_jetson_notice():
@@ -96,6 +106,11 @@ def monitor(
 @app.command()
 def benchmark(
     iterations: int = typer.Option(50, help="Number of timed iterations."),
+    model: str = typer.Option(None, "--model", help="Path to a real .onnx model — runs a "
+                               "real ONNX Runtime session (CPU on a laptop, CUDA/TensorRT "
+                               "on Jetson if available)."),
+    provider: str = typer.Option(None, "--provider", help="Override the ONNX Runtime "
+                                  "execution provider, e.g. CUDAExecutionProvider."),
     demo: bool = typer.Option(False, "--demo", help="Force synthetic/demo data."),
     scenario: str = typer.Option(
         "balanced", help="Demo scenario: balanced|preprocess|memory|gpu|thermal"
@@ -104,12 +119,24 @@ def benchmark(
 ):
     """Run a benchmark; measure per-stage latency, FPS, and utilization."""
     is_jetson = detector.is_jetson()
-    use_demo = demo or not is_jetson
-    if use_demo and not demo:
-        console.print("[yellow]Non-Jetson host detected — running in --demo mode automatically.[/yellow]")
+
+    if not demo and model is None and not is_jetson:
+        console.print("[yellow]No --model given on a non-Jetson host — running in "
+                       "--demo mode automatically. Pass --model path/to/model.onnx "
+                       "for a real (CPU) measurement.[/yellow]")
 
     with console.status("Running benchmark..."):
-        result = run_benchmark(iterations=iterations, demo=use_demo, demo_scenario=scenario)
+        try:
+            result = run_benchmark(
+                iterations=iterations, demo=demo, demo_scenario=scenario,
+                model_path=model, provider=provider,
+            )
+        except RuntimeError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+
+    if result["mode"] == "demo":
+        _demo_banner()
 
     table = Table(title=f"EdgeLens Benchmark ({result['mode']} mode, {result['pipeline_source']})")
     table.add_column("Stage")
@@ -125,11 +152,21 @@ def benchmark(
     console.print(f"P50 {result['latency_p50_ms']}ms  P95 {result['latency_p95_ms']}ms  "
                    f"P99 {result['latency_p99_ms']}ms")
 
+    tel = result.get("telemetry", {})
+    if tel:
+        console.print(
+            f"[dim]Telemetry over {tel.get('sample_count', 0)} samples "
+            f"({tel.get('duration_s', 0)}s): "
+            f"CPU mean {tel.get('cpu_percent_mean')}% / peak {tel.get('cpu_percent_peak')}% · "
+            f"GPU mean {tel.get('gpu_percent_mean')}% / peak {tel.get('gpu_percent_peak')}% · "
+            f"peak temp {tel.get('max_temp_c')}C[/dim]"
+        )
+
     Path(save).write_text(json.dumps(result, indent=2))
     console.print(f"[green]Saved →[/green] {save}")
 
     if result["mode"] == "demo":
-        console.print("[dim]Note: this is synthetic demo data, not a real hardware measurement.[/dim]")
+        _demo_banner()
 
 
 @app.command()
@@ -143,22 +180,32 @@ def diagnose(
         raise typer.Exit(1)
 
     data = json.loads(path.read_text())
+    if data.get("mode") == "demo":
+        _demo_banner()
+
     verdict = run_diagnose(data)
     primary = verdict["primary"]
 
+    evidence_lines = "\n".join(
+        f"  {k}: {v}" for k, v in (primary.get("evidence") or {}).items()
+    )
     console.print(Panel(
-        f"[bold]{primary['type']}[/bold]  [dim](confidence {primary['confidence']*100:.0f}%)[/dim]\n\n"
+        f"[bold]{primary['type']}[/bold]  [dim](evidence strength {primary['evidence_strength']*100:.0f}%)[/dim]\n\n"
         f"{primary['detail']}\n\n"
+        f"[dim]Evidence:\n{evidence_lines}[/dim]\n\n"
         f"[cyan]→ {primary['recommendation']}[/cyan]",
         title="Diagnosis",
     ))
     for f in verdict["secondary"]:
         console.print(f"  also considered: [bold]{f['type']}[/bold] "
-                       f"({f['confidence']*100:.0f}%) — {f['detail']}")
+                       f"(evidence strength {f['evidence_strength']*100:.0f}%) — {f['detail']}")
 
     out = path.with_suffix("").with_suffix(".diagnosis.json")
     out.write_text(json.dumps(verdict, indent=2))
     console.print(f"[green]Saved →[/green] {out}")
+
+    if data.get("mode") == "demo":
+        _demo_banner()
 
 
 @app.command()
@@ -184,6 +231,64 @@ def report(
     console.print(f"[green]Report saved →[/green] {out_path}")
     console.print(f"[green]Fingerprint saved →[/green] {fp_json_path}  "
                    f"[dim](id: {fingerprint['fingerprint_id']})[/dim]")
+
+    if bench.get("mode") == "demo":
+        _demo_banner()
+        console.print("[dim]The HTML report itself is also watermarked as simulated.[/dim]")
+
+
+@app.command()
+def compare(
+    before_file: str = typer.Argument(..., help="Path to the 'before' benchmark JSON file."),
+    after_file: str = typer.Argument(..., help="Path to the 'after' benchmark JSON file."),
+):
+    """Compare two benchmark runs (before/after) and flag regressions."""
+    before_path, after_path = Path(before_file), Path(after_file)
+    for p in (before_path, after_path):
+        if not p.exists():
+            console.print(f"[red]No such file: {p}[/red]")
+            raise typer.Exit(1)
+
+    before = json.loads(before_path.read_text())
+    after = json.loads(after_path.read_text())
+
+    if before.get("mode") == "demo" or after.get("mode") == "demo":
+        console.print("[yellow]Note: comparing one or more --demo (simulated) results — "
+                       "this comparison is not meaningful for real hardware decisions.[/yellow]")
+
+    result = run_compare(before, after)
+
+    table = Table(title="EdgeLens Compare")
+    table.add_column("Metric")
+    table.add_column("Before")
+    table.add_column("After")
+    table.add_column("Change")
+    for name, d in result["metrics"].items():
+        change = f"{d['pct_change']:+.1f}%" if d["pct_change"] is not None else "n/a"
+        table.add_row(name, str(d["before"]), str(d["after"]), change)
+    console.print(table)
+
+    stage_table = Table(title="Per-stage change")
+    stage_table.add_column("Stage")
+    stage_table.add_column("Before (ms)")
+    stage_table.add_column("After (ms)")
+    stage_table.add_column("Change")
+    for stage, d in result["stages"].items():
+        if d["before_ms"] is None:
+            continue
+        change = f"{d['pct_change']:+.1f}%" if d["pct_change"] is not None else "n/a"
+        stage_table.add_row(stage, f"{d['before_ms']:.2f}", f"{d['after_ms']:.2f}", change)
+    console.print(stage_table)
+
+    if result["verdict"] == "REGRESSION":
+        console.print(Panel(
+            "\n".join(result["reasons"]),
+            title="❌ REGRESSION", style="bold red", border_style="red",
+        ))
+        raise typer.Exit(1)
+    else:
+        console.print(Panel("No regression detected.", title="✅ PASS", style="bold green",
+                             border_style="green"))
 
 
 @app.command()

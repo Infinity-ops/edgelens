@@ -90,14 +90,39 @@ def detect_tensorrt():
         return None
 
 
+import importlib.metadata as md
+import importlib.util
+
+# import name -> candidate pip distribution names
+_PKG_DISTS = {
+    "torch": ["torch"],
+    "onnx": ["onnx"],
+    "onnxruntime": ["onnxruntime", "onnxruntime-gpu"],
+    "numpy": ["numpy"],
+    "cv2": ["opencv-python", "opencv-python-headless", "opencv-contrib-python"],
+    "pycuda": ["pycuda"],
+}
+
+
 def detect_python_packages():
+    """Report installed versions WITHOUT importing the packages.
+
+    Importing can be slow (torch) or crash on ABI mismatches (e.g. a
+    NumPy-1.x-built onnxruntime under NumPy 2). Metadata lookup avoids both.
+    """
     packages = {}
-    for pkg in ["torch", "onnx", "onnxruntime", "numpy", "cv2", "pycuda"]:
-        try:
-            mod = __import__(pkg)
-            packages[pkg] = getattr(mod, "__version__", "installed")
-        except Exception:
-            packages[pkg] = None
+    for import_name, dists in _PKG_DISTS.items():
+        version = None
+        for dist in dists:
+            try:
+                version = md.version(dist)
+                break
+            except md.PackageNotFoundError:
+                continue
+        if version is None and importlib.util.find_spec(import_name) is not None:
+            # installed without pip metadata (e.g. OpenCV from apt on Jetson)
+            version = "installed (version unknown)"
+        packages[import_name] = version
     return packages
 
 

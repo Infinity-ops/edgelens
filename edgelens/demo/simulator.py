@@ -40,6 +40,9 @@ def simulate_stage_timings(bottleneck="balanced"):
 
 
 def simulate_telemetry(bottleneck="balanced"):
+    """Shape-matches edgelens.hardware.telemetry.TelemetryRecorder.summarize()
+    (mean/peak fields, max_temp_c) so demo and real-hardware runs feed the
+    diagnosis engine identically-shaped data."""
     temp, gpu, cpu, mem = 52.0, 58.0, 40.0, 42.0
     if bottleneck == "thermal":
         temp, gpu, cpu = 84.0, 52.0, 55.0
@@ -49,12 +52,26 @@ def simulate_telemetry(bottleneck="balanced"):
         cpu, gpu = 93.0, 38.0
     elif bottleneck == "memory":
         cpu, gpu, mem = 58.0, 50.0, 88.0
+
+    temps_mean = {"CPU-therm": temp, "GPU-therm": temp - 3}
+    temps_peak = {"CPU-therm": temp + 2, "GPU-therm": temp - 1}
     return {
+        "sample_count": 50,
+        "duration_s": 10.0,
+        "cpu_percent_mean": cpu,
+        "cpu_percent_peak": min(100.0, cpu + 5),
+        "gpu_percent_mean": gpu,
+        "gpu_percent_peak": min(100.0, gpu + 5),
+        "mem_percent_mean": mem,
+        "mem_percent_peak": min(100.0, mem + 4),
+        "temps_c_mean": temps_mean,
+        "temps_c_peak": temps_peak,
+        "max_temp_c": max(temps_peak.values()),
+        # flat/legacy fields consumed by the diagnosis engine
         "cpu_percent": cpu,
         "gpu_percent": gpu,
         "mem_percent": mem,
+        "temps_c": temps_mean,
         "mem_used_gb": round(mem / 100 * 8, 2),
         "mem_total_gb": 8.0,
-        "swap_used_gb": 0.0,
-        "temps_c": {"CPU-therm": temp, "GPU-therm": temp - 3},
     }

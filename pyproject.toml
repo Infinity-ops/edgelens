@@ -8,13 +8,19 @@ version = "0.1.0"
 description = "An open-source performance doctor for NVIDIA Jetson AI workloads: stage-level latency attribution + rule-based bottleneck diagnosis."
 readme = "README.md"
 requires-python = ">=3.8"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "EdgeLens contributors" }]
 keywords = ["jetson", "nvidia", "edge-ai", "profiling", "tensorrt", "cuda", "benchmark"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    # Pre-Alpha, not Alpha: the Jetson-specific code paths (detector.py,
+    # telemetry.py's tegrastats parsing) have not yet been run on physical
+    # Jetson hardware. Bump to Alpha only once that validation has happened
+    # and the ROADMAP.md status note is updated to match — see README.md.
+    # NOTE: no "License :: OSI Approved" classifier here — that's now
+    # deprecated in favor of the SPDX `license = "MIT"` string above
+    # (setuptools will otherwise warn on every build).
+    "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Topic :: Software Development :: Debuggers",
     "Topic :: System :: Hardware",
@@ -23,10 +29,17 @@ dependencies = [
     "typer>=0.9.0",
     "rich>=13.0.0",
     "psutil>=5.9.0",
+    "numpy>=1.21.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0.0"]
+dev = ["pytest>=7.0.0", "onnx>=1.14.0"]
+onnx = ["onnxruntime>=1.16.0"]
+
+[project.urls]
+Homepage = "https://github.com/Infinity-ops/edgelens"
+Repository = "https://github.com/Infinity-ops/edgelens"
+Issues = "https://github.com/Infinity-ops/edgelens/issues"
 
 [project.scripts]
 edgelens = "edgelens.cli:app"

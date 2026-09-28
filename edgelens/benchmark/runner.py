@@ -5,17 +5,18 @@ Stage-level latency benchmark harness. This is the core of EdgeLens'
 differentiation: measuring WHERE time goes in an inference pipeline,
 not just an aggregate FPS number.
 
-v0.1 uses wall-clock timing (time.perf_counter) around each stage.
-CUDA-event-level timing (cudaEvent, for accurate GPU-side measurement
-independent of CPU/host scheduling noise) is the documented v0.2
-upgrade — see ROADMAP.md — and the stage interface below is designed
-so that swapping in cudaEvent-based timers later doesn't change the
-CLI or output schema.
+v0.1.0 CHANGE FROM THE ALPHA SCAFFOLD:
+    Real hardware mode now REQUIRES either `model_path` (a real .onnx
+    file, executed via edgelens.benchmark.onnx_pipeline) or an explicit
+    `stage_fns` dict. There is no more silent placeholder pipeline —
+    a benchmark you didn't wire a real model or real stage functions
+    into now raises RuntimeError instead of quietly reporting timings
+    for time.sleep() calls. A tool that measures nothing must say so
+    loudly, not produce a number that looks like a measurement.
 
-Wiring in your real model:
-  Replace `_default_pipeline_stage_fn` below with your own per-stage
-  callables (capture/preprocess/h2d_copy/inference/d2h_copy/postprocess)
-  when integrating your model. See README "Wiring your pipeline".
+CUDA-event-level timing (cudaEvent, for accurate GPU-side measurement
+independent of CPU/host scheduling noise) is the documented v0.2/v0.3
+upgrade — see ROADMAP.md.
 """
 
 import statistics
@@ -28,7 +29,8 @@ STAGES = ["capture", "preprocess", "h2d_copy", "inference", "d2h_copy", "postpro
 
 
 def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced",
-                   stage_fns=None):
+                   model_path=None, provider=None, stage_fns=None,
+                   telemetry_interval_s=0.2):
     """
     Run a benchmark and return a structured result dict.
 
@@ -37,14 +39,41 @@ def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced"
         warmup: untimed warmup iterations (real hardware mode only).
         demo: force synthetic/demo data even on Jetson.
         demo_scenario: one of edgelens.demo.simulator.SCENARIOS.
+        model_path: path to a real .onnx file. When given, a real
+            ONNX Runtime pipeline (edgelens.benchmark.onnx_pipeline)
+            is built and benchmarked — this is the normal way to use
+            EdgeLens on real hardware.
+        provider: optional ONNX Runtime execution provider override
+            (e.g. "CUDAExecutionProvider"). Auto-selected if omitted.
         stage_fns: optional dict[str, callable] of user-supplied stage
-            functions for real pipelines. Each callable takes no args
-            and does the work for that stage (timing is handled here).
-            If omitted on real hardware, a placeholder pipeline is
-            timed instead (clearly marked in the result).
+            functions, for wiring in your own camera/preprocessing/model
+            instead of the default ONNX pipeline. Takes priority over
+            model_path if both are given.
+        telemetry_interval_s: sampling interval for the background
+            telemetry recorder during real hardware runs.
+
+    Raises:
+        RuntimeError: if running in real-hardware mode (not demo) and
+            neither `model_path` nor `stage_fns` was supplied. EdgeLens
+            v0.1.0 does not fabricate results from a placeholder pipeline.
     """
     is_jetson = detector.is_jetson()
-    use_demo = demo or not is_jetson
+    has_real_pipeline = model_path is not None or stage_fns is not None
+
+    if demo:
+        use_demo = True
+    elif has_real_pipeline:
+        # A real .onnx model or user-supplied stage_fns works on ANY host
+        # (CPUExecutionProvider on a laptop, CUDA/TensorRT on Jetson) —
+        # being off-Jetson is not itself a reason to fall back to demo.
+        use_demo = False
+    else:
+        # No real pipeline given and not explicitly asked to demo: keep
+        # the previous UX of auto-demo on a non-Jetson host (a bare
+        # `edgelens benchmark` still "just works" for a first look), but
+        # on a real Jetson with nothing wired in, fall through to
+        # _resolve_stage_fns()'s loud RuntimeError instead of guessing.
+        use_demo = not is_jetson
 
     stage_samples = {s: [] for s in STAGES}
 
@@ -57,42 +86,50 @@ def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced"
         mode = "demo"
         pipeline_source = "simulated"
     else:
-        fns = stage_fns or _placeholder_stage_fns()
-        pipeline_source = "user-supplied" if stage_fns else "placeholder (no model wired in)"
+        fns, pipeline_source = _resolve_stage_fns(model_path, provider, stage_fns)
+
         for _ in range(warmup):
             for s in STAGES:
                 fns[s]()
-        for _ in range(iterations):
-            for s in STAGES:
-                t0 = time.perf_counter()
-                fns[s]()
-                stage_samples[s].append((time.perf_counter() - t0) * 1000.0)
-        tel = telemetry.snapshot()
+
+        recorder = telemetry.TelemetryRecorder(interval_s=telemetry_interval_s)
+        recorder.start()
+        try:
+            for _ in range(iterations):
+                for s in STAGES:
+                    t0 = time.perf_counter()
+                    fns[s]()
+                    stage_samples[s].append((time.perf_counter() - t0) * 1000.0)
+        finally:
+            tel = recorder.stop()
         mode = "hardware"
 
     result = _summarize(stage_samples, tel, mode, pipeline_source)
     return result
 
 
-def _placeholder_stage_fns():
-    """No-op stage functions used only when no real model is wired in yet,
-    so the CLI still produces valid (if meaningless) output on real
-    hardware rather than crashing. Real usage should pass stage_fns."""
-    def make(delay):
-        def _fn():
-            time.sleep(delay)
-        return _fn
-    return {
-        "capture": make(0.001),
-        "preprocess": make(0.002),
-        "h2d_copy": make(0.001),
-        "inference": make(0.004),
-        "d2h_copy": make(0.0005),
-        "postprocess": make(0.001),
-    }
+def _resolve_stage_fns(model_path, provider, stage_fns):
+    if stage_fns is not None:
+        return stage_fns, "user-supplied"
+
+    if model_path is not None:
+        from .onnx_pipeline import OnnxStagePipeline
+        pipeline = OnnxStagePipeline(model_path, provider=provider)
+        source = f"onnxruntime:{pipeline.provider} ({model_path})"
+        return pipeline.stage_fns(), source
+
+    raise RuntimeError(
+        "edgelens benchmark needs something real to measure.\n"
+        "Pass one of:\n"
+        "  --model path/to/model.onnx    (runs a real ONNX Runtime session)\n"
+        "  --demo                        (synthetic data for previewing output)\n"
+        "  stage_fns=... from Python     (wire in your own pipeline)\n"
+        "EdgeLens does not fabricate hardware-mode results from a placeholder "
+        "pipeline — see ROADMAP.md."
+    )
 
 
-def _summarize(stage_samples, telemetry_snapshot, mode, pipeline_source):
+def _summarize(stage_samples, telemetry_summary, mode, pipeline_source):
     stage_avg = {s: round(statistics.mean(v), 3) for s, v in stage_samples.items()}
     per_iter_totals = [sum(vals) for vals in zip(*stage_samples.values())]
     per_iter_totals.sort()
@@ -117,5 +154,5 @@ def _summarize(stage_samples, telemetry_snapshot, mode, pipeline_source):
         "latency_p95_ms": pct(0.95),
         "latency_p99_ms": pct(0.99),
         "fps": fps,
-        "telemetry": telemetry_snapshot,
+        "telemetry": telemetry_summary,
     }
