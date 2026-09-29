@@ -9,23 +9,27 @@ inference → D2H copy → postprocess) and running an evidence-based diagnosis
 on top of it.
 
 ```
-$ edgelens benchmark --model yolov8n.onnx
+$ edgelens benchmark --model small_cnn.onnx --iterations 150
    Stage        Avg latency   Share
-   capture      3.14 ms       8.6%
-   preprocess   13.99 ms      38.2%   <-- the actual problem
-   h2d copy     3.08 ms       8.4%
-   inference    11.98 ms      32.7%
-   d2h copy     1.41 ms       3.9%
-   postprocess  2.98 ms       8.2%
+   capture      0.83 ms       25.6%
+   preprocess   0.16 ms       4.8%
+   h2d copy     0.00 ms       0.0%
+   inference    2.26 ms       69.2%   <-- inference-dominated, as expected
+   d2h copy     0.00 ms       0.0%
+   postprocess  0.01 ms       0.4%
+   Total: 3.27 ms   FPS: 306.28
 
 $ edgelens diagnose
-   CPU_BOUND_PREPROCESS (evidence strength 78%)
-   Preprocessing consumes 38.2% of total pipeline latency while mean CPU
-   utilization is 93.0%.
-   Evidence: preprocess_stage_pct=38.2, cpu_percent_mean=93.0
-   -> Move resize/color-conversion to the GPU (CUDA/VPI) or use
-      hardware-accelerated decode instead of CPU-side OpenCV.
+   BALANCED (evidence strength 50%)
+   No single stage or resource dominates the latency budget.
+   Evidence: cpu_percent_mean=71.5, gpu_percent_mean=0 (no GPU on this host)
+   -> Consider a precision/power-mode sweep to find further headroom.
 ```
+*(Real captured output from a small untrained CNN on a CPU-only host —
+see "Try it right now" below to reproduce. On Jetson with a heavier model
+you'd typically see a CPU_BOUND_PREPROCESS or GPU_BOUND verdict instead;
+this example is included because it's genuine, not because it's the most
+dramatic case.)*
 
 ## ⚠️ Honest status of this release
 
@@ -41,6 +45,17 @@ $ edgelens diagnose
 - Every diagnosis reports an `evidence_strength` (a heuristic score) **and**
   the raw measured numbers behind it (`evidence: {...}`), so you can check
   the reasoning yourself instead of trusting a label.
+- **Telemetry-dependent findings (THERMAL, MEMORY_BOUND, CPU_BOUND_PREPROCESS,
+  GPU_BOUND) are automatically demoted when the telemetry sample count is
+  low.** Why this exists: `psutil.cpu_percent(interval=0.2)` blocks for
+  200ms per call — a fast benchmark (a small model, or few iterations) can
+  finish its entire timed loop faster than that, so the background sampler
+  only gets one instantaneous reading. A single ambient temperature spike
+  at that instant is not evidence the *benchmark* caused it. Below 3
+  samples, `evidence_strength` is halved and the finding's `detail` gets an
+  explicit `[LOW CONFIDENCE]` note explaining why — found and fixed via
+  real hardware testing, not simulated. Run more `--iterations` or a
+  heavier model for a telemetry verdict you can actually trust.
 - The **Jetson hardware detection code** (`hardware/detector.py`'s
   `/proc/device-tree/model` and `/etc/nv_tegra_release` parsing,
   `hardware/telemetry.py`'s `tegrastats` regex) is written against NVIDIA's
@@ -64,28 +79,50 @@ $ edgelens diagnose
 ```bash
 git clone <your-repo-url> edgelens
 cd edgelens
-pip install -e .
+pip install -e ".[dev]"       # core + pytest, for running the test suite
 ```
 
-To use `--model` with a real `.onnx` file, also install ONNX Runtime:
+Optional extras (`pip install -e ".[extra1,extra2]"`):
+
+| Extra | Adds | When you need it |
+|---|---|---|
+| `dev` | `pytest` | Running `tests/` |
+| `onnx` | `onnxruntime` | Using `--model` with a real `.onnx` file |
+| `fixtures` | `onnx` (the model-building library, not the runtime) | Only if regenerating `tests/fixtures/tiny_model.onnx` via `make_tiny_model.py` |
+
+`onnx` (the fixtures extra) is deliberately kept separate from `dev` —
+newer `onnx` releases pull in `protobuf>=6`, which can break sibling
+packages elsewhere in your environment that are pinned to `protobuf` 5.x
+(this happened in real testing against a project depending on
+`ankaios-sdk`/`grpcio-tools`). Most contributors never need it.
+
+For Jetson GPU acceleration, install the JetPack-specific wheel instead
+of plain `onnxruntime`:
 
 ```bash
-pip install onnxruntime          # CPU (laptop, or Jetson with no GPU wheel)
 pip install onnxruntime-gpu      # Jetson JetPack wheel, for CUDA/TensorRT
 ```
 
-(ONNX Runtime is an optional dependency, not a hard requirement of
-`edgelens` — the Jetson `onnxruntime-gpu` wheel comes from NVIDIA's own
-JetPack index, not the standard PyPI wheel, so `edgelens` itself does not
-pin a version for you.)
+(This wheel comes from NVIDIA's own JetPack index, not standard PyPI, so
+`edgelens` itself does not pin a version for you.)
 
 ## Try it right now
 
+No model of your own handy yet? A small (untrained, CPU-friendly) real
+CNN is bundled for exactly this — it's what produced the example output
+above:
+
 ```bash
-edgelens doctor                                   # environment fingerprint
-edgelens benchmark --model your_model.onnx         # real inference benchmark
-edgelens diagnose                                  # bottleneck verdict, with evidence
-edgelens report                                    # self-contained HTML report
+edgelens doctor                                              # environment fingerprint
+edgelens benchmark --model tests/fixtures/small_cnn.onnx --iterations 150
+edgelens diagnose                                             # bottleneck verdict, with evidence
+edgelens report                                                # self-contained HTML report
+```
+
+With your own model:
+
+```bash
+edgelens benchmark --model your_model.onnx
 edgelens compare before.json after.json            # regression check between two runs
 ```
 

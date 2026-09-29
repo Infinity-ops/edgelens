@@ -33,8 +33,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0.0", "onnx>=1.14.0"]
+# `onnx` deliberately NOT included here: it's only needed by
+# tests/fixtures/make_tiny_model.py (regenerating the test fixture),
+# never by pytest itself (which loads the prebuilt tiny_model.onnx via
+# onnxruntime only). This matters because onnx>=1.17 pulls in
+# protobuf>=6, which broke sibling packages pinned to protobuf 5.x
+# (ankaios-sdk, grpcio-tools, wandb) in real-world testing. Only install
+# the `fixtures` extra if you're regenerating the .onnx test fixture.
+dev = ["pytest>=7.0.0"]
 onnx = ["onnxruntime>=1.16.0"]
+fixtures = ["onnx>=1.14.0"]
 
 [project.urls]
 Homepage = "https://github.com/Infinity-ops/edgelens"

@@ -18,7 +18,10 @@ accelerator families come later, once the core engine is proven — see
       not a single end-of-run snapshot
 - [x] `diagnose` — rule-based bottleneck engine, evidence-first output
       (`evidence_strength` + raw evidence numbers, not an unqualified
-      "confidence" score)
+      "confidence" score), with automatic demotion of telemetry-dependent
+      findings when the sample count is too low to trust (found via real
+      hardware testing: a fast benchmark can finish faster than one
+      `psutil` sampling interval, yielding a single noisy reading)
 - [x] `compare` — before/after diff with PASS/REGRESSION verdict
 - [x] `report` — self-contained HTML report + JSON fingerprint
 - [x] `--demo` mode, unmissably labeled (terminal banner top+bottom, HTML

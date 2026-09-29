@@ -37,6 +37,18 @@ try:
     import onnxruntime as ort
 except ImportError:  # pragma: no cover - exercised via has_onnxruntime()
     ort = None
+else:
+    # Newer ONNX Runtime builds (1.20+) run a background device-discovery
+    # probe at session-creation time that logs a WARNING when it can't
+    # read a sysfs node like /sys/class/drm/cardN/device/vendor — common
+    # on laptops/VMs with hybrid graphics, headless GPUs, or gaps in DRM
+    # card numbering. It's benign (ORT still falls back correctly to
+    # whichever execution provider was actually requested) but reads like
+    # an EdgeLens error to anyone running this for the first time. Default
+    # to ERROR-level logging so this internal probe stays quiet; nothing
+    # here suppresses EdgeLens' own errors, which are raised as Python
+    # exceptions, not ORT log lines.
+    ort.set_default_logger_severity(3)
 
 
 def has_onnxruntime() -> bool:

@@ -10,14 +10,25 @@ v0.1.0 CHANGE FROM THE ALPHA SCAFFOLD:
     The old output called its heuristic score "confidence" (e.g.
     "confidence 78%"), which reads as a statistically calibrated
     probability. It wasn't one — it was `0.4 + stage_pct / 100`, an
-    ad-hoc scoring formula. That's a fine heuristic, but the WORD
-    "confidence" oversold it. Every finding now reports:
+    ad-hoc scoring formula. Every finding now reports:
       - evidence_strength: the same 0-1 heuristic score, honestly named
-      - evidence: the actual measured numbers that produced the verdict,
-        so the developer can check the reasoning themselves rather than
-        trust a label
-    Nothing about the underlying logic changed — only what it's called
-    and how transparently it shows its work.
+      - evidence: the actual measured numbers that produced the verdict
+
+v0.1.0 FIX (found via real-hardware testing, not simulated):
+    psutil.cpu_percent(interval=X) BLOCKS for X seconds per call. The
+    default telemetry sampling interval is 200ms. A fast benchmark (a
+    tiny model, or few iterations) can finish its entire timed loop in
+    single-digit milliseconds — faster than one sampling interval — so
+    the background TelemetryRecorder gets exactly ONE sample. Reporting
+    that one instantaneous reading as if it reflects sustained load
+    during the benchmark is misleading, especially for THERMAL (a
+    laptop/board's ambient temperature at that instant may have nothing
+    to do with a benchmark that ran for 5ms). All telemetry-dependent
+    findings now check sample_count and, below MIN_RELIABLE_SAMPLES,
+    are demoted: evidence_strength is halved and a caveat is appended
+    to `detail` explaining exactly why. Purely stage-timing-based
+    findings (MEMORY_TRANSFER_BOUND, BALANCED's stage read) are
+    unaffected — they don't depend on telemetry sample count.
 
 Verdict types: CPU_BOUND_PREPROCESS, MEMORY_TRANSFER_BOUND, GPU_BOUND,
 THERMAL, MEMORY_BOUND, BALANCED.
@@ -33,6 +44,14 @@ TRANSFER_STAGE_PCT_THRESHOLD = 20.0
 INFERENCE_STAGE_PCT_THRESHOLD = 50.0
 GPU_BUSY_THRESHOLD = 85.0
 
+# Below this many background telemetry samples, CPU/GPU/temperature
+# readings are one-off snapshots, not a load average over the benchmark —
+# see the module docstring for exactly why this happens.
+MIN_RELIABLE_SAMPLES = 3
+LOW_SAMPLE_STRENGTH_PENALTY = 0.5  # multiplier applied when below the floor
+
+TELEMETRY_DEPENDENT_TYPES = {"THERMAL", "MEMORY_BOUND", "CPU_BOUND_PREPROCESS", "GPU_BOUND"}
+
 
 def diagnose(benchmark_result):
     stages = benchmark_result.get("stage_avg_ms", {})
@@ -40,6 +59,9 @@ def diagnose(benchmark_result):
     stage_pct = {k: (v / total) * 100 for k, v in stages.items()}
 
     tel = benchmark_result.get("telemetry", {}) or {}
+    sample_count = tel.get("sample_count", 0) or 0
+    telemetry_reliable = sample_count >= MIN_RELIABLE_SAMPLES
+
     # Prefer mean-over-window fields (from TelemetryRecorder); fall back to
     # legacy flat fields for older/simulated data that only has one sample.
     cpu = tel.get("cpu_percent_mean", tel.get("cpu_percent")) or 0
@@ -157,6 +179,23 @@ def diagnose(benchmark_result):
             },
         })
 
+    # Demote (not delete) telemetry-dependent findings when the sample
+    # count is too low to trust — see module docstring for the mechanism.
+    if not telemetry_reliable:
+        for f in findings:
+            if f["type"] in TELEMETRY_DEPENDENT_TYPES:
+                f["evidence_strength"] = round(f["evidence_strength"] * LOW_SAMPLE_STRENGTH_PENALTY, 2)
+                f["detail"] += (
+                    f" [LOW CONFIDENCE: only {sample_count} telemetry sample(s) were "
+                    f"collected — the benchmark likely completed faster than the "
+                    f"telemetry sampling interval, so this reflects a single "
+                    f"instantaneous reading, not sustained load during the benchmark. "
+                    f"Increase --iterations or use a heavier model for a reliable "
+                    f"telemetry-based verdict.]"
+                )
+                f["evidence"]["telemetry_sample_count"] = sample_count
+                f["evidence"]["telemetry_reliable"] = False
+
     findings.sort(key=lambda f: f["evidence_strength"], reverse=True)
 
     return {
@@ -167,6 +206,8 @@ def diagnose(benchmark_result):
             "mem_percent_mean": round(mem_pct, 1),
             "max_temp_c": round(max_temp, 1),
         },
+        "telemetry_reliable": telemetry_reliable,
+        "telemetry_sample_count": sample_count,
         "primary": findings[0],
         "secondary": findings[1:3],
         "all_findings": findings,

@@ -15,11 +15,26 @@ validate on your board and file an issue with your `edgelens doctor`
 output if anything looks wrong.
 """
 
+import importlib.metadata as md
+import importlib.util
 import json
 import os
 import platform
 import subprocess
 import sys
+
+# import name -> candidate pip distribution names. Package versions are
+# read from install metadata, NOT by importing the package — importing
+# can be slow (torch) or crash outright on ABI mismatches (e.g. a
+# NumPy-1.x-built onnxruntime wheel under NumPy 2, seen in the field).
+_PKG_DISTS = {
+    "torch": ["torch"],
+    "onnx": ["onnx"],
+    "onnxruntime": ["onnxruntime", "onnxruntime-gpu"],
+    "numpy": ["numpy"],
+    "cv2": ["opencv-python", "opencv-python-headless", "opencv-contrib-python"],
+    "pycuda": ["pycuda"],
+}
 
 
 def _read_file(path):
@@ -83,25 +98,15 @@ def detect_cuda():
 
 
 def detect_tensorrt():
+    # TensorRT ships via apt on Jetson (no pip metadata), so this import
+    # is intentional and different from detect_python_packages() below —
+    # it's the only reliable way to get its version on-device. Any crash
+    # here is contained by the except clause.
     try:
         import tensorrt as trt  # type: ignore
         return trt.__version__
     except Exception:
         return None
-
-
-import importlib.metadata as md
-import importlib.util
-
-# import name -> candidate pip distribution names
-_PKG_DISTS = {
-    "torch": ["torch"],
-    "onnx": ["onnx"],
-    "onnxruntime": ["onnxruntime", "onnxruntime-gpu"],
-    "numpy": ["numpy"],
-    "cv2": ["opencv-python", "opencv-python-headless", "opencv-contrib-python"],
-    "pycuda": ["pycuda"],
-}
 
 
 def detect_python_packages():
