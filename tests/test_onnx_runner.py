@@ -55,3 +55,20 @@ def test_real_model_off_jetson_still_uses_hardware_mode():
     with patch("edgelens.hardware.detector.is_jetson", return_value=False):
         result = run_benchmark(iterations=5, model_path=FIXTURE_MODEL)
         assert result["mode"] == "hardware"
+
+
+def test_capture_stage_is_cheap_not_dominated_by_rng():
+    # Regression test for a real bug found via hardware testing: capture()
+    # used to call np.random.rand() fresh every iteration, which costs
+    # ~1ms for a realistic CNN input size — enough to look like a genuine
+    # bottleneck when it was actually just measuring NumPy's RNG cost.
+    # capture() must now be cheap relative to inference, not comparable
+    # to or larger than it.
+    result = run_benchmark(iterations=30, warmup=5, model_path=FIXTURE_MODEL)
+    capture_ms = result["stage_avg_ms"]["capture"]
+    inference_ms = result["stage_avg_ms"]["inference"]
+    assert capture_ms < inference_ms, (
+        f"capture ({capture_ms}ms) should be cheap relative to inference "
+        f"({inference_ms}ms) — if this fails, the RNG-per-iteration bug "
+        f"may have regressed"
+    )

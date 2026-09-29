@@ -4,9 +4,28 @@ __pycache__/
 build/
 dist/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# EdgeLens run outputs. The default filenames are covered explicitly,
+# but ad hoc names from manual testing (before.json, t.json, etc.) are
+# NOT auto-matched by pattern — safer to save test runs into a runs/
+# subfolder (ignored wholesale below) than to rely on naming conventions.
+runs/
 edgelens_benchmark*.json
 edgelens_report*.html
 edgelens_report*.json
 *.diagnosis.json
+*.fingerprint.json
+
+# venvs
 .venv/
 venv/
+
+# IDE / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

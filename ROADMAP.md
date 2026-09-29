@@ -31,12 +31,23 @@ accelerator families come later, once the core engine is proven — see
 
 **Not yet validated on physical Jetson hardware.** Everything above has
 been tested on a non-Jetson host (CPU ONNX Runtime path, demo path, full
-CLI). The Jetson-specific code paths — `is_jetson()`/`detect_jetpack()`/
+CLI, and against a real multi-layer CNN in addition to the tiny test
+fixture — which is how the capture-stage RNG-cost bug below was found).
+The Jetson-specific code paths — `is_jetson()`/`detect_jetpack()`/
 `detect_cuda()` in `hardware/detector.py`, the `tegrastats` regex in
 `hardware/telemetry.py`, and the CUDA/TensorRT execution provider path in
 `benchmark/onnx_pipeline.py` — are written against NVIDIA's documented
 interfaces but have never executed on real silicon. **This is the #1
 priority for v0.2**, and the classifier stays Pre-Alpha until it's done.
+
+**Known limitation, fixed:** the default `OnnxStagePipeline.capture()`
+used to generate a fresh random frame every iteration via
+`np.random.rand()`. For a realistic CNN input size this costs ~1ms per
+call — enough to rival or exceed a small model's actual inference time,
+making "capture" look like a real bottleneck when it was actually
+measuring NumPy's RNG cost. Found via testing against a real CNN (not
+the microsecond-scale tiny fixture). Fixed: the frame is now generated
+once at construction and referenced, not regenerated, per iteration.
 
 ## v0.2 — physical Jetson validation (next release, and the actual gate)
 

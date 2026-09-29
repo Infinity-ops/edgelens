@@ -127,6 +127,19 @@ class OnnxStagePipeline:
         self._is_gpu_provider = self.provider in self.GPU_PROVIDERS
         self._device = "cuda" if self._is_gpu_provider else "cpu"
 
+        # Pre-generate ONE random frame at construction time. The
+        # capture() stage below just references it (near-zero cost) rather
+        # than calling np.random.rand() fresh every iteration.
+        # WHY THIS MATTERS: np.random.rand() on a realistic CNN input size
+        # (e.g. 1x3x224x224) costs roughly 1ms per call on CPU — enough to
+        # rival or exceed a small model's actual inference time. Generating
+        # a "fresh random frame" every iteration was making the synthetic
+        # capture() stage look like a real bottleneck when it was actually
+        # just measuring NumPy's RNG cost, not anything resembling a real
+        # camera/video capture. Found via real hardware testing against a
+        # more realistically-sized model than the tiny test fixture.
+        self._static_frame = np.random.rand(*self.input_shape).astype(np.float32)
+
         self._raw_frame = None
         self._prepped = None
         self._device_input = None
@@ -136,9 +149,14 @@ class OnnxStagePipeline:
     # ---- stage functions (each does real, timeable work) ----
 
     def capture(self):
-        """Synthetic frame source. Swap for a real camera/video capture
-        by building your own stage_fns dict instead of using --model."""
-        self._raw_frame = np.random.rand(*self.input_shape).astype(np.float32)
+        """Synthetic frame source: references a pre-generated frame rather
+        than regenerating random data every call (see __init__ for why).
+        Swap for a real camera/video capture by building your own
+        stage_fns dict instead of using --model — this stage exists so
+        the pipeline has SOME input ready, not to simulate real capture
+        latency, which varies enormously by camera/decoder and can't be
+        honestly approximated by a synthetic default."""
+        self._raw_frame = self._static_frame
 
     def preprocess(self):
         """Minimal, honest preprocessing: min-max normalize to [0,1].
