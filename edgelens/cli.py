@@ -109,8 +109,14 @@ def benchmark(
     model: str = typer.Option(None, "--model", help="Path to a real .onnx model — runs a "
                                "real ONNX Runtime session (CPU on a laptop, CUDA/TensorRT "
                                "on Jetson if available)."),
+    pipeline: str = typer.Option(None, "--pipeline", help="Path to a Python script "
+                                  "defining build_stage_fns() — for a real camera, a "
+                                  "non-ONNX runtime, or anything --model's plain ONNX "
+                                  "forward pass can't express. See "
+                                  "tests/fixtures/example_pipeline.py."),
     provider: str = typer.Option(None, "--provider", help="Override the ONNX Runtime "
-                                  "execution provider, e.g. CUDAExecutionProvider."),
+                                  "execution provider, e.g. CUDAExecutionProvider. "
+                                  "Only applies with --model."),
     demo: bool = typer.Option(False, "--demo", help="Force synthetic/demo data."),
     scenario: str = typer.Option(
         "balanced", help="Demo scenario: balanced|preprocess|memory|gpu|thermal"
@@ -120,16 +126,17 @@ def benchmark(
     """Run a benchmark; measure per-stage latency, FPS, and utilization."""
     is_jetson = detector.is_jetson()
 
-    if not demo and model is None and not is_jetson:
-        console.print("[yellow]No --model given on a non-Jetson host — running in "
-                       "--demo mode automatically. Pass --model path/to/model.onnx "
-                       "for a real (CPU) measurement.[/yellow]")
+    if not demo and model is None and pipeline is None and not is_jetson:
+        console.print("[yellow]No --model or --pipeline given on a non-Jetson host — "
+                       "running in --demo mode automatically. Pass --model path/to/"
+                       "model.onnx or --pipeline path/to/script.py for a real "
+                       "measurement.[/yellow]")
 
     with console.status("Running benchmark..."):
         try:
             result = run_benchmark(
                 iterations=iterations, demo=demo, demo_scenario=scenario,
-                model_path=model, provider=provider,
+                model_path=model, provider=provider, pipeline_path=pipeline,
             )
         except RuntimeError as e:
             console.print(f"[red]{e}[/red]")

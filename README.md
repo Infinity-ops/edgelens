@@ -2,7 +2,7 @@
 
 **An open-source performance doctor for NVIDIA Jetson AI workloads.**
 
-Most Jetson monitoring tools tell you *what* your board is doing (CPU 47%,
+Most Jetson monitoring tools tell you _what_ your board is doing (CPU 47%,
 GPU 92%, temp 61C). EdgeLens tells you **why your AI pipeline is slow** —
 by breaking latency down stage-by-stage (capture → preprocess → H2D copy →
 inference → D2H copy → postprocess) and running an evidence-based diagnosis
@@ -25,11 +25,12 @@ $ edgelens diagnose
    Evidence: cpu_percent_mean=71.5, gpu_percent_mean=0 (no GPU on this host)
    -> Consider a precision/power-mode sweep to find further headroom.
 ```
-*(Real captured output from a small untrained CNN on a CPU-only host —
+
+_(Real captured output from a small untrained CNN on a CPU-only host —
 see "Try it right now" below to reproduce. On Jetson with a heavier model
 you'd typically see a CPU_BOUND_PREPROCESS or GPU_BOUND verdict instead;
 this example is included because it's genuine, not because it's the most
-dramatic case.)*
+dramatic case.)_
 
 ## ⚠️ Honest status of this release
 
@@ -51,7 +52,7 @@ dramatic case.)*
   200ms per call — a fast benchmark (a small model, or few iterations) can
   finish its entire timed loop faster than that, so the background sampler
   only gets one instantaneous reading. A single ambient temperature spike
-  at that instant is not evidence the *benchmark* caused it. Below 3
+  at that instant is not evidence the _benchmark_ caused it. Below 3
   samples, `evidence_strength` is halved and the finding's `detail` gets an
   explicit `[LOW CONFIDENCE]` note explaining why — found and fixed via
   real hardware testing, not simulated. Run more `--iterations` or a
@@ -84,10 +85,10 @@ pip install -e ".[dev]"       # core + pytest, for running the test suite
 
 Optional extras (`pip install -e ".[extra1,extra2]"`):
 
-| Extra | Adds | When you need it |
-|---|---|---|
-| `dev` | `pytest` | Running `tests/` |
-| `onnx` | `onnxruntime` | Using `--model` with a real `.onnx` file |
+| Extra      | Adds                                                 | When you need it                                                               |
+| ---------- | ---------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `dev`      | `pytest`                                             | Running `tests/`                                                               |
+| `onnx`     | `onnxruntime`                                        | Using `--model` with a real `.onnx` file                                       |
 | `fixtures` | `onnx` (the model-building library, not the runtime) | Only if regenerating `tests/fixtures/tiny_model.onnx` via `make_tiny_model.py` |
 
 `onnx` (the fixtures extra) is deliberately kept separate from `dev` —
@@ -139,14 +140,14 @@ loudly watermarked everywhere — see the status note above.
 
 ## Commands
 
-| Command | Purpose |
-|---|---|
-| `edgelens doctor` | Hardware + software fingerprint (board, JetPack/L4T, CUDA, TensorRT, key packages) |
-| `edgelens monitor` | Live terminal dashboard (CPU/GPU/RAM/temp), thin wrapper over psutil + tegrastats |
-| `edgelens benchmark --model X.onnx` | Runs a real ONNX Runtime benchmark, measures per-stage latency/FPS/utilization |
-| `edgelens diagnose` | Evidence-based bottleneck verdict: CPU-bound / GPU-bound / thermal / memory-bound / transfer-bound |
-| `edgelens report` | Self-contained HTML report (fingerprint + breakdown + diagnosis), attachable to a GitHub issue |
-| `edgelens compare before.json after.json` | Before/after diff — FPS, latency, per-stage deltas, and a PASS/REGRESSION verdict |
+| Command                                   | Purpose                                                                                            |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `edgelens doctor`                         | Hardware + software fingerprint (board, JetPack/L4T, CUDA, TensorRT, key packages)                 |
+| `edgelens monitor`                        | Live terminal dashboard (CPU/GPU/RAM/temp), thin wrapper over psutil + tegrastats                  |
+| `edgelens benchmark --model X.onnx`       | Runs a real ONNX Runtime benchmark, measures per-stage latency/FPS/utilization                     |
+| `edgelens diagnose`                       | Evidence-based bottleneck verdict: CPU-bound / GPU-bound / thermal / memory-bound / transfer-bound |
+| `edgelens report`                         | Self-contained HTML report (fingerprint + breakdown + diagnosis), attachable to a GitHub issue     |
+| `edgelens compare before.json after.json` | Before/after diff — FPS, latency, per-stage deltas, and a PASS/REGRESSION verdict                  |
 
 ## Wiring in your real pipeline
 
@@ -175,9 +176,28 @@ result = run_benchmark(iterations=200, stage_fns={
 })
 ```
 
-A CLI flag for pointing at a script that defines these functions
-(`edgelens benchmark --pipeline my_pipeline.py`) is planned for v0.2 —
-see `ROADMAP.md`.
+A CLI flag for pointing at a script that defines these functions is
+now available: `edgelens benchmark --pipeline my_pipeline.py`. The
+script must define a top-level `build_stage_fns()` function (called
+once, for any setup) that returns the same six-key dict:
+
+```python
+# my_pipeline.py
+def build_stage_fns():
+    # one-time setup: load your real model, open your real camera, etc.
+    ...
+    return {
+        "capture": capture, "preprocess": preprocess, "h2d_copy": h2d_copy,
+        "inference": inference, "d2h_copy": d2h_copy, "postprocess": postprocess,
+    }
+```
+
+```bash
+edgelens benchmark --pipeline my_pipeline.py
+```
+
+See `tests/fixtures/example_pipeline.py` for a minimal working example.
+`--model` and `--pipeline` are mutually exclusive — pick one.
 
 ## Why not just use jetson-stats?
 
@@ -186,7 +206,7 @@ library — EdgeLens is not trying to replace it, and deliberately does **not**
 import it (it's AGPL-3.0 licensed; EdgeLens is MIT and reads the same
 underlying system files directly to avoid license entanglement). Think of
 `jetson-stats` as the telemetry layer and EdgeLens as the layer above it that
-answers "given this telemetry, why is *my application* slow, and can I
+answers "given this telemetry, why is _my application_ slow, and can I
 prove a fix worked?" (see `edgelens compare`).
 
 Likewise, EdgeLens is not trying to replace Nsight Systems/Compute — those

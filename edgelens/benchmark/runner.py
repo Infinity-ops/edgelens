@@ -7,12 +7,13 @@ not just an aggregate FPS number.
 
 v0.1.0 CHANGE FROM THE ALPHA SCAFFOLD:
     Real hardware mode now REQUIRES either `model_path` (a real .onnx
-    file, executed via edgelens.benchmark.onnx_pipeline) or an explicit
-    `stage_fns` dict. There is no more silent placeholder pipeline —
-    a benchmark you didn't wire a real model or real stage functions
-    into now raises RuntimeError instead of quietly reporting timings
-    for time.sleep() calls. A tool that measures nothing must say so
-    loudly, not produce a number that looks like a measurement.
+    file, executed via edgelens.benchmark.onnx_pipeline), `pipeline_path`
+    (a user script, via edgelens.benchmark.pipeline_loader), or an
+    explicit `stage_fns` dict. There is no more silent placeholder
+    pipeline — a benchmark you didn't wire a real model or real stage
+    functions into now raises RuntimeError instead of quietly reporting
+    timings for time.sleep() calls. A tool that measures nothing must
+    say so loudly, not produce a number that looks like a measurement.
 
 CUDA-event-level timing (cudaEvent, for accurate GPU-side measurement
 independent of CPU/host scheduling noise) is the documented v0.2/v0.3
@@ -30,7 +31,7 @@ STAGES = ["capture", "preprocess", "h2d_copy", "inference", "d2h_copy", "postpro
 
 def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced",
                    model_path=None, provider=None, stage_fns=None,
-                   telemetry_interval_s=0.2):
+                   pipeline_path=None, telemetry_interval_s=0.2):
     """
     Run a benchmark and return a structured result dict.
 
@@ -42,30 +43,41 @@ def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced"
         model_path: path to a real .onnx file. When given, a real
             ONNX Runtime pipeline (edgelens.benchmark.onnx_pipeline)
             is built and benchmarked — this is the normal way to use
-            EdgeLens on real hardware.
+            EdgeLens on real hardware with a plain ONNX forward pass.
         provider: optional ONNX Runtime execution provider override
             (e.g. "CUDAExecutionProvider"). Auto-selected if omitted.
         stage_fns: optional dict[str, callable] of user-supplied stage
             functions, for wiring in your own camera/preprocessing/model
-            instead of the default ONNX pipeline. Takes priority over
-            model_path if both are given.
+            from Python directly. Highest priority if multiple pipeline
+            sources are given.
+        pipeline_path: path to a Python script defining a top-level
+            `build_stage_fns()` function (see
+            edgelens.benchmark.pipeline_loader for the contract). The
+            CLI equivalent of passing stage_fns from Python — use this
+            when you need a real camera, a non-ONNX runtime, or anything
+            --model's plain ONNX forward pass can't express.
         telemetry_interval_s: sampling interval for the background
             telemetry recorder during real hardware runs.
 
     Raises:
         RuntimeError: if running in real-hardware mode (not demo) and
-            neither `model_path` nor `stage_fns` was supplied. EdgeLens
-            v0.1.0 does not fabricate results from a placeholder pipeline.
+            none of `stage_fns`, `pipeline_path`, or `model_path` was
+            supplied, or if more than one is given at once (ambiguous).
+            EdgeLens v0.1.0 does not fabricate results from a
+            placeholder pipeline.
     """
     is_jetson = detector.is_jetson()
-    has_real_pipeline = model_path is not None or stage_fns is not None
+    has_real_pipeline = (
+        model_path is not None or stage_fns is not None or pipeline_path is not None
+    )
 
     if demo:
         use_demo = True
     elif has_real_pipeline:
-        # A real .onnx model or user-supplied stage_fns works on ANY host
-        # (CPUExecutionProvider on a laptop, CUDA/TensorRT on Jetson) —
-        # being off-Jetson is not itself a reason to fall back to demo.
+        # A real .onnx model, a --pipeline script, or user-supplied
+        # stage_fns all work on ANY host (CPUExecutionProvider on a
+        # laptop, CUDA/TensorRT on Jetson) — being off-Jetson is not
+        # itself a reason to fall back to demo.
         use_demo = False
     else:
         # No real pipeline given and not explicitly asked to demo: keep
@@ -86,7 +98,7 @@ def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced"
         mode = "demo"
         pipeline_source = "simulated"
     else:
-        fns, pipeline_source = _resolve_stage_fns(model_path, provider, stage_fns)
+        fns, pipeline_source = _resolve_stage_fns(model_path, provider, stage_fns, pipeline_path)
 
         for _ in range(warmup):
             for s in STAGES:
@@ -108,9 +120,24 @@ def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced"
     return result
 
 
-def _resolve_stage_fns(model_path, provider, stage_fns):
+def _resolve_stage_fns(model_path, provider, stage_fns, pipeline_path):
+    given = [name for name, val in
+             (("stage_fns", stage_fns), ("pipeline_path", pipeline_path), ("model_path", model_path))
+             if val is not None]
+    if len(given) > 1:
+        raise RuntimeError(
+            f"Ambiguous pipeline source: got {', '.join(given)} together. "
+            f"Pass exactly one of --model, --pipeline, or stage_fns=... "
+            f"from Python."
+        )
+
     if stage_fns is not None:
         return stage_fns, "user-supplied"
+
+    if pipeline_path is not None:
+        from .pipeline_loader import load_stage_fns_from_script
+        fns = load_stage_fns_from_script(pipeline_path)
+        return fns, f"custom pipeline ({pipeline_path})"
 
     if model_path is not None:
         from .onnx_pipeline import OnnxStagePipeline
@@ -121,9 +148,10 @@ def _resolve_stage_fns(model_path, provider, stage_fns):
     raise RuntimeError(
         "edgelens benchmark needs something real to measure.\n"
         "Pass one of:\n"
-        "  --model path/to/model.onnx    (runs a real ONNX Runtime session)\n"
-        "  --demo                        (synthetic data for previewing output)\n"
-        "  stage_fns=... from Python     (wire in your own pipeline)\n"
+        "  --model path/to/model.onnx       (runs a real ONNX Runtime session)\n"
+        "  --pipeline path/to/script.py      (your own capture/model/pipeline)\n"
+        "  --demo                            (synthetic data for previewing output)\n"
+        "  stage_fns=... from Python         (wire in your own pipeline directly)\n"
         "EdgeLens does not fabricate hardware-mode results from a placeholder "
         "pipeline — see ROADMAP.md."
     )
