@@ -1,226 +1,227 @@
 # EdgeLens
 
-**An open-source performance doctor for NVIDIA Jetson AI workloads.**
+**Measure, diagnose and validate AI pipelines on edge devices.**
 
-Most Jetson monitoring tools tell you _what_ your board is doing (CPU 47%,
-GPU 92%, temp 61C). EdgeLens tells you **why your AI pipeline is slow** —
-by breaking latency down stage-by-stage (capture → preprocess → H2D copy →
-inference → D2H copy → postprocess) and running an evidence-based diagnosis
-on top of it.
+Most edge monitoring tools tell you _what_ the board is doing (CPU 47%, GPU
+92%, 61 °C). EdgeLens tells you **why your pipeline is slow, whether it meets
+its deadline, and what each result costs in energy**. It breaks latency down
+stage by stage for any pipeline (camera, sensor, signal or custom), measures
+the tail and deadline misses, reads board power, and gives an evidence-based
+diagnosis on top.
 
 ```
-$ edgelens benchmark --model small_cnn.onnx --iterations 150
-   Stage        Avg latency   Share
-   capture      0.83 ms       25.6%
-   preprocess   0.16 ms       4.8%
-   h2d copy     0.00 ms       0.0%
-   inference    2.26 ms       69.2%   <-- inference-dominated, as expected
-   d2h copy     0.00 ms       0.0%
-   postprocess  0.01 ms       0.4%
-   Total: 3.27 ms   FPS: 306.28
+$ edgelens benchmark --pipeline examples/timeseries_vibration.py --iterations 1200
+  Stage               Role         Mean      p99    Share
+  acquire             input        0.004 ms  0.009  1.3%
+  filter              preprocess   0.008 ms  0.019  2.5%
+  fft                 preprocess   0.022 ms  0.044  7.0%
+  feature_extraction  preprocess   0.274 ms  0.458  87.3%
+  classify            inference    0.006 ms  0.018  1.9%
+  decision            decision     0.000 ms  0.001  0.0%
+End-to-end: mean 0.318 ms   Throughput: 3144.65 it/s   (1200 iterations)
+min 0.260 · p50 0.283 · p95 0.486 · p99 0.542 · p99.9 0.866 · max 1.354 · jitter 0.082 ms
+╭─ Deadline ─ MET  deadline 51.2 ms · misses 0/1200 (0.000%) · worst 1.354 ms ─╮
+Real-time factor: mean 0.0062 · p99 0.0106 · max 0.0264 (hop period 51.2 ms, headroom 99.38%)
+environment_id 6bc5f4e78f66 · experiment_id 783fa6dc9268 · run_id 20261002T142630-ed4566
 
-$ edgelens diagnose
-   BALANCED (evidence strength 50%)
-   No single stage or resource dominates the latency budget.
-   Evidence: cpu_percent_mean=71.5, gpu_percent_mean=0 (no GPU on this host)
-   -> Consider a precision/power-mode sweep to find further headroom.
+$ edgelens diagnose ts.json
+  DEADLINE_MET  (strong evidence)
+  All 1200 iterations finished within the 51.2 ms deadline; worst 1.354 ms (97% headroom).
 ```
 
-_(Real captured output from a small untrained CNN on a CPU-only host —
-see "Try it right now" below to reproduce. On Jetson with a heavier model
-you'd typically see a CPU_BOUND_PREPROCESS or GPU_BOUND verdict instead;
-this example is included because it's genuine, not because it's the most
-dramatic case.)_
+_(Real output, run on a laptop CPU. On a Jetson the same run also reports
+GPU load, board power and energy per window.)_
 
-## ⚠️ Honest status of this release
+## Status of this release (v0.1.0)
 
-- `edgelens benchmark --model your_model.onnx` runs a **real ONNX Runtime
-  inference session** — `CPUExecutionProvider` on a laptop,
-  `CUDAExecutionProvider`/`TensorrtExecutionProvider` on Jetson if the
-  matching `onnxruntime-gpu` build is installed. This is a real
-  measurement, not a placeholder — see `edgelens/benchmark/onnx_pipeline.py`.
-- Telemetry (CPU/GPU/RAM/temperature) is sampled continuously on a
-  background thread for the whole benchmark run and reported as both
-  **mean and peak** per metric — a single end-of-run snapshot can miss a
-  transient thermal spike entirely, so this is deliberately not that.
-- Every diagnosis reports an `evidence_strength` (a heuristic score) **and**
-  the raw measured numbers behind it (`evidence: {...}`), so you can check
-  the reasoning yourself instead of trusting a label.
-- **Telemetry-dependent findings (THERMAL, MEMORY_BOUND, CPU_BOUND_PREPROCESS,
-  GPU_BOUND) are automatically demoted when the telemetry sample count is
-  low.** Why this exists: `psutil.cpu_percent(interval=0.2)` blocks for
-  200ms per call — a fast benchmark (a small model, or few iterations) can
-  finish its entire timed loop faster than that, so the background sampler
-  only gets one instantaneous reading. A single ambient temperature spike
-  at that instant is not evidence the _benchmark_ caused it. Below 3
-  samples, `evidence_strength` is halved and the finding's `detail` gets an
-  explicit `[LOW CONFIDENCE]` note explaining why — found and fixed via
-  real hardware testing, not simulated. Run more `--iterations` or a
-  heavier model for a telemetry verdict you can actually trust.
-- The **Jetson hardware detection code** (`hardware/detector.py`'s
-  `/proc/device-tree/model` and `/etc/nv_tegra_release` parsing,
-  `hardware/telemetry.py`'s `tegrastats` regex) is written against NVIDIA's
-  documented formats but **has not yet been run on physical Jetson
-  hardware**. If you run this on a real board, please open an issue with
-  your `edgelens doctor` output (working or broken) — that's what turns
-  this from "should work" into "verified." The `pyproject.toml`
-  `Development Status` classifier is deliberately **Pre-Alpha** until that
-  validation happens.
-- Stage timing uses wall-clock (`time.perf_counter`). CUDA-event-level
-  timing (more accurate for GPU work, isolates GPU time from CPU
-  scheduling noise) is a documented v0.3 target — see `ROADMAP.md`.
-- `--demo` mode (synthetic data, for previewing the tool without a model
-  or Jetson) is loudly and unmissably labeled everywhere it appears — in
-  the terminal, in the saved JSON (`"mode": "demo"`), and in the HTML
-  report (page title, a red banner top and bottom, and a background
-  watermark). It should never be mistaken for a real measurement.
+- **Validated on hardware:** Jetson Nano (JetPack 4.6 / L4T R32.7.6, Python
+  3.8 venv). Verified there: `doctor`, ONNX Runtime CPU and CUDA execution
+  providers (including the IOBinding H2D/inference/D2H path), and the
+  tegrastats GPU% reading. Two diagnosis rules (`INFERENCE_ON_CPU`,
+  single-core `CPU_BOUND_PREPROCESS`) came from those real runs.
+- **New in v0.1.0, not yet run on a physical board:** the sysfs GPU-load
+  reader, INA3221 power/energy (Nano iio and Orin hwmon layouts), the
+  persistent tegrastats stream, nvpmodel/clock-lock detection. They are
+  written against the documented kernel interfaces and covered by tests with
+  fake sysfs trees. `scripts/validate_on_jetson.sh` exercises all of them
+  and packs the raw outputs; v0.1.0 is tagged once that passes on the Nano.
+- Stage timing is wall-clock (`time.perf_counter_ns`). CUDA-event GPU-side
+  timing is on the roadmap.
+- Power figures are on-module INA3221 sensor readings, reported with their
+  method (`input_rail` or `sum_of_rails`). They are not a calibrated power
+  meter, and `sum_of_rails` (AGX Orin) excludes the carrier board.
+- Percentiles are only reported when the sample count supports them (p99
+  needs ≥100 samples, p99.9 needs ≥1000); otherwise they are shown as
+  "not reported" rather than invented.
+- `--demo` mode (synthetic data) is labelled everywhere: terminal, JSON
+  (`"mode": "demo"`) and the HTML report (banner and watermark).
+- Tested on Python 3.8 and 3.12.
 
 ## Install
 
 ```bash
-git clone <your-repo-url> edgelens
+git clone https://github.com/Infinity-ops/edgelens
 cd edgelens
-pip install -e ".[dev]"       # core + pytest, for running the test suite
+pip install -e ".[dev,onnx]"     # core + pytest + onnxruntime (CPU)
 ```
 
-Optional extras (`pip install -e ".[extra1,extra2]"`):
+On Jetson, use NVIDIA's JetPack-matched `onnxruntime-gpu` wheel instead of
+the PyPI `onnxruntime` for CUDA/TensorRT (see the
+[Jetson Zoo](https://elinux.org/Jetson_Zoo#ONNX_Runtime)). `edgelens doctor`
+tells you which execution providers you actually have.
 
-| Extra      | Adds                                                 | When you need it                                                               |
-| ---------- | ---------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `dev`      | `pytest`                                             | Running `tests/`                                                               |
-| `onnx`     | `onnxruntime`                                        | Using `--model` with a real `.onnx` file                                       |
-| `fixtures` | `onnx` (the model-building library, not the runtime) | Only if regenerating `tests/fixtures/tiny_model.onnx` via `make_tiny_model.py` |
+| Extra      | Adds                         | When you need it                         |
+| ---------- | ---------------------------- | ---------------------------------------- |
+| `dev`      | `pytest`                     | Running `tests/`                         |
+| `onnx`     | `onnxruntime`                | `--model` with a real `.onnx` file       |
+| `fixtures` | `onnx` (the model library)   | Only to regenerate the test `.onnx` files |
 
-`onnx` (the fixtures extra) is deliberately kept separate from `dev` —
-newer `onnx` releases pull in `protobuf>=6`, which can break sibling
-packages elsewhere in your environment that are pinned to `protobuf` 5.x
-(this happened in real testing against a project depending on
-`ankaios-sdk`/`grpcio-tools`). Most contributors never need it.
+`onnx` is kept out of `dev` on purpose: recent releases pull in
+`protobuf>=6`, which broke sibling packages pinned to protobuf 5.x in real
+testing.
 
-For Jetson GPU acceleration, install the JetPack-specific wheel instead
-of plain `onnxruntime`:
+## Three ways in
+
+### 1. Just a model: `--model`
 
 ```bash
-pip install onnxruntime-gpu      # Jetson JetPack wheel, for CUDA/TensorRT
+edgelens benchmark --model model.onnx --deadline-ms 33
+edgelens benchmark --model sensor_model.onnx --input-shape vib:1x8x2048   # dynamic/multi-input
 ```
 
-(This wheel comes from NVIDIA's own JetPack index, not standard PyPI, so
-`edgelens` itself does not pin a version for you.)
+Every model input is fed with its declared dtype. Dynamic dimensions of
+non-image inputs are never guessed: EdgeLens asks for `--input-shape`
+rather than benchmarking a workload that doesn't exist.
 
-## Try it right now
+### 2. Your own pipeline, EdgeLens drives the loop (harness mode)
 
-No model of your own handy yet? A small (untrained, CPU-friendly) real
-CNN is bundled for exactly this — it's what produced the example output
-above:
+```python
+import edgelens as el
 
-```bash
-edgelens doctor                                              # environment fingerprint
-edgelens benchmark --model tests/fixtures/small_cnn.onnx --iterations 150
-edgelens diagnose                                             # bottleneck verdict, with evidence
-edgelens report                                                # self-contained HTML report
+pipe = el.Pipeline("bearing-monitor", pack="timeseries",
+                   sample_rate_hz=10_000, window=1024, hop=512)
+pipe.set_source(el.WindowSource("vibration.npy", window=1024, hop=512))
+
+@pipe.stage
+def filter(window): ...            # one argument: receives the previous stage's output
+
+@pipe.stage
+def fft(x): ...
+
+@pipe.stage(role="inference", device="gpu")
+def classify(features): ...
+
+result = pipe.run(iterations=2000)      # deadline defaults to the 51.2 ms hop period
+print(result["latency"]["p99"], result["deadline"]["miss_ratio"],
+      result["pack_metrics"]["real_time_factor"])
 ```
 
-With your own model:
+The same pipeline from the CLI: put it in a script with a
+`build_pipeline()` function and run
+`edgelens benchmark --pipeline my_pipeline.py`. See
+`examples/timeseries_vibration.py`. Scripts with the classic
+`build_stage_fns()` returning a dict still work, and since v0.1.0 the dict
+may use **any stage names**.
 
-```bash
-edgelens benchmark --model your_model.onnx
-edgelens compare before.json after.json            # regression check between two runs
+`pace=True` (CLI `--pace` with `--period-ms`) releases iterations on a fixed
+schedule and measures true response time, including queueing behind a slow
+iteration.
+
+### 3. Keep your loop, add three lines (observer mode)
+
+```python
+with el.trace("webcam-detector", pack="vision", target_fps=30, save="run.json") as t:
+    while running:
+        with t.iteration():
+            with t.stage("capture"):    frame = cam.read()
+            with t.stage("inference"):  dets = model(frame)
+            with t.stage("postprocess"): out = nms(dets)
 ```
 
-No model handy? Preview the tool with synthetic data instead:
+Then `edgelens diagnose run.json` and `edgelens report run.json` work exactly
+as for a benchmark. See `examples/observer_vision_loop.py`.
 
-```bash
-edgelens benchmark --demo --scenario preprocess
-```
+## Scenario packs
 
-Demo scenarios: `balanced`, `preprocess`, `memory`, `gpu`, `thermal` — each
-produces realistic synthetic data for that bottleneck type, so you can see
-exactly how EdgeLens would diagnose each failure mode. Demo output is
-loudly watermarked everywhere — see the status note above.
+One generic engine; packs add a stage template, scenario metrics and
+diagnosis rules in that scenario's language. Stages carry a **role**
+(`input`, `preprocess`, `transfer`, `inference`, `postprocess`, `decision`,
+`other`), inferred from the name or set explicitly, so the generic
+diagnosis rules work for every pipeline.
+
+| Pack         | For                                         | Adds                                                                                                       |
+| ------------ | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `vision`     | camera / video / image                      | classic 6-stage template; `target_fps` → frame budget as deadline; `BELOW_TARGET_FPS`                      |
+| `timeseries` | sensor, vibration, audio, IMU, CAN          | `sample_rate_hz`/`window`/`hop` → hop period as deadline; real-time factor, headroom, max sustainable rate; `CANNOT_KEEP_UP`, `TAIL_OVERRUNS_HOP`, `HIGH_OVERLAP_COST`; `WindowSource` replay |
+| `custom`     | anything else                               | generic metrics and rules                                                                                  |
+
+Third-party packs: subclass `edgelens.packs.Pack` and call
+`el.register_pack(MyPack())`.
 
 ## Commands
 
-| Command                                   | Purpose                                                                                            |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `edgelens doctor`                         | Hardware + software fingerprint (board, JetPack/L4T, CUDA, TensorRT, key packages)                 |
-| `edgelens monitor`                        | Live terminal dashboard (CPU/GPU/RAM/temp), thin wrapper over psutil + tegrastats                  |
-| `edgelens benchmark --model X.onnx`       | Runs a real ONNX Runtime benchmark, measures per-stage latency/FPS/utilization                     |
-| `edgelens diagnose`                       | Evidence-based bottleneck verdict: CPU-bound / GPU-bound / thermal / memory-bound / transfer-bound |
-| `edgelens report`                         | Self-contained HTML report (fingerprint + breakdown + diagnosis), attachable to a GitHub issue     |
-| `edgelens compare before.json after.json` | Before/after diff — FPS, latency, per-stage deltas, and a PASS/REGRESSION verdict                  |
+| Command                                   | Purpose                                                                                                                  |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `edgelens doctor`                         | Hardware + software fingerprint (board, JetPack/L4T, CUDA, TensorRT, ORT providers, packages)                              |
+| `edgelens monitor`                        | Live dashboard: CPU / GPU / RAM / temperatures / board power                                                             |
+| `edgelens benchmark`                      | `--model`, `--pipeline` or `--demo`; per-stage + end-to-end latency, tail, jitter, deadline, power/energy, trace          |
+| `edgelens diagnose`                       | Evidence-based verdict (deadline, bottleneck, thermal, memory, pack-specific) with categorical evidence strength          |
+| `edgelens report`                         | Self-contained HTML report, attachable to an issue                                                                        |
+| `edgelens compare before.json after.json` | Before/after diff of any pipeline; PASS/REGRESSION; warns when the environment differs (`--strict-env` → exit code 2)       |
 
-## Wiring in your real pipeline
+Useful `benchmark` flags: `--deadline-ms`, `--period-ms`, `--pace`,
+`--idle-baseline SECONDS` (measures idle power first, then reports the
+workload's dynamic energy), `--input-shape`, `--provider`.
 
-`--model your_model.onnx` gives you a real measurement with minimal
-preprocessing (`OnnxStagePipeline` in `edgelens/benchmark/onnx_pipeline.py`
-does a synthetic random frame, a min-max normalize, and a raw output sum —
-deliberately minimal so it never silently misrepresents YOUR actual
-pre/postprocessing).
+Exit codes: `compare` returns 0 (pass), 1 (regression), 2 (environments
+differ, with `--strict-env`), so it drops straight into CI.
 
-To measure your actual camera/preprocessing/model, pass your own
-`stage_fns` to `run_benchmark()` from Python instead:
+## What a result contains (`schema_version: 1`)
 
-```python
-from edgelens.benchmark.runner import run_benchmark
+Every run (benchmark, observer, demo) writes the same JSON document:
 
-def capture():      ...   # grab a real frame
-def preprocess():   ...   # your real resize/normalize
-def h2d_copy():      ...   # copy to GPU
-def inference():    ...   # run your real TensorRT engine
-def d2h_copy():      ...   # copy result back
-def postprocess():  ...   # your real NMS / decode
+- `pipeline` — name, pack, stages with roles, config
+- `latency` — min / mean / std / p50 / p90 / p95 / p99 / p99.9 / max / jitter / tail spread (end-to-end, per iteration)
+- `stage_stats_ms` — the same statistics per stage
+- `requirements`, `deadline` — misses, miss ratio, worst overrun, longest miss burst, median slack
+- `backlog` — queueing estimate at the input period (labelled simulated; use `--pace` to measure it)
+- `pack_metrics` — e.g. the real-time factor for `timeseries`
+- `telemetry` + `telemetry_series` — mean/peak and the full timestamped samples (CPU, GPU, RAM, EMC, temperature, power), plus the sampler's own cost
+- `energy` — mean power, energy per iteration, iterations per joule, dynamic energy over idle
+- `trace` — one event per stage per iteration (`iter`, `stage`, `start_ns`, `dur_ns`, `thread`)
+- `environment` + `identity` — `environment_id` (board, JetPack, versions, **power mode, clock locking**), `experiment_id` (pipeline, config, model hash), `run_id`
 
-result = run_benchmark(iterations=200, stage_fns={
-    "capture": capture, "preprocess": preprocess, "h2d_copy": h2d_copy,
-    "inference": inference, "d2h_copy": d2h_copy, "postprocess": postprocess,
-})
-```
+Pre-v0.1.0 files (no `schema_version`) still work with `diagnose`, `report`
+and `compare`.
 
-A CLI flag for pointing at a script that defines these functions is
-now available: `edgelens benchmark --pipeline my_pipeline.py`. The
-script must define a top-level `build_stage_fns()` function (called
-once, for any setup) that returns the same six-key dict:
+## Evidence, not confidence
 
-```python
-# my_pipeline.py
-def build_stage_fns():
-    # one-time setup: load your real model, open your real camera, etc.
-    ...
-    return {
-        "capture": capture, "preprocess": preprocess, "h2d_copy": h2d_copy,
-        "inference": inference, "d2h_copy": d2h_copy, "postprocess": postprocess,
-    }
-```
+Every finding reports `evidence_strength` as **weak / moderate / strong**,
+plus the raw numbers behind it, and `data_quality` (iterations, telemetry
+sample count). It is deliberately not a percentage: the internal score only
+ranks findings and is not a calibrated probability. Telemetry-based findings
+from too few samples are demoted and say why. When a deadline is met with
+large headroom, bottleneck findings are marked as "where to optimise", not
+"a problem".
 
-```bash
-edgelens benchmark --pipeline my_pipeline.py
-```
+## Why not just jtop / Nsight / trtexec?
 
-See `tests/fixtures/example_pipeline.py` for a minimal working example.
-`--model` and `--pipeline` are mutually exclusive — pick one.
+| Tool                  | Answers                                                                     |
+| --------------------- | --------------------------------------------------------------------------- |
+| jetson-stats (jtop)   | What is my board doing right now?                                           |
+| Nsight Systems        | What is my whole system doing, at the CUDA level?                           |
+| trtexec               | How fast is this one engine?                                                |
+| **EdgeLens**          | **Does my application meet its budget, why not, what does it cost in energy, and did my change help?** |
 
-## Why not just use jetson-stats?
-
-`jetson-stats` is a mature, actively maintained Jetson telemetry/control
-library — EdgeLens is not trying to replace it, and deliberately does **not**
-import it (it's AGPL-3.0 licensed; EdgeLens is MIT and reads the same
-underlying system files directly to avoid license entanglement). Think of
-`jetson-stats` as the telemetry layer and EdgeLens as the layer above it that
-answers "given this telemetry, why is _my application_ slow, and can I
-prove a fix worked?" (see `edgelens compare`).
-
-Likewise, EdgeLens is not trying to replace Nsight Systems/Compute — those
-give cycle-level CUDA profiling that a Python tool cannot reproduce.
-EdgeLens sits above both: interpretation, benchmarking, and regression
-detection, not raw profiling.
+EdgeLens does not replace them, and it does not import jetson-stats (AGPL);
+it reads the same kernel interfaces directly and stays MIT.
 
 ## License
 
-MIT — see `LICENSE`.
+MIT, see `LICENSE`.
 
 ## Roadmap
 
-See `ROADMAP.md` for the v0.2+ plan (physical Jetson validation, CUDA-event
-timing, precision/power-mode sweeps, CI regression, camera/GStreamer
-integration) and the longer-term plan for other accelerator families
-(Hailo, Rockchip, Qualcomm, Intel).
+See `ROADMAP.md`: v0.2 performance contracts and `validate`, Orin-class
+platform depth (DLA, EMC, per-rail power, throttling); v0.3 streaming,
+LLM and multi-model packs; v0.4 experiments and edge/cloud.

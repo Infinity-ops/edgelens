@@ -5,25 +5,27 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "edgelens"
 version = "0.1.0"
-description = "An open-source performance doctor for NVIDIA Jetson AI workloads: stage-level latency attribution + rule-based bottleneck diagnosis."
+description = "Measure, diagnose and validate AI pipelines on edge devices: stage-level latency, tail and deadlines, power and energy, evidence-based diagnosis. Deep NVIDIA Jetson support."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
 authors = [{ name = "EdgeLens contributors" }]
-keywords = ["jetson", "nvidia", "edge-ai", "profiling", "tensorrt", "cuda", "benchmark"]
+keywords = ["jetson", "nvidia", "edge-ai", "profiling", "tensorrt", "cuda", "benchmark", "real-time", "energy", "latency", "deadline"]
 classifiers = [
-    # Pre-Alpha, not Alpha: the Jetson-specific code paths (detector.py,
-    # telemetry.py's tegrastats parsing) have not yet been run on physical
-    # Jetson hardware. Bump to Alpha only once that validation has happened
-    # and the ROADMAP.md status note is updated to match — see README.md.
+    # Pre-Alpha until scripts/validate_on_jetson.sh passes on the Nano for
+    # the new v0.1.0 hardware paths (sysfs GPU load, INA3221 power, persistent
+    # tegrastats, nvpmodel). The original paths were validated on a Nano
+    # (JetPack 4.6). Then bump to Alpha — see ROADMAP.md release gate.
     # NOTE: license uses the TOML-table form `{ text = "MIT" }` on purpose:
     # the SPDX string form needs setuptools>=77, which doesn't support
-    # Python 3.8 (Jetson Nano / JetPack 4.x). Newer setuptools accepts the
+    # Python 3.8. Newer setuptools accepts the
     # table form with a deprecation warning. Switch to `license = "MIT"`
     # when 3.8 support is dropped. No "License ::" classifier — deprecated.
     "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Operating System :: POSIX :: Linux",
     "Topic :: Software Development :: Debuggers",
     "Topic :: System :: Hardware",
 ]

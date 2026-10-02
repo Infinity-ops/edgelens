@@ -2,192 +2,631 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>EdgeLens Report</title>
+<title>[SIMULATED] EdgeLens Report</title>
 <style>
   body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
-          background:#0f1115; color:#e6e6e6; margin:0; padding:32px; }
+          background:#0f1115; color:#e6e6e6; margin:0; padding:32px; position:relative; }
   h1 { color:#5ee1a5; margin-bottom:4px; }
   h2 { color:#cfd3da; font-size:16px; text-transform:uppercase;
         letter-spacing:0.04em; margin-bottom:14px; }
   .card { background:#181b21; border:1px solid #2a2e37; border-radius:10px;
-           padding:22px; margin-bottom:20px; }
+           padding:22px; margin-bottom:20px; position:relative; z-index:1; }
   table { width:100%; border-collapse:collapse; }
   td { padding:7px 10px; border-bottom:1px solid #2a2e37; font-size:14px; }
-  td:first-child { color:#8a8f98; width:180px; }
+  td:first-child { color:#8a8f98; width:240px; }
   .bar-row { display:flex; align-items:center; margin-bottom:10px; font-size:14px; }
-  .bar-label { width:120px; text-transform:capitalize; color:#cfd3da; }
+  .bar-label { width:200px; color:#cfd3da; }
+  .role { color:#6b7280; font-size:12px; }
   .bar-track { flex:1; background:#2a2e37; border-radius:4px; height:18px;
                 overflow:hidden; margin:0 12px; }
   .bar-fill { background:linear-gradient(90deg,#5ee1a5,#3fa1e8); height:100%; }
-  .bar-value { width:170px; font-size:13px; color:#9aa0aa; text-align:right; }
+  .bar-value { width:240px; font-size:13px; color:#9aa0aa; text-align:right; }
   .verdict { font-size:22px; font-weight:700; color:#ffb454; margin-bottom:8px; }
-  .conf { color:#8a8f98; font-weight:400; font-size:15px; }
+  .strength { color:#8a8f98; font-weight:400; font-size:15px; }
   .rec { color:#5ee1a5; margin-top:10px; }
-  .meta { color:#666; font-size:13px; margin-bottom:24px; }
-  .banner { background:#3a2e12; border:1px solid #6b5220; color:#ffcf6b;
-             padding:10px 14px; border-radius:8px; margin-bottom:20px; font-size:13px; }
+  .meta, .dim { color:#777; font-size:13px; }
+  .ok { color:#5ee1a5; font-weight:700; } .bad { color:#ff5c5c; font-weight:700; }
+  .warn { color:#ffb454; font-size:13px; }
+  .banner { background:#4a1e1e; border:2px solid #ff5c5c; color:#ffb4b4;
+             padding:14px 18px; border-radius:8px; margin-bottom:20px;
+             font-size:14px; font-weight:600; position:relative; z-index:1; }
   ul { padding-left:20px; font-size:14px; color:#cfd3da; }
-  pre { white-space:pre-wrap; font-size:11.5px; color:#8a8f98;
-         max-height:420px; overflow:auto; }
+  pre { white-space:pre-wrap; font-size:11.5px; color:#8a8f98; max-height:420px; overflow:auto; }
   .fpid { font-family: monospace; color:#5ee1a5; }
+  .watermark { position:fixed; top:0; left:0; width:100%; height:100%; display:flex;
+      align-items:center; justify-content:center; transform:rotate(-25deg); font-size:64px;
+      font-weight:800; color:rgba(255,92,92,0.08); pointer-events:none; z-index:0;
+      white-space:nowrap; overflow:hidden; }
 </style>
 </head>
 <body>
-  <h1>EdgeLens Report</h1>
-  <div class="meta">Generated 2026-09-23T01:41:35
-    &middot; fingerprint <span class="fpid">Non-Jetson host (vm)</span></div>
+  <div class="watermark">SIMULATED &middot; NOT REAL &middot; SIMULATED &middot; NOT REAL</div>
+  <h1>[SIMULATED] EdgeLens Report</h1>
+  <div class="meta">Generated 2026-10-02T14:29:36
+    &middot; Non-Jetson host (vm) &middot; pipeline <b>demo-preprocess</b>
+    (vision pack)</div>
+  <div class="banner">⚠️ SIMULATED DATA — NOT A REAL MEASUREMENT. This report was generated with --demo. Every number on this page is synthetic, produced only to preview EdgeLens&#x27; output format. It reflects nothing about any real hardware or application. For a real measurement, run `edgelens benchmark --model your_model.onnx` on the target device.</div>
 
-  <div class="banner">DEMO MODE — synthetic data for previewing EdgeLens output. Run on real Jetson hardware for actual measurements.</div>
-
-  <div class="card">
-    <h2>Hardware / Software Fingerprint</h2>
-    <table>
-      <tr><td>Board</td><td>Non-Jetson host (vm)</td></tr>
-      <tr><td>Is Jetson</td><td>False</td></tr>
-      <tr><td>L4T / JetPack</td><td>not detected</td></tr>
-      <tr><td>CUDA</td><td>not detected</td></tr>
-      <tr><td>TensorRT</td><td>not detected</td></tr>
-      <tr><td>Python</td><td>3.12.3</td></tr>
-      <tr><td>OS</td><td>Linux-6.18.44-fc-v37-x86_64-with-glibc2.39</td></tr>
-    </table>
-  </div>
+  <div class="card"><h2>Environment &amp; identity</h2><table><tr><td>Board</td><td>Non-Jetson host (vm)</td></tr><tr><td>L4T / JetPack</td><td>not detected</td></tr><tr><td>CUDA</td><td>not detected</td></tr><tr><td>TensorRT</td><td>not detected</td></tr><tr><td>Power mode</td><td>not detected</td></tr><tr><td>Clocks locked (CPU / GPU)</td><td>None / None</td></tr><tr><td>Python</td><td>3.12.3</td></tr><tr><td>OS</td><td>Linux-6.18.44-fc-v51-x86_64-with-glibc2.39</td></tr><tr><td>environment_id</td><td><span class="fpid">6bc5f4e78f66</span></td></tr><tr><td>experiment_id</td><td><span class="fpid">bab63d13c67d</span></td></tr><tr><td>run_id</td><td><span class="fpid">20261002T142936-1ae4ee</span></td></tr></table></div>
 
   <div class="card">
-    <h2>Pipeline Breakdown &middot; demo mode</h2>
+    <h2>Pipeline breakdown &middot; demo mode &middot; simulated</h2>
     
         <div class="bar-row">
-          <div class="bar-label">capture</div>
+          <div class="bar-label">capture <span class="role">input</span></div>
           <div class="bar-track"><div class="bar-fill" style="width:8.2%"></div></div>
-          <div class="bar-value">2.97 ms &middot; 8.2%</div>
+          <div class="bar-value">2.969 ms &middot; 8.2% &middot; p99 4.038</div>
         </div>
         <div class="bar-row">
-          <div class="bar-label">preprocess</div>
-          <div class="bar-track"><div class="bar-fill" style="width:38.2%"></div></div>
-          <div class="bar-value">13.78 ms &middot; 38.2%</div>
+          <div class="bar-label">preprocess <span class="role">preprocess</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:38.0%"></div></div>
+          <div class="bar-value">13.823 ms &middot; 38.0% &middot; p99 17.463</div>
         </div>
         <div class="bar-row">
-          <div class="bar-label">h2d copy</div>
-          <div class="bar-track"><div class="bar-fill" style="width:7.8%"></div></div>
-          <div class="bar-value">2.81 ms &middot; 7.8%</div>
+          <div class="bar-label">h2d_copy <span class="role">transfer</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:8.2%"></div></div>
+          <div class="bar-value">2.997 ms &middot; 8.2% &middot; p99 4.121</div>
         </div>
         <div class="bar-row">
-          <div class="bar-label">inference</div>
-          <div class="bar-track"><div class="bar-fill" style="width:33.5%"></div></div>
-          <div class="bar-value">12.06 ms &middot; 33.5%</div>
+          <div class="bar-label">inference <span class="role">inference</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:33.2%"></div></div>
+          <div class="bar-value">12.066 ms &middot; 33.2% &middot; p99 14.727</div>
         </div>
         <div class="bar-row">
-          <div class="bar-label">d2h copy</div>
+          <div class="bar-label">d2h_copy <span class="role">transfer</span></div>
           <div class="bar-track"><div class="bar-fill" style="width:4.2%"></div></div>
-          <div class="bar-value">1.53 ms &middot; 4.2%</div>
+          <div class="bar-value">1.513 ms &middot; 4.2% &middot; p99 2.088</div>
         </div>
         <div class="bar-row">
-          <div class="bar-label">postprocess</div>
-          <div class="bar-track"><div class="bar-fill" style="width:8.0%"></div></div>
-          <div class="bar-value">2.88 ms &middot; 8.0%</div>
+          <div class="bar-label">postprocess <span class="role">postprocess</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:8.2%"></div></div>
+          <div class="bar-value">2.963 ms &middot; 8.2% &middot; p99 4.159</div>
         </div>
-    <p style="margin-top:16px;">Total latency: <b>36.02 ms</b> &nbsp;|&nbsp;
-       FPS: <b>27.76</b></p>
-    <p class="meta">P50 35.814ms &middot;
-       P95 40.32ms &middot;
-       P99 42.912ms &middot;
-       60 iterations</p>
+    <p style="margin-top:16px;">Mean end-to-end: <b>36.331 ms</b>
+       &nbsp;|&nbsp; Throughput: <b>27.52</b> iterations/s
+       &nbsp;|&nbsp; 200 iterations</p>
   </div>
+
+  <div class="card"><h2>End-to-end latency</h2><table><tr><td>min</td><td>30.328 ms</td></tr><tr><td>mean</td><td>36.331 ms</td></tr><tr><td>p50</td><td>36.385 ms</td></tr><tr><td>p90</td><td>39.241 ms</td></tr><tr><td>p95</td><td>40.264 ms</td></tr><tr><td>p99</td><td>41.148 ms</td></tr><tr><td>p99_9</td><td><span class="dim">n/a</span></td></tr><tr><td>max</td><td>41.908 ms</td></tr><tr><td>jitter</td><td>2.308 ms</td></tr><tr><td>tail_spread</td><td>4.763 ms</td></tr><tr><td>not reported</td><td>p99_9 (needs &gt;= 1000 samples)</td></tr></table></div>
+  <div class="card"><h2>Deadline</h2><table><tr><td>status</td><td><span class="bad">MISSED</span></td></tr><tr><td>deadline</td><td>30 ms</td></tr><tr><td>misses</td><td>200 / 200 (100.000%)</td></tr><tr><td>worst</td><td>41.908 ms</td></tr><tr><td>worst overrun</td><td>11.908 ms</td></tr><tr><td>longest miss burst</td><td>200</td></tr><tr><td>median slack</td><td>-6.385 ms</td></tr></table></div>
+  
+  <div class="card"><h2>vision pack metrics</h2><table><tr><td>fps</td><td>27.52</td></tr></table></div>
 
   <div class="card">
     <h2>Diagnosis</h2>
-    <div class="verdict">CPU_BOUND_PREPROCESS <span class="conf">(78% confidence)</span></div>
-    <p>Preprocessing consumes 38.2% of total pipeline latency while CPU utilization is 93.0%.</p>
-    <p class="rec">&rarr; Move resize/color-conversion to the GPU (CUDA/VPI) or use hardware-accelerated decode instead of CPU-side OpenCV.</p>
-    
+    <div class="verdict">DEADLINE_MISSED <span class="strength">(strong evidence)</span></div>
+    <p>200 of 200 iterations (100.00%) exceeded the 30.0 ms deadline; worst 41.908 ms, longest burst 200 in a row. Largest share of the budget: &#x27;preprocess&#x27; (38.0%).</p>
+    <p class="rec">&rarr; Fix the bottleneck findings listed with this one first; if misses are rare bursts, look for stalls in the trace (thermal, other processes, GC) rather than average speed.</p>
+    <ul><li><b>CPU_BOUND_PREPROCESS</b> (strong evidence) — Preprocessing consumes 38.0% of total pipeline latency while mean CPU utilization is 93.0%.</li></ul>
+    <table><tr><td>deadline_ms</td><td>30.0</td></tr><tr><td>misses</td><td>200</td></tr><tr><td>miss_ratio</td><td>1.0</td></tr><tr><td>worst_ms</td><td>41.908</td></tr><tr><td>max_consecutive_misses</td><td>200</td></tr><tr><td>latency_p99_ms</td><td>41.148</td></tr><tr><td>dominant_stage</td><td>preprocess</td></tr></table>
   </div>
 
-  <div class="card">
-    <h2>Raw Data (JSON)</h2>
-    <pre>{
-  "fingerprint": {
-    "hardware": {
-      "is_jetson": false,
-      "model": "Non-Jetson host (vm)",
-      "l4t_release_raw": null
+  <div class="card"><h2>Raw data (JSON)</h2><p class="dim">0 trace events and 0 telemetry samples are in the benchmark JSON (omitted here).</p><pre>{
+  &quot;fingerprint&quot;: {
+    &quot;schema_version&quot;: 1,
+    &quot;edgelens_version&quot;: &quot;0.1.0&quot;,
+    &quot;generated_at&quot;: &quot;2026-10-02T14:29:36&quot;,
+    &quot;identity&quot;: {
+      &quot;environment_id&quot;: &quot;6bc5f4e78f66&quot;,
+      &quot;experiment_id&quot;: &quot;bab63d13c67d&quot;,
+      &quot;run_id&quot;: &quot;20261002T142936-1ae4ee&quot;,
+      &quot;started_at&quot;: &quot;2026-10-02T14:29:36&quot;,
+      &quot;model_sha256&quot;: null,
+      &quot;code_version&quot;: null
     },
-    "software": {
-      "os": "Linux-6.18.44-fc-v37-x86_64-with-glibc2.39",
-      "python": "3.12.3",
-      "jetpack_l4t": null,
-      "cuda": null,
-      "tensorrt": null,
-      "packages": {
-        "torch": null,
-        "onnx": null,
-        "onnxruntime": "1.24.4",
-        "numpy": "2.4.4",
-        "cv2": "4.13.0",
-        "pycuda": null
+    &quot;environment&quot;: {
+      &quot;board&quot;: &quot;Non-Jetson host (vm)&quot;,
+      &quot;is_jetson&quot;: false,
+      &quot;l4t&quot;: null,
+      &quot;cuda&quot;: null,
+      &quot;tensorrt&quot;: null,
+      &quot;python&quot;: &quot;3.12.3&quot;,
+      &quot;os&quot;: &quot;Linux-6.18.44-fc-v51-x86_64-with-glibc2.39&quot;,
+      &quot;packages&quot;: {
+        &quot;torch&quot;: null,
+        &quot;onnx&quot;: &quot;1.23.1&quot;,
+        &quot;onnxruntime&quot;: &quot;1.24.4&quot;,
+        &quot;numpy&quot;: &quot;2.4.4&quot;,
+        &quot;cv2&quot;: &quot;4.13.0.92&quot;,
+        &quot;pycuda&quot;: null
+      },
+      &quot;ort_providers&quot;: [
+        &quot;AzureExecutionProvider&quot;,
+        &quot;CPUExecutionProvider&quot;
+      ],
+      &quot;power_mode&quot;: null,
+      &quot;cpu_clocks_locked&quot;: null,
+      &quot;gpu_clocks_locked&quot;: null,
+      &quot;cpu_count&quot;: 1
+    },
+    &quot;hardware&quot;: {
+      &quot;is_jetson&quot;: false,
+      &quot;model&quot;: &quot;Non-Jetson host (vm)&quot;,
+      &quot;l4t_release_raw&quot;: null
+    },
+    &quot;software&quot;: {
+      &quot;os&quot;: &quot;Linux-6.18.44-fc-v51-x86_64-with-glibc2.39&quot;,
+      &quot;python&quot;: &quot;3.12.3&quot;,
+      &quot;jetpack_l4t&quot;: null,
+      &quot;cuda&quot;: null,
+      &quot;tensorrt&quot;: null,
+      &quot;tensorrt_python_bindings&quot;: false,
+      &quot;tensorrt_source&quot;: null,
+      &quot;packages&quot;: {
+        &quot;torch&quot;: null,
+        &quot;onnx&quot;: &quot;1.23.1&quot;,
+        &quot;onnxruntime&quot;: &quot;1.24.4&quot;,
+        &quot;numpy&quot;: &quot;2.4.4&quot;,
+        &quot;cv2&quot;: &quot;4.13.0.92&quot;,
+        &quot;pycuda&quot;: null
       }
-    }
+    },
+    &quot;diagnosis&quot;: {
+      &quot;schema_version&quot;: 1,
+      &quot;data_quality&quot;: {
+        &quot;iterations&quot;: 200,
+        &quot;telemetry_sample_count&quot;: 50,
+        &quot;telemetry_reliable&quot;: true,
+        &quot;mode&quot;: &quot;demo&quot;
+      },
+      &quot;role_pct&quot;: {
+        &quot;input&quot;: 8.2,
+        &quot;preprocess&quot;: 38.0,
+        &quot;transfer&quot;: 12.4,
+        &quot;inference&quot;: 33.2,
+        &quot;postprocess&quot;: 8.2
+      },
+      &quot;stage_pct&quot;: {
+        &quot;capture&quot;: 8.2,
+        &quot;preprocess&quot;: 38.0,
+        &quot;h2d_copy&quot;: 8.2,
+        &quot;inference&quot;: 33.2,
+        &quot;d2h_copy&quot;: 4.2,
+        &quot;postprocess&quot;: 8.2
+      },
+      &quot;resource_snapshot&quot;: {
+        &quot;cpu_percent_mean&quot;: 93.0,
+        &quot;gpu_percent_mean&quot;: 38.0,
+        &quot;mem_percent_mean&quot;: 42.0,
+        &quot;max_temp_c&quot;: 54.0
+      },
+      &quot;telemetry_reliable&quot;: true,
+      &quot;telemetry_sample_count&quot;: 50,
+      &quot;primary&quot;: {
+        &quot;type&quot;: &quot;DEADLINE_MISSED&quot;,
+        &quot;rank_score&quot;: 0.95,
+        &quot;detail&quot;: &quot;200 of 200 iterations (100.00%) exceeded the 30.0 ms deadline; worst 41.908 ms, longest burst 200 in a row. Largest share of the budget: &#x27;preprocess&#x27; (38.0%).&quot;,
+        &quot;recommendation&quot;: &quot;Fix the bottleneck findings listed with this one first; if misses are rare bursts, look for stalls in the trace (thermal, other processes, GC) rather than average speed.&quot;,
+        &quot;evidence&quot;: {
+          &quot;deadline_ms&quot;: 30.0,
+          &quot;misses&quot;: 200,
+          &quot;miss_ratio&quot;: 1.0,
+          &quot;worst_ms&quot;: 41.908,
+          &quot;max_consecutive_misses&quot;: 200,
+          &quot;latency_p99_ms&quot;: 41.148,
+          &quot;dominant_stage&quot;: &quot;preprocess&quot;
+        },
+        &quot;evidence_strength&quot;: &quot;strong&quot;
+      },
+      &quot;secondary&quot;: [
+        {
+          &quot;type&quot;: &quot;CPU_BOUND_PREPROCESS&quot;,
+          &quot;rank_score&quot;: 0.78,
+          &quot;detail&quot;: &quot;Preprocessing consumes 38.0% of total pipeline latency while mean CPU utilization is 93.0%.&quot;,
+          &quot;recommendation&quot;: &quot;Move resize/color-conversion to the GPU (CUDA/VPI) or use hardware-accelerated decode instead of CPU-side OpenCV; or overlap preprocessing of frame N+1 with inference of frame N on another core.&quot;,
+          &quot;evidence&quot;: {
+            &quot;preprocess_stage_pct&quot;: 38.0,
+            &quot;cpu_percent_mean&quot;: 93.0,
+            &quot;cpu_count&quot;: null,
+            &quot;thresholds&quot;: {
+              &quot;stage_pct&quot;: 30.0,
+              &quot;cpu_pct&quot;: 70.0,
+              &quot;single_core_pct&quot;: null
+            }
+          },
+          &quot;evidence_strength&quot;: &quot;strong&quot;
+        }
+      ],
+      &quot;all_findings&quot;: [
+        {
+          &quot;type&quot;: &quot;DEADLINE_MISSED&quot;,
+          &quot;rank_score&quot;: 0.95,
+          &quot;detail&quot;: &quot;200 of 200 iterations (100.00%) exceeded the 30.0 ms deadline; worst 41.908 ms, longest burst 200 in a row. Largest share of the budget: &#x27;preprocess&#x27; (38.0%).&quot;,
+          &quot;recommendation&quot;: &quot;Fix the bottleneck findings listed with this one first; if misses are rare bursts, look for stalls in the trace (thermal, other processes, GC) rather than average speed.&quot;,
+          &quot;evidence&quot;: {
+            &quot;deadline_ms&quot;: 30.0,
+            &quot;misses&quot;: 200,
+            &quot;miss_ratio&quot;: 1.0,
+            &quot;worst_ms&quot;: 41.908,
+            &quot;max_consecutive_misses&quot;: 200,
+            &quot;latency_p99_ms&quot;: 41.148,
+            &quot;dominant_stage&quot;: &quot;preprocess&quot;
+          },
+          &quot;evidence_strength&quot;: &quot;strong&quot;
+        },
+        {
+          &quot;type&quot;: &quot;CPU_BOUND_PREPROCESS&quot;,
+          &quot;rank_score&quot;: 0.78,
+          &quot;detail&quot;: &quot;Preprocessing consumes 38.0% of total pipeline latency while mean CPU utilization is 93.0%.&quot;,
+          &quot;recommendation&quot;: &quot;Move resize/color-conversion to the GPU (CUDA/VPI) or use hardware-accelerated decode instead of CPU-side OpenCV; or overlap preprocessing of frame N+1 with inference of frame N on another core.&quot;,
+          &quot;evidence&quot;: {
+            &quot;preprocess_stage_pct&quot;: 38.0,
+            &quot;cpu_percent_mean&quot;: 93.0,
+            &quot;cpu_count&quot;: null,
+            &quot;thresholds&quot;: {
+              &quot;stage_pct&quot;: 30.0,
+              &quot;cpu_pct&quot;: 70.0,
+              &quot;single_core_pct&quot;: null
+            }
+          },
+          &quot;evidence_strength&quot;: &quot;strong&quot;
+        }
+      ]
+    },
+    &quot;fingerprint_id&quot;: &quot;6bc5f4e78f66&quot;
   },
-  "benchmark": {
-    "mode": "demo",
-    "pipeline_source": "simulated",
-    "iterations": 60,
-    "stage_avg_ms": {
-      "capture": 2.967,
-      "preprocess": 13.775,
-      "h2d_copy": 2.806,
-      "inference": 12.06,
-      "d2h_copy": 1.528,
-      "postprocess": 2.884
+  &quot;diagnosis&quot;: {
+    &quot;schema_version&quot;: 1,
+    &quot;data_quality&quot;: {
+      &quot;iterations&quot;: 200,
+      &quot;telemetry_sample_count&quot;: 50,
+      &quot;telemetry_reliable&quot;: true,
+      &quot;mode&quot;: &quot;demo&quot;
     },
-    "total_latency_ms": 36.02,
-    "latency_p50_ms": 35.814,
-    "latency_p95_ms": 40.32,
-    "latency_p99_ms": 42.912,
-    "fps": 27.76,
-    "telemetry": {
-      "cpu_percent": 93.0,
-      "gpu_percent": 38.0,
-      "mem_percent": 42.0,
-      "mem_used_gb": 3.36,
-      "mem_total_gb": 8.0,
-      "swap_used_gb": 0.0,
-      "temps_c": {
-        "CPU-therm": 52.0,
-        "GPU-therm": 49.0
-      }
-    }
-  },
-  "diagnosis": {
-    "stage_pct": {
-      "capture": 8.2,
-      "preprocess": 38.2,
-      "h2d_copy": 7.8,
-      "inference": 33.5,
-      "d2h_copy": 4.2,
-      "postprocess": 8.0
+    &quot;role_pct&quot;: {
+      &quot;input&quot;: 8.2,
+      &quot;preprocess&quot;: 38.0,
+      &quot;transfer&quot;: 12.4,
+      &quot;inference&quot;: 33.2,
+      &quot;postprocess&quot;: 8.2
     },
-    "resource_snapshot": {
-      "cpu_percent": 93.0,
-      "gpu_percent": 38.0,
-      "mem_percent": 42.0,
-      "max_temp_c": 52.0
+    &quot;stage_pct&quot;: {
+      &quot;capture&quot;: 8.2,
+      &quot;preprocess&quot;: 38.0,
+      &quot;h2d_copy&quot;: 8.2,
+      &quot;inference&quot;: 33.2,
+      &quot;d2h_copy&quot;: 4.2,
+      &quot;postprocess&quot;: 8.2
     },
-    "primary": {
-      "type": "CPU_BOUND_PREPROCESS",
-      "confidence": 0.78,
-      "detail": "Preprocessing consumes 38.2% of total pipeline latency while CPU utilization is 93.0%.",
-      "recommendation": "Move resize/color-conversion to the GPU (CUDA/VPI) or use hardware-accelerated decode instead of CPU-side OpenCV."
+    &quot;resource_snapshot&quot;: {
+      &quot;cpu_percent_mean&quot;: 93.0,
+      &quot;gpu_percent_mean&quot;: 38.0,
+      &quot;mem_percent_mean&quot;: 42.0,
+      &quot;max_temp_c&quot;: 54.0
     },
-    "secondary": [],
-    "all_findings": [
+    &quot;telemetry_reliable&quot;: true,
+    &quot;telemetry_sample_count&quot;: 50,
+    &quot;primary&quot;: {
+      &quot;type&quot;: &quot;DEADLINE_MISSED&quot;,
+      &quot;rank_score&quot;: 0.95,
+      &quot;detail&quot;: &quot;200 of 200 iterations (100.00%) exceeded the 30.0 ms deadline; worst 41.908 ms, longest burst 200 in a row. Largest share of the budget: &#x27;preprocess&#x27; (38.0%).&quot;,
+      &quot;recommendation&quot;: &quot;Fix the bottleneck findings listed with this one first; if misses are rare bursts, look for stalls in the trace (thermal, other processes, GC) rather than average speed.&quot;,
+      &quot;evidence&quot;: {
+        &quot;deadline_ms&quot;: 30.0,
+        &quot;misses&quot;: 200,
+        &quot;miss_ratio&quot;: 1.0,
+        &quot;worst_ms&quot;: 41.908,
+        &quot;max_consecutive_misses&quot;: 200,
+        &quot;latency_p99_ms&quot;: 41.148,
+        &quot;dominant_stage&quot;: &quot;preprocess&quot;
+      },
+      &quot;evidence_strength&quot;: &quot;strong&quot;
+    },
+    &quot;secondary&quot;: [
       {
-        "type": "CPU_BOUND_PREPROCESS",
-        "confidence": 0.78,
-        "detail": "Preprocessing consumes 38.2% of total pipeline latency while CPU utilization is 93.0%.",
-        "recommendation": "Move resize/color-conversion to the GPU (CUDA/VPI) or use hardware-accelerated decode instead of CPU-side OpenCV."
+        &quot;type&quot;: &quot;CPU_BOUND_PREPROCESS&quot;,
+        &quot;rank_score&quot;: 0.78,
+        &quot;detail&quot;: &quot;Preprocessing consumes 38.0% of total pipeline latency while mean CPU utilization is 93.0%.&quot;,
+        &quot;recommendation&quot;: &quot;Move resize/color-conversion to the GPU (CUDA/VPI) or use hardware-accelerated decode instead of CPU-side OpenCV; or overlap preprocessing of frame N+1 with inference of frame N on another core.&quot;,
+        &quot;evidence&quot;: {
+          &quot;preprocess_stage_pct&quot;: 38.0,
+          &quot;cpu_percent_mean&quot;: 93.0,
+          &quot;cpu_count&quot;: null,
+          &quot;thresholds&quot;: {
+            &quot;stage_pct&quot;: 30.0,
+            &quot;cpu_pct&quot;: 70.0,
+            &quot;single_core_pct&quot;: null
+          }
+        },
+        &quot;evidence_strength&quot;: &quot;strong&quot;
+      }
+    ],
+    &quot;all_findings&quot;: [
+      {
+        &quot;type&quot;: &quot;DEADLINE_MISSED&quot;,
+        &quot;rank_score&quot;: 0.95,
+        &quot;detail&quot;: &quot;200 of 200 iterations (100.00%) exceeded the 30.0 ms deadline; worst 41.908 ms, longest burst 200 in a row. Largest share of the budget: &#x27;preprocess&#x27; (38.0%).&quot;,
+        &quot;recommendation&quot;: &quot;Fix the bottleneck findings listed with this one first; if misses are rare bursts, look for stalls in the trace (thermal, other processes, GC) rather than average speed.&quot;,
+        &quot;evidence&quot;: {
+          &quot;deadline_ms&quot;: 30.0,
+          &quot;misses&quot;: 200,
+          &quot;miss_ratio&quot;: 1.0,
+          &quot;worst_ms&quot;: 41.908,
+          &quot;max_consecutive_misses&quot;: 200,
+          &quot;latency_p99_ms&quot;: 41.148,
+          &quot;dominant_stage&quot;: &quot;preprocess&quot;
+        },
+        &quot;evidence_strength&quot;: &quot;strong&quot;
+      },
+      {
+        &quot;type&quot;: &quot;CPU_BOUND_PREPROCESS&quot;,
+        &quot;rank_score&quot;: 0.78,
+        &quot;detail&quot;: &quot;Preprocessing consumes 38.0% of total pipeline latency while mean CPU utilization is 93.0%.&quot;,
+        &quot;recommendation&quot;: &quot;Move resize/color-conversion to the GPU (CUDA/VPI) or use hardware-accelerated decode instead of CPU-side OpenCV; or overlap preprocessing of frame N+1 with inference of frame N on another core.&quot;,
+        &quot;evidence&quot;: {
+          &quot;preprocess_stage_pct&quot;: 38.0,
+          &quot;cpu_percent_mean&quot;: 93.0,
+          &quot;cpu_count&quot;: null,
+          &quot;thresholds&quot;: {
+            &quot;stage_pct&quot;: 30.0,
+            &quot;cpu_pct&quot;: 70.0,
+            &quot;single_core_pct&quot;: null
+          }
+        },
+        &quot;evidence_strength&quot;: &quot;strong&quot;
       }
     ]
+  },
+  &quot;benchmark&quot;: {
+    &quot;schema_version&quot;: 1,
+    &quot;edgelens_version&quot;: &quot;0.1.0&quot;,
+    &quot;mode&quot;: &quot;demo&quot;,
+    &quot;pipeline_source&quot;: &quot;simulated&quot;,
+    &quot;pipeline&quot;: {
+      &quot;name&quot;: &quot;demo-preprocess&quot;,
+      &quot;pack&quot;: &quot;vision&quot;,
+      &quot;config&quot;: {
+        &quot;demo_scenario&quot;: &quot;preprocess&quot;
+      },
+      &quot;stages&quot;: [
+        {
+          &quot;name&quot;: &quot;capture&quot;,
+          &quot;role&quot;: &quot;input&quot;
+        },
+        {
+          &quot;name&quot;: &quot;preprocess&quot;,
+          &quot;role&quot;: &quot;preprocess&quot;
+        },
+        {
+          &quot;name&quot;: &quot;h2d_copy&quot;,
+          &quot;role&quot;: &quot;transfer&quot;
+        },
+        {
+          &quot;name&quot;: &quot;inference&quot;,
+          &quot;role&quot;: &quot;inference&quot;
+        },
+        {
+          &quot;name&quot;: &quot;d2h_copy&quot;,
+          &quot;role&quot;: &quot;transfer&quot;
+        },
+        {
+          &quot;name&quot;: &quot;postprocess&quot;,
+          &quot;role&quot;: &quot;postprocess&quot;
+        }
+      ]
+    },
+    &quot;requirements&quot;: {
+      &quot;deadline_ms&quot;: 30.0,
+      &quot;period_ms&quot;: null,
+      &quot;paced&quot;: false
+    },
+    &quot;iterations&quot;: 200,
+    &quot;latency&quot;: {
+      &quot;n&quot;: 200,
+      &quot;min&quot;: 30.328,
+      &quot;mean&quot;: 36.331,
+      &quot;std&quot;: 2.308,
+      &quot;max&quot;: 41.908,
+      &quot;p50&quot;: 36.385,
+      &quot;p90&quot;: 39.241,
+      &quot;p95&quot;: 40.264,
+      &quot;p99&quot;: 41.148,
+      &quot;p99_9&quot;: null,
+      &quot;jitter&quot;: 2.308,
+      &quot;tail_spread&quot;: 4.763,
+      &quot;insufficient_samples&quot;: [
+        &quot;p99_9 (needs &gt;= 1000 samples)&quot;
+      ]
+    },
+    &quot;stage_stats_ms&quot;: {
+      &quot;capture&quot;: {
+        &quot;n&quot;: 200,
+        &quot;min&quot;: 1.894,
+        &quot;mean&quot;: 2.969,
+        &quot;std&quot;: 0.59,
+        &quot;max&quot;: 4.199,
+        &quot;p50&quot;: 2.919,
+        &quot;p90&quot;: 3.718,
+        &quot;p95&quot;: 3.871,
+        &quot;p99&quot;: 4.038,
+        &quot;p99_9&quot;: null,
+        &quot;jitter&quot;: 0.59,
+        &quot;tail_spread&quot;: 1.119,
+        &quot;insufficient_samples&quot;: [
+          &quot;p99_9 (needs &gt;= 1000 samples)&quot;
+        ]
+      },
+      &quot;preprocess&quot;: {
+        &quot;n&quot;: 200,
+        &quot;min&quot;: 10.765,
+        &quot;mean&quot;: 13.823,
+        &quot;std&quot;: 1.63,
+        &quot;max&quot;: 17.631,
+        &quot;p50&quot;: 13.7,
+        &quot;p90&quot;: 16.038,
+        &quot;p95&quot;: 16.792,
+        &quot;p99&quot;: 17.463,
+        &quot;p99_9&quot;: null,
+        &quot;jitter&quot;: 1.63,
+        &quot;tail_spread&quot;: 3.763,
+        &quot;insufficient_samples&quot;: [
+          &quot;p99_9 (needs &gt;= 1000 samples)&quot;
+        ]
+      },
+      &quot;h2d_copy&quot;: {
+        &quot;n&quot;: 200,
+        &quot;min&quot;: 1.895,
+        &quot;mean&quot;: 2.997,
+        &quot;std&quot;: 0.576,
+        &quot;max&quot;: 4.198,
+        &quot;p50&quot;: 3.009,
+        &quot;p90&quot;: 3.757,
+        &quot;p95&quot;: 3.897,
+        &quot;p99&quot;: 4.121,
+        &quot;p99_9&quot;: null,
+        &quot;jitter&quot;: 0.576,
+        &quot;tail_spread&quot;: 1.112,
+        &quot;insufficient_samples&quot;: [
+          &quot;p99_9 (needs &gt;= 1000 samples)&quot;
+        ]
+      },
+      &quot;inference&quot;: {
+        &quot;n&quot;: 200,
+        &quot;min&quot;: 9.297,
+        &quot;mean&quot;: 12.066,
+        &quot;std&quot;: 1.303,
+        &quot;max&quot;: 14.823,
+        &quot;p50&quot;: 12.081,
+        &quot;p90&quot;: 13.73,
+        &quot;p95&quot;: 14.125,
+        &quot;p99&quot;: 14.727,
+        &quot;p99_9&quot;: null,
+        &quot;jitter&quot;: 1.303,
+        &quot;tail_spread&quot;: 2.646,
+        &quot;insufficient_samples&quot;: [
+          &quot;p99_9 (needs &gt;= 1000 samples)&quot;
+        ]
+      },
+      &quot;d2h_copy&quot;: {
+        &quot;n&quot;: 200,
+        &quot;min&quot;: 0.976,
+        &quot;mean&quot;: 1.513,
+        &quot;std&quot;: 0.295,
+        &quot;max&quot;: 2.146,
+        &quot;p50&quot;: 1.526,
+        &quot;p90&quot;: 1.919,
+        &quot;p95&quot;: 1.986,
+        &quot;p99&quot;: 2.088,
+        &quot;p99_9&quot;: null,
+        &quot;jitter&quot;: 0.295,
+        &quot;tail_spread&quot;: 0.562,
+        &quot;insufficient_samples&quot;: [
+          &quot;p99_9 (needs &gt;= 1000 samples)&quot;
+        ]
+      },
+      &quot;postprocess&quot;: {
+        &quot;n&quot;: 200,
+        &quot;min&quot;: 1.859,
+        &quot;mean&quot;: 2.963,
+        &quot;std&quot;: 0.602,
+        &quot;max&quot;: 4.311,
+        &quot;p50&quot;: 2.986,
+        &quot;p90&quot;: 3.809,
+        &quot;p95&quot;: 3.982,
+        &quot;p99&quot;: 4.159,
+        &quot;p99_9&quot;: null,
+        &quot;jitter&quot;: 0.602,
+        &quot;tail_spread&quot;: 1.173,
+        &quot;insufficient_samples&quot;: [
+          &quot;p99_9 (needs &gt;= 1000 samples)&quot;
+        ]
+      }
+    },
+    &quot;deadline&quot;: {
+      &quot;deadline_ms&quot;: 30.0,
+      &quot;iterations&quot;: 200,
+      &quot;misses&quot;: 200,
+      &quot;miss_ratio&quot;: 1.0,
+      &quot;met&quot;: false,
+      &quot;worst_ms&quot;: 41.908,
+      &quot;worst_overrun_ms&quot;: 11.908,
+      &quot;first_miss_iteration&quot;: 0,
+      &quot;max_consecutive_misses&quot;: 200,
+      &quot;slack_p50_ms&quot;: -6.385
+    },
+    &quot;backlog&quot;: null,
+    &quot;stage_avg_ms&quot;: {
+      &quot;capture&quot;: 2.969,
+      &quot;preprocess&quot;: 13.823,
+      &quot;h2d_copy&quot;: 2.997,
+      &quot;inference&quot;: 12.066,
+      &quot;d2h_copy&quot;: 1.513,
+      &quot;postprocess&quot;: 2.963
+    },
+    &quot;total_latency_ms&quot;: 36.331,
+    &quot;fps&quot;: 27.52,
+    &quot;latency_p50_ms&quot;: 36.385,
+    &quot;latency_p95_ms&quot;: 40.264,
+    &quot;latency_p99_ms&quot;: 41.148,
+    &quot;telemetry&quot;: {
+      &quot;sample_count&quot;: 50,
+      &quot;duration_s&quot;: 10.0,
+      &quot;cpu_percent_mean&quot;: 93.0,
+      &quot;cpu_percent_peak&quot;: 98.0,
+      &quot;gpu_percent_mean&quot;: 38.0,
+      &quot;gpu_percent_peak&quot;: 43.0,
+      &quot;mem_percent_mean&quot;: 42.0,
+      &quot;mem_percent_peak&quot;: 46.0,
+      &quot;temps_c_mean&quot;: {
+        &quot;CPU-therm&quot;: 52.0,
+        &quot;GPU-therm&quot;: 49.0
+      },
+      &quot;temps_c_peak&quot;: {
+        &quot;CPU-therm&quot;: 54.0,
+        &quot;GPU-therm&quot;: 51.0
+      },
+      &quot;max_temp_c&quot;: 54.0,
+      &quot;cpu_percent&quot;: 93.0,
+      &quot;gpu_percent&quot;: 38.0,
+      &quot;mem_percent&quot;: 42.0,
+      &quot;temps_c&quot;: {
+        &quot;CPU-therm&quot;: 52.0,
+        &quot;GPU-therm&quot;: 49.0
+      },
+      &quot;mem_used_gb&quot;: 3.36,
+      &quot;mem_total_gb&quot;: 8.0
+    },
+    &quot;energy&quot;: {
+      &quot;available&quot;: false
+    },
+    &quot;pack_metrics&quot;: {
+      &quot;fps&quot;: 27.52
+    },
+    &quot;environment&quot;: {
+      &quot;board&quot;: &quot;Non-Jetson host (vm)&quot;,
+      &quot;is_jetson&quot;: false,
+      &quot;l4t&quot;: null,
+      &quot;cuda&quot;: null,
+      &quot;tensorrt&quot;: null,
+      &quot;python&quot;: &quot;3.12.3&quot;,
+      &quot;os&quot;: &quot;Linux-6.18.44-fc-v51-x86_64-with-glibc2.39&quot;,
+      &quot;packages&quot;: {
+        &quot;torch&quot;: null,
+        &quot;onnx&quot;: &quot;1.23.1&quot;,
+        &quot;onnxruntime&quot;: &quot;1.24.4&quot;,
+        &quot;numpy&quot;: &quot;2.4.4&quot;,
+        &quot;cv2&quot;: &quot;4.13.0.92&quot;,
+        &quot;pycuda&quot;: null
+      },
+      &quot;ort_providers&quot;: [
+        &quot;AzureExecutionProvider&quot;,
+        &quot;CPUExecutionProvider&quot;
+      ],
+      &quot;power_mode&quot;: null,
+      &quot;cpu_clocks_locked&quot;: null,
+      &quot;gpu_clocks_locked&quot;: null,
+      &quot;cpu_count&quot;: 1
+    },
+    &quot;identity&quot;: {
+      &quot;environment_id&quot;: &quot;6bc5f4e78f66&quot;,
+      &quot;experiment_id&quot;: &quot;bab63d13c67d&quot;,
+      &quot;run_id&quot;: &quot;20261002T142936-1ae4ee&quot;,
+      &quot;started_at&quot;: &quot;2026-10-02T14:29:36&quot;,
+      &quot;model_sha256&quot;: null,
+      &quot;code_version&quot;: null
+    }
   }
-}</pre>
-  </div>
+}</pre></div>
+  <div class="banner">⚠️ SIMULATED DATA — NOT A REAL MEASUREMENT. This report was generated with --demo. Every number on this page is synthetic, produced only to preview EdgeLens&#x27; output format. It reflects nothing about any real hardware or application. For a real measurement, run `edgelens benchmark --model your_model.onnx` on the target device.</div>
 </body>
 </html>

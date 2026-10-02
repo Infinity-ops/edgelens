@@ -26,107 +26,85 @@ tooling already measures — it does not re-implement it.
 | trtexec / TensorRT profiler | How fast is my engine, layer by layer?                                      |
 | **EdgeLens**                | **Why is my application performing this way, and what should I test next?** |
 
-## v0.1.0 — the actual first release (gate: validated on real Jetson hardware)
+## v0.1.0 — the first release (gate: validated on a real Jetson Nano)
 
-This absorbs what was previously planned as a separate "v0.2 hardware
-validation" release. A Pre-Alpha release claiming Jetson support with
-zero Jetson testing behind it is a worse first impression than taking
-longer and shipping something genuinely validated — so v0.1.0 is not
-tagged or published until every item below is checked off.
+**Done and tested (101 tests, Python 3.8 and 3.12):**
 
-**Already built and tested (on a non-Jetson host — CPU ONNX Runtime
-path, demo path, full CLI, validated against both a tiny linear model
-and a real multi-layer CNN):**
+- [x] `doctor`, `monitor`, `benchmark`, `diagnose`, `report`, `compare`
+- [x] Real ONNX Runtime benchmarking (CPU / CUDA / TensorRT providers, IOBinding
+      H2D/D2H split); **all model inputs fed with declared dtypes**,
+      `--input-shape`, no guessing of non-image dynamic dims
+- [x] **Generic Pipeline engine** — any number of named stages with roles;
+      harness mode (`Pipeline.run`, `--pipeline`) and **observer mode**
+      (`edgelens.trace`); one-argument stages receive the previous output
+- [x] **Scenario packs** — `vision` (the classic six stages), `timeseries`
+      (window/hop, real-time factor, `WindowSource` replay), `custom`;
+      `register_pack()` for third-party packs
+- [x] **Raw trace** (per stage per iteration) and **timestamped telemetry
+      series** in every result
+- [x] **Tail metrics** — min/mean/std/p50/p90/p95/p99/p99.9/max/jitter with
+      sample-count honesty rule
+- [x] **`--deadline-ms`** (misses, ratio, worst overrun, bursts),
+      `--period-ms` backlog estimate, `--pace` measured response time
+- [x] **Power and energy** via INA3221 (JetPack 4 iio + JetPack 5/6 hwmon);
+      energy/iteration, iterations/J, dynamic energy over idle baseline
+- [x] **environment_id / experiment_id / run_id**; power mode and clock
+      locking in the environment; **environment-aware `compare`**
+      (`--strict-env`)
+- [x] **Categorical evidence strength** (weak/moderate/strong) + data quality;
+      role-based rules; DEADLINE_MET / DEADLINE_MISSED; pack findings
+- [x] **`schema_version: 1`** in every JSON document; pre-v0.1 files still read
+- [x] Telemetry sampler rewritten: non-blocking CPU%, sysfs GPU load, one
+      persistent tegrastats process (was one process per sample), sampler
+      cost reported
+- [x] HTML report escapes all data-derived text
+- [x] Nano-validated diagnosis rules: INFERENCE_ON_CPU, single-core
+      CPU_BOUND_PREPROCESS
 
-- [x] `doctor` — hardware/software fingerprint
-- [x] `monitor` — live CPU/GPU/RAM/temp dashboard
-- [x] `benchmark --model X.onnx` — real ONNX Runtime inference
-      (CPUExecutionProvider laptop / CUDA-TensorRT Jetson), stage-level
-      latency via IOBinding for real H2D/D2H separation on GPU providers
-- [x] Continuous background telemetry sampling (mean + peak per metric)
-- [x] `diagnose` — rule-based bottleneck engine, evidence-first output
-      (`evidence_strength` + raw evidence numbers), with automatic
-      demotion of telemetry-dependent findings when the sample count is
-      too low to trust
-- [x] `compare` — before/after diff with PASS/REGRESSION verdict
-- [x] `report` — self-contained HTML report + JSON fingerprint
-- [x] `--demo` mode, unmissably labeled everywhere it appears
-- [x] MIT license (SPDX), no AGPL dependency
-- [x] Known bug fixed: `capture()` no longer regenerates a random frame
-      every iteration (was costing ~1ms on realistic input sizes, enough
-      to look like a false bottleneck) — found via real-CNN testing
+**Release gate — run `scripts/validate_on_jetson.sh` on the Nano:**
 
-**Still required before v0.1.0 is tagged — the actual gate:**
+- [ ] sysfs GPU load node read correctly (`/sys/devices/gpu.0/load`)
+- [ ] INA3221 rails found (`POM_5V_IN/GPU/CPU`), power plausible, energy > 0
+- [ ] persistent tegrastats stream works where sysfs is missing
+- [ ] `nvpmodel -q` / `/var/lib/nvpmodel/status` parsed; clock-lock heuristic
+      flips after `sudo jetson_clocks`
+- [ ] CUDA and TensorRT provider runs; multi-input model; timeseries example;
+      paced run
+- [ ] Update README status, set `Development Status :: 3 - Alpha`, tag v0.1.0
 
-- [ ] Run `doctor` on a real Jetson (Nano/Orin/Xavier — whatever's
-      available); fix whatever the `/etc/nv_tegra_release` /
-      `/proc/device-tree/model` parsing gets wrong
-- [ ] Run `benchmark --model X.onnx` with `onnxruntime-gpu` (the
-      JetPack-specific wheel, not the PyPI one) on the same board;
-      confirm the CUDA/TensorRT provider path and IOBinding H2D/D2H
-      separation actually work
-- [ ] Validate the `tegrastats` GPU% regex against real output for
-      whichever JetPack version is available; fix the regex against the
-      actual format if it doesn't match
-- [x] `edgelens benchmark --pipeline my_pipeline.py` — point at a script
-      defining a `build_stage_fns()` function, instead of only
-      supporting `stage_fns` wired from Python. Clear, user-facing error
-      messages for every malformed-script case (missing entrypoint,
-      wrong return type, missing/extra/non-callable stages) — see
-      `tests/test_pipeline_loader.py` and `tests/fixtures/example_pipeline.py`.
-- [ ] Set `Development Status :: 3 - Alpha` once everything above is
-      checked off and confirmed working
+## v0.2 — validate (performance contracts) + Orin depth
 
-## v0.2 — GPU execution analyzer
+- Contract YAML (latency percentiles, deadline miss ratio, power, energy,
+  quality) and `edgelens validate contract.yaml` with per-requirement
+  PASS/FAIL and violation events
+- Stable, documented Python API
+- Orin platform profile: DLA activity, EMC frequency, per-rail power,
+  throttle detection, real thermal trip points instead of a fixed 80 C
+- `quality_metrics=` hook (quality × latency × energy, e.g. FP32 vs INT8)
+- Placement profile output (task × device × power mode → latency, energy,
+  memory, cold start) for schedulers and resource allocators
 
-- CUDA event-based timing (`torch.cuda.Event` or PyCUDA) for the
-  inference stage, replacing wall-clock timing with GPU-side measurement
-  that isn't polluted by CPU scheduling noise
-- DLA (Deep Learning Accelerator) utilization telemetry — Jetson Orin's
-  dedicated inference cores, separate from the GPU
-- CPU-side vs GPU-side time split (launch overhead, GPU idle time,
-  synchronization waits) — the beginning of the "GPU execution analyzer"
-  framing, built on top of the event timing above, not a separate effort
+## v0.3 — streams and more packs
 
-## v0.3 — precision/power sweeps + TensorRT introspection
+- Live stream mode: queue depth, backpressure, dropped / out-of-order samples
+- Critical-path latency for concurrent stages (from the trace)
+- `llm` pack (time to first token, tokens/s, KV-cache memory, energy/token)
+- `multi-model` pack (co-location interference, diverse redundant paths,
+  output disagreement)
+- `doctor` fix hints (mismatched ORT wheel, power mode, clocks)
 
-- `edgelens optimize model.onnx` — run the same benchmark across
-  FP32/FP16/INT8 and across power modes (5W/10W/15W/MAXN), report FPS,
-  latency, and **FPS/W** for each
-- TensorRT engine introspection (layer list, per-layer precision, which
-  ops fall back off TensorRT) — placed here, not earlier, because it
-  needs the v0.1 real-hardware foundation and the v0.2 GPU-side timing
-  to produce trustworthy numbers rather than guesses. This is where an
-  `edgelens analyze model.onnx`-style command — ONNX/TensorRT
-  compatibility, operator fallback detection, the "Model Doctor" framing
-  — would eventually live, once it can be built on validated ground
-  instead of ahead of it.
+## v0.4 — experiments and edge/cloud
 
-## v0.4 — reproducibility as a first-class feature
+- `edgelens experiment run x.yaml`: precision × power mode × batch ×
+  placement sweeps, constraint filtering, Pareto front
+- `offload` pack + network probe (RTT, jitter, bandwidth, break-even)
+- Opt-in fault scenarios orchestrating `stress-ng` / `tc netem`
 
-- Split the fingerprint into `environment_id` (hardware+software) and
-  `experiment_id`/`run_id` (model+config+timestamp) — right now
-  `fingerprint_id` only hashes environment, so two different experiments
-  on the same machine collide
+## v0.5+
 
-## v0.5 — regression detection in CI
-
-- `edgelens ci --baseline baseline.json --limits limits.yaml` — pass/fail
-  exit code for CI pipelines (the `compare` command already exits 1 on
-  regression — this wraps it with configurable thresholds and a
-  GitHub-Actions-friendly summary format)
-
-## v0.6+ — integration depth
-
-- Camera/GStreamer/V4L2/CSI pipeline instrumentation
-- DeepStream pipeline hooks
-- Docker/container deployment readiness checks
-- Isaac ROS / ROS 2 node-level profiling
-- An automated multi-configuration "optimization lab" sweeping precision
-  × resolution × power mode × batch size against a stated FPS/power
-  target — real value, but only once v0.1–v0.5 are individually proven;
-  bundling it earlier risks shipping an automation layer on top of
-  numbers nobody has validated yet
+- CUDA-event GPU-side timing; TensorRT layer attribution
+- CI regression mode with thresholds file
+- ROS 2 / GStreamer / DeepStream adapters
 
 ## Beyond Jetson
 
