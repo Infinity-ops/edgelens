@@ -31,7 +31,7 @@ STAGES = ["capture", "preprocess", "h2d_copy", "inference", "d2h_copy", "postpro
 
 def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced",
                    model_path=None, provider=None, stage_fns=None,
-                   pipeline_path=None, telemetry_interval_s=0.2):
+                   pipeline_path=None, telemetry_interval_s=0.2, input_shapes=None):
     """
     Run a benchmark and return a structured result dict.
 
@@ -98,7 +98,8 @@ def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced"
         mode = "demo"
         pipeline_source = "simulated"
     else:
-        fns, pipeline_source = _resolve_stage_fns(model_path, provider, stage_fns, pipeline_path)
+        fns, pipeline_source = _resolve_stage_fns(model_path, provider, stage_fns, pipeline_path,
+                                                  input_shapes)
 
         for _ in range(warmup):
             for s in STAGES:
@@ -120,7 +121,7 @@ def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced"
     return result
 
 
-def _resolve_stage_fns(model_path, provider, stage_fns, pipeline_path):
+def _resolve_stage_fns(model_path, provider, stage_fns, pipeline_path, input_shapes=None):
     given = [name for name, val in
              (("stage_fns", stage_fns), ("pipeline_path", pipeline_path), ("model_path", model_path))
              if val is not None]
@@ -141,7 +142,7 @@ def _resolve_stage_fns(model_path, provider, stage_fns, pipeline_path):
 
     if model_path is not None:
         from .onnx_pipeline import OnnxStagePipeline
-        pipeline = OnnxStagePipeline(model_path, provider=provider)
+        pipeline = OnnxStagePipeline(model_path, provider=provider, input_shapes=input_shapes)
         source = f"onnxruntime:{pipeline.provider} ({model_path})"
         return pipeline.stage_fns(), source
 

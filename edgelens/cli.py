@@ -7,6 +7,7 @@ Command-line interface: doctor, monitor, benchmark, diagnose, report, compare.
 import json
 import time
 from pathlib import Path
+from typing import List
 
 import typer
 from rich.console import Console
@@ -16,6 +17,7 @@ from rich.table import Table
 
 from . import __version__
 from .benchmark.fingerprint import build_fingerprint
+from .benchmark.onnx_pipeline import parse_input_shapes
 from .benchmark.runner import run_benchmark
 from .compare.engine import compare as run_compare
 from .diagnose.engine import diagnose as run_diagnose
@@ -145,6 +147,10 @@ def benchmark(
     provider: str = typer.Option(None, "--provider", help="Override the ONNX Runtime "
                                   "execution provider, e.g. CUDAExecutionProvider. "
                                   "Only applies with --model."),
+    input_shape: List[str] = typer.Option(None, "--input-shape", help="Concrete shape "
+                                           "for a dynamic model input, e.g. 1x8x2048 or "
+                                           "vib:1x8x2048. Repeat for multi-input models. "
+                                           "Only applies with --model."),
     demo: bool = typer.Option(False, "--demo", help="Force synthetic/demo data."),
     scenario: str = typer.Option(
         "balanced", help="Demo scenario: balanced|preprocess|memory|gpu|thermal"
@@ -173,6 +179,7 @@ def benchmark(
             result = run_benchmark(
                 iterations=iterations, demo=demo, demo_scenario=scenario,
                 model_path=model, provider=provider, pipeline_path=pipeline,
+                input_shapes=parse_input_shapes(input_shape),
             )
         except RuntimeError as e:
             console.print(f"[red]{e}[/red]")

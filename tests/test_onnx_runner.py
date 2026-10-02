@@ -101,3 +101,40 @@ def test_cuda_provider_runs_iobinding_path():
     assert result["mode"] == "hardware"
     assert "CUDAExecutionProvider" in result["pipeline_source"]
     assert result["total_latency_ms"] > 0
+
+
+# --- multi-input / non-image models (sensor, sequence, tabular) ---
+
+from edgelens.benchmark.onnx_pipeline import parse_input_shapes, resolve_input_shape
+
+MULTI_INPUT_MODEL = os.path.join(os.path.dirname(__file__), "fixtures", "multi_input_signal.onnx")
+
+
+def test_parse_input_shapes_forms():
+    assert parse_input_shapes(["1x3x224x224"]) == {None: (1, 3, 224, 224)}
+    assert parse_input_shapes(["vib:1x8x2048", "rpm:1,1"]) == {"vib": (1, 8, 2048), "rpm": (1, 1)}
+    with pytest.raises(RuntimeError, match="Invalid --input-shape"):
+        parse_input_shapes(["vib:1xAx3"])
+
+
+def test_dynamic_signal_dim_is_never_guessed():
+    with pytest.raises(RuntimeError, match="--input-shape vib:1x8xN"):
+        resolve_input_shape("vib", [1, 8, "T"])
+
+
+def test_image_inputs_keep_224_default_and_batch_defaults_to_1():
+    assert resolve_input_shape("x", ["N", 3, "H", "W"]) == (1, 3, 224, 224)
+
+
+@requires_ort
+def test_multi_input_model_without_shape_gives_actionable_error():
+    with pytest.raises(RuntimeError, match="--input-shape"):
+        run_benchmark(iterations=3, model_path=MULTI_INPUT_MODEL, provider=CPU)
+
+
+@requires_ort
+def test_multi_input_model_runs_with_declared_dtypes():
+    result = run_benchmark(iterations=5, warmup=1, model_path=MULTI_INPUT_MODEL,
+                           provider=CPU, input_shapes={"vib": (1, 8, 2048)})
+    assert result["mode"] == "hardware"
+    assert result["total_latency_ms"] > 0

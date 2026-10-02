@@ -31,6 +31,8 @@ Swapping in your OWN model/camera/preprocessing:
     not a requirement.
 """
 
+import re
+
 import numpy as np
 
 try:
@@ -82,14 +84,110 @@ def pick_provider(prefer=None):
     return avail[0]
 
 
+# ONNX tensor type string -> NumPy dtype. Covers what edge models use.
+_ORT_DTYPES = {
+    "tensor(float)": np.float32,
+    "tensor(float16)": np.float16,
+    "tensor(double)": np.float64,
+    "tensor(int64)": np.int64,
+    "tensor(int32)": np.int32,
+    "tensor(int16)": np.int16,
+    "tensor(int8)": np.int8,
+    "tensor(uint8)": np.uint8,
+    "tensor(bool)": np.bool_,
+}
+
+
+def parse_input_shapes(specs):
+    """Parse CLI --input-shape values into {name_or_None: (dims...)}.
+
+    Accepted forms (repeatable):
+        "1x8x2048"            -> applies to the model's only input
+        "vib:1x8x2048"        -> applies to the input named "vib"
+        "vib:1,8,2048"        -> commas work too
+    """
+    shapes = {}
+    for spec in specs or []:
+        spec = spec.strip()
+        name, _, dims = spec.rpartition(":")
+        try:
+            parsed = tuple(int(d) for d in re.split(r"[x,]", dims) if d)
+        except ValueError:
+            raise RuntimeError(
+                f"Invalid --input-shape '{spec}'. Expected e.g. 1x3x224x224 "
+                f"or name:1x8x2048."
+            )
+        if not parsed or any(d <= 0 for d in parsed):
+            raise RuntimeError(f"Invalid --input-shape '{spec}': dims must be positive integers.")
+        shapes[name or None] = parsed
+    return shapes
+
+
+def _looks_like_image(shape):
+    """NCHW with a fixed channel count of 1 or 3 -> safe to default H/W to 224."""
+    return (len(shape) == 4 and isinstance(shape[1], int) and shape[1] in (1, 3))
+
+
+def resolve_input_shape(name, declared, override=None):
+    """Turn a declared (possibly symbolic) ONNX shape into concrete dims.
+
+    Rules, in order:
+      1. an explicit --input-shape override always wins (rank must match);
+      2. a dynamic batch dim (index 0) defaults to 1;
+      3. other dynamic dims default to 224 ONLY for image-like NCHW inputs;
+      4. anything else raises: guessing a signal length or token count would
+         silently benchmark a workload that doesn't exist.
+    """
+    if override is not None:
+        if len(override) != len(declared):
+            raise RuntimeError(
+                f"--input-shape for '{name}' has rank {len(override)}, but the model "
+                f"declares rank {len(declared)} {list(declared)}."
+            )
+        return tuple(override)
+
+    resolved, unresolved = [], []
+    for i, d in enumerate(declared):
+        if isinstance(d, int) and d > 0:
+            resolved.append(d)
+        elif i == 0:
+            resolved.append(1)
+        elif _looks_like_image(declared):
+            resolved.append(224)
+        else:
+            resolved.append(None)
+            unresolved.append(i)
+    if unresolved:
+        example = "x".join(str(d) if d else "N" for d in resolved)
+        raise RuntimeError(
+            f"Input '{name}' has dynamic dimension(s) at index {unresolved} "
+            f"(declared shape {list(declared)}) and EdgeLens will not guess them "
+            f"for a non-image tensor.\nPass the real size, e.g.:\n"
+            f"  --input-shape {name}:{example}"
+        )
+    return tuple(resolved)
+
+
+def _synthetic_tensor(shape, dtype, rng):
+    if np.issubdtype(dtype, np.floating):
+        return rng.random(shape).astype(dtype)
+    if dtype == np.bool_:
+        return np.zeros(shape, dtype=np.bool_)
+    # Small non-negative ints: safe for token ids / class indices / counts.
+    return rng.integers(0, 10, size=shape).astype(dtype)
+
+
 class OnnxStagePipeline:
     """Builds real stage functions around a real ONNX model for use with
     edgelens.benchmark.runner.run_benchmark(stage_fns=pipeline.stage_fns()).
+
+    Every model input is fed (multi-input models are normal for sensor and
+    sequence models), with the dtype the model declares.
     """
 
     GPU_PROVIDERS = ("CUDAExecutionProvider", "TensorrtExecutionProvider")
 
-    def __init__(self, model_path, provider=None, input_shape=None):
+    def __init__(self, model_path, provider=None, input_shape=None, input_shapes=None):
         if ort is None:
             raise RuntimeError(
                 "onnxruntime is not installed. Install it with:\n"
@@ -112,96 +210,116 @@ class OnnxStagePipeline:
                 f"Available providers: {avail}"
             )
 
-        self.session = ort.InferenceSession(model_path, providers=[self.provider])
-        self.input_name = self.session.get_inputs()[0].name
+        try:
+            self.session = ort.InferenceSession(model_path, providers=[self.provider])
+        except Exception as e:
+            raise RuntimeError(f"onnxruntime could not load '{model_path}': {e}") from e
+
+        inputs = self.session.get_inputs()
         self.output_names = [o.name for o in self.session.get_outputs()]
 
-        shape = input_shape or self.session.get_inputs()[0].shape
-        resolved = []
-        for i, d in enumerate(shape):
-            if isinstance(d, int) and d > 0:
-                resolved.append(d)
-            else:
-                # dynamic/symbolic dim (batch size, or unspecified) -> pick a
-                # sane default so the benchmark can actually run
-                resolved.append(1 if i == 0 else 224)
-        self.input_shape = tuple(resolved)
+        overrides = dict(input_shapes or {})
+        if input_shape is not None:            # backward-compatible single-shape arg
+            overrides[None] = tuple(input_shape)
+        if None in overrides:
+            if len(inputs) != 1:
+                raise RuntimeError(
+                    f"The model has {len(inputs)} inputs "
+                    f"({', '.join(i.name for i in inputs)}); name each one: "
+                    f"--input-shape NAME:DIMS."
+                )
+            overrides[inputs[0].name] = overrides.pop(None)
+        unknown = set(overrides) - {i.name for i in inputs}
+        if unknown:
+            raise RuntimeError(
+                f"--input-shape names {sorted(unknown)} are not model inputs. "
+                f"Model inputs: {[i.name for i in inputs]}"
+            )
+
+        rng = np.random.default_rng(0)
+        self.inputs = []      # [(name, shape, dtype)]
+        self._static_inputs = {}
+        for inp in inputs:
+            dtype = _ORT_DTYPES.get(inp.type)
+            if dtype is None:
+                raise RuntimeError(
+                    f"Input '{inp.name}' has unsupported type {inp.type}; use "
+                    f"--pipeline with your own data for this model."
+                )
+            shape = resolve_input_shape(inp.name, inp.shape, overrides.get(inp.name))
+            self.inputs.append((inp.name, shape, dtype))
+            # Pre-generated ONCE: regenerating random data every iteration
+            # costs ~1 ms on CNN-sized inputs and once looked like a fake
+            # capture bottleneck (found on real hardware).
+            self._static_inputs[inp.name] = _synthetic_tensor(shape, dtype, rng)
+
+        # Backward-compatible attributes (first input).
+        self.input_name = self.inputs[0][0]
+        self.input_shape = self.inputs[0][1]
 
         self._is_gpu_provider = self.provider in self.GPU_PROVIDERS
         self._device = "cuda" if self._is_gpu_provider else "cpu"
 
-        # Pre-generate ONE random frame at construction time. The
-        # capture() stage below just references it (near-zero cost) rather
-        # than calling np.random.rand() fresh every iteration.
-        # WHY THIS MATTERS: np.random.rand() on a realistic CNN input size
-        # (e.g. 1x3x224x224) costs roughly 1ms per call on CPU — enough to
-        # rival or exceed a small model's actual inference time. Generating
-        # a "fresh random frame" every iteration was making the synthetic
-        # capture() stage look like a real bottleneck when it was actually
-        # just measuring NumPy's RNG cost, not anything resembling a real
-        # camera/video capture. Found via real hardware testing against a
-        # more realistically-sized model than the tiny test fixture.
-        self._static_frame = np.random.rand(*self.input_shape).astype(np.float32)
-
-        self._raw_frame = None
+        self._raw = None
         self._prepped = None
-        self._device_input = None
+        self._device_inputs = None
         self._io_binding = None
         self._outputs = None
+
+    def input_summary(self):
+        return [{"name": n, "shape": list(s), "dtype": np.dtype(d).name} for n, s, d in self.inputs]
 
     # ---- stage functions (each does real, timeable work) ----
 
     def capture(self):
-        """Synthetic frame source: references a pre-generated frame rather
-        than regenerating random data every call (see __init__ for why).
-        Swap for a real camera/video capture by building your own
-        stage_fns dict instead of using --model — this stage exists so
-        the pipeline has SOME input ready, not to simulate real capture
-        latency, which varies enormously by camera/decoder and can't be
-        honestly approximated by a synthetic default."""
-        self._raw_frame = self._static_frame
+        """Synthetic source: references pre-generated tensors (near-zero
+        cost). Real capture latency can't be honestly approximated by a
+        default — use --pipeline with your real source for that."""
+        self._raw = self._static_inputs
 
     def preprocess(self):
-        """Minimal, honest preprocessing: min-max normalize to [0,1].
-        Real pipelines (resize, color convert, letterbox, etc.) should
-        replace this via a custom stage_fns dict."""
-        frame = self._raw_frame
-        span = np.ptp(frame)  # np.ptp(), not frame.ptp() — removed from
-                              # ndarray in NumPy 2.x, function form still works
-        self._prepped = ((frame - frame.min()) / (span + 1e-8)).astype(np.float32)
+        """Minimal, honest preprocessing: min-max normalise float inputs;
+        integer/bool inputs pass through unchanged."""
+        out = {}
+        for name, arr in self._raw.items():
+            if np.issubdtype(arr.dtype, np.floating):
+                span = np.ptp(arr)  # function form: ndarray.ptp() is gone in NumPy 2
+                out[name] = ((arr - arr.min()) / (span + 1e-8)).astype(arr.dtype)
+            else:
+                out[name] = arr
+        self._prepped = out
 
     def h2d_copy(self):
         if self._is_gpu_provider:
-            self._device_input = ort.OrtValue.ortvalue_from_numpy(
-                self._prepped, self._device, 0
-            )
+            self._device_inputs = {
+                name: ort.OrtValue.ortvalue_from_numpy(arr, self._device, 0)
+                for name, arr in self._prepped.items()
+            }
         else:
-            # CPU provider: no device to copy to. Correctly ~0ms.
-            self._device_input = self._prepped
+            # CPU provider: no device to copy to. Correctly ~0 ms.
+            self._device_inputs = self._prepped
 
     def inference(self):
         if self._is_gpu_provider:
             io = self.session.io_binding()
-            io.bind_ortvalue_input(self.input_name, self._device_input)
+            for name, val in self._device_inputs.items():
+                io.bind_ortvalue_input(name, val)
             for name in self.output_names:
                 io.bind_output(name, self._device)
             self.session.run_with_iobinding(io)
             self._io_binding = io
         else:
-            self._outputs = self.session.run(
-                self.output_names, {self.input_name: self._device_input}
-            )
+            self._outputs = self.session.run(self.output_names, self._device_inputs)
 
     def d2h_copy(self):
         if self._is_gpu_provider:
             self._outputs = self._io_binding.copy_outputs_to_cpu()
-        # CPU provider: outputs are already host-side from inference(). ~0ms.
+        # CPU provider: outputs are already host-side from inference(). ~0 ms.
 
     def postprocess(self):
-        """Minimal, honest postprocessing: touch the output tensor.
-        Real pipelines (NMS, decode, tracking) should replace this via
-        a custom stage_fns dict."""
-        _ = np.asarray(self._outputs[0]).sum()
+        """Minimal, honest postprocessing: touch every output tensor."""
+        for out in self._outputs:
+            _ = np.asarray(out).sum()
 
     def stage_fns(self):
         return {
