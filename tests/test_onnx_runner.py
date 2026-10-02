@@ -12,9 +12,13 @@ requires_ort = pytest.mark.skipif(
 )
 FIXTURE_MODEL = os.path.join(os.path.dirname(__file__), "fixtures", "tiny_model.onnx")
 
+# Pin generic tests to CPU: on a GPU board ORT would otherwise
+# auto-pick TensorRT and build an engine per test (slow).
+CPU = "CPUExecutionProvider"
+
 @requires_ort
 def test_model_path_runs_real_inference_not_placeholder():
-    result = run_benchmark(iterations=10, warmup=2, model_path=FIXTURE_MODEL)
+    result = run_benchmark(iterations=10, warmup=2, model_path=FIXTURE_MODEL, provider=CPU)
     assert result["mode"] == "hardware"
     assert "onnxruntime" in result["pipeline_source"]
     assert FIXTURE_MODEL in result["pipeline_source"]
@@ -58,7 +62,7 @@ def test_real_model_off_jetson_still_uses_hardware_mode():
     # just because the host isn't a Jetson — CPUExecutionProvider is a
     # legitimate real measurement on a laptop.
     with patch("edgelens.hardware.detector.is_jetson", return_value=False):
-        result = run_benchmark(iterations=5, model_path=FIXTURE_MODEL)
+        result = run_benchmark(iterations=5, model_path=FIXTURE_MODEL, provider=CPU)
         assert result["mode"] == "hardware"
 
 @requires_ort
@@ -69,7 +73,7 @@ def test_capture_stage_is_cheap_not_dominated_by_rng():
     # bottleneck when it was actually just measuring NumPy's RNG cost.
     # capture() must now be cheap relative to inference, not comparable
     # to or larger than it.
-    result = run_benchmark(iterations=30, warmup=5, model_path=FIXTURE_MODEL)
+    result = run_benchmark(iterations=30, warmup=5, model_path=FIXTURE_MODEL, provider=CPU)
     capture_ms = result["stage_avg_ms"]["capture"]
     inference_ms = result["stage_avg_ms"]["inference"]
     assert capture_ms < inference_ms, (
@@ -77,3 +81,23 @@ def test_capture_stage_is_cheap_not_dominated_by_rng():
         f"({inference_ms}ms) — if this fails, the RNG-per-iteration bug "
         f"may have regressed"
     )
+
+
+def _has_cuda_provider():
+    try:
+        from edgelens.benchmark.onnx_pipeline import available_providers
+        return "CUDAExecutionProvider" in available_providers()
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _has_cuda_provider(),
+                    reason="needs an onnxruntime-gpu build with CUDA (e.g. Jetson)")
+def test_cuda_provider_runs_iobinding_path():
+    # Exercises the IOBinding H2D / inference / D2H path that CPU runs
+    # never touch; catches API drift across onnxruntime-gpu versions.
+    result = run_benchmark(iterations=20, warmup=5, model_path=FIXTURE_MODEL,
+                           provider="CUDAExecutionProvider")
+    assert result["mode"] == "hardware"
+    assert "CUDAExecutionProvider" in result["pipeline_source"]
+    assert result["total_latency_ms"] > 0
