@@ -93,8 +93,11 @@ class OnnxStagePipeline:
         if ort is None:
             raise RuntimeError(
                 "onnxruntime is not installed. Install it with:\n"
-                "  pip install onnxruntime        # CPU (laptop)\n"
-                "  pip install onnxruntime-gpu    # Jetson JetPack wheel (CUDA/TensorRT)\n"
+                "  pip install onnxruntime        # CPU (any platform)\n"
+                "  Jetson GPU: onnxruntime-gpu is NOT on PyPI for aarch64 — install\n"
+                "  the wheel matching your JetPack + Python version from NVIDIA's\n"
+                "  Jetson Zoo (elinux.org/Jetson_Zoo#ONNX_Runtime), after\n"
+                "  `pip uninstall onnxruntime`.\n"
             )
 
         self.model_path = model_path

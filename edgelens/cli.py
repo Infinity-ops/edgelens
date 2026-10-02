@@ -160,6 +160,14 @@ def benchmark(
                        "model.onnx or --pipeline path/to/script.py for a real "
                        "measurement.[/yellow]")
 
+    # Create the output folder BEFORE the run: a long benchmark must never
+    # finish and then lose its result to a missing directory.
+    try:
+        Path(save).parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        console.print(f"[red]Cannot create output folder for {save}: {e}[/red]")
+        raise typer.Exit(1)
+
     with console.status("Running benchmark..."):
         try:
             result = run_benchmark(
@@ -254,6 +262,7 @@ def report(
         console.print(f"[red]No such file: {benchmark_file}[/red] — run `edgelens benchmark` first.")
         raise typer.Exit(1)
 
+    Path(output).parent.mkdir(parents=True, exist_ok=True)
     hw_sw_fp = detector.full_fingerprint()
     bench = json.loads(path.read_text())
     verdict = run_diagnose(bench)

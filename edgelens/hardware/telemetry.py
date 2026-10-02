@@ -175,7 +175,15 @@ class TelemetryRecorder:
 
         return {
             "sample_count": len(self._samples),
-            "duration_s": round(len(self._samples) * self.interval_s, 2),
+            # Wall-clock span from real timestamps, NOT sample_count *
+            # interval_s: one sample (psutil 0.2s + a tegrastats read) takes
+            # ~1s on a Jetson Nano, far longer than the requested interval.
+            "duration_s": round(self._samples[-1]["timestamp"] - self._samples[0]["timestamp"], 2),
+            "effective_interval_s": (
+                round((self._samples[-1]["timestamp"] - self._samples[0]["timestamp"])
+                      / (len(self._samples) - 1), 2)
+                if len(self._samples) > 1 else None
+            ),
             "cpu_percent_mean": mean(cpu_vals),
             "cpu_percent_peak": peak(cpu_vals),
             "gpu_percent_mean": mean(gpu_vals),

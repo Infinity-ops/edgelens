@@ -4,10 +4,15 @@ from unittest.mock import patch
 import pytest
 
 from edgelens.benchmark.runner import run_benchmark
+import importlib.util
 
+requires_ort = pytest.mark.skipif(
+    importlib.util.find_spec("onnxruntime") is None,
+    reason="onnxruntime not installed (pip install 'edgelens[onnx]')",
+)
 FIXTURE_MODEL = os.path.join(os.path.dirname(__file__), "fixtures", "tiny_model.onnx")
 
-
+@requires_ort
 def test_model_path_runs_real_inference_not_placeholder():
     result = run_benchmark(iterations=10, warmup=2, model_path=FIXTURE_MODEL)
     assert result["mode"] == "hardware"
@@ -20,7 +25,7 @@ def test_model_path_runs_real_inference_not_placeholder():
         "capture", "preprocess", "h2d_copy", "inference", "d2h_copy", "postprocess",
     }
 
-
+@requires_ort
 def test_cpu_provider_reports_near_zero_device_copies():
     result = run_benchmark(iterations=10, warmup=2, model_path=FIXTURE_MODEL,
                             provider="CPUExecutionProvider")
@@ -47,7 +52,7 @@ def test_no_pipeline_off_jetson_auto_falls_back_to_demo():
         result = run_benchmark(iterations=5)
         assert result["mode"] == "demo"
 
-
+@requires_ort
 def test_real_model_off_jetson_still_uses_hardware_mode():
     # The key fix: a real .onnx model should NOT be forced into demo mode
     # just because the host isn't a Jetson — CPUExecutionProvider is a
@@ -56,7 +61,7 @@ def test_real_model_off_jetson_still_uses_hardware_mode():
         result = run_benchmark(iterations=5, model_path=FIXTURE_MODEL)
         assert result["mode"] == "hardware"
 
-
+@requires_ort
 def test_capture_stage_is_cheap_not_dominated_by_rng():
     # Regression test for a real bug found via hardware testing: capture()
     # used to call np.random.rand() fresh every iteration, which costs
