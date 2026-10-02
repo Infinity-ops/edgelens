@@ -48,6 +48,33 @@ def _non_jetson_notice():
     ))
 
 
+def _tensorrt_cell(sw):
+    version = sw.get("tensorrt")
+    if not version:
+        return "[dim]not detected[/dim]"
+    if sw.get("tensorrt_python_bindings", True):
+        return version
+    return (
+        f"{version} [yellow](system library via {sw.get('tensorrt_source')}; "
+        f"`import tensorrt` not available in Python {sw['python']} — "
+        f"apt bindings target the system Python only)[/yellow]"
+    )
+
+
+def _ort_providers_cell(is_jetson):
+    try:
+        from .benchmark.onnx_pipeline import available_providers
+        providers = available_providers()
+    except Exception:  # broken/ABI-mismatched onnxruntime must not kill doctor
+        providers = []
+    if not providers:
+        return "[dim]onnxruntime not installed[/dim]"
+    text = ", ".join(p.replace("ExecutionProvider", "") for p in providers)
+    if is_jetson and set(providers) <= {"CPUExecutionProvider", "AzureExecutionProvider"}:
+        text += " [yellow](CPU-only build — `--model` benchmarks will not use the GPU)[/yellow]"
+    return text
+
+
 @app.command()
 def doctor():
     """Environment + hardware fingerprint."""
@@ -61,7 +88,8 @@ def doctor():
     table.add_row("Is Jetson", "[green]yes[/green]" if hw["is_jetson"] else "[yellow]no[/yellow]")
     table.add_row("L4T / JetPack", sw["jetpack_l4t"] or "[dim]not detected[/dim]")
     table.add_row("CUDA", sw["cuda"] or "[dim]not detected[/dim]")
-    table.add_row("TensorRT", sw["tensorrt"] or "[dim]not detected[/dim]")
+    table.add_row("TensorRT", _tensorrt_cell(sw))
+    table.add_row("ORT providers", _ort_providers_cell(hw["is_jetson"]))
     table.add_row("Python", sw["python"])
     table.add_row("OS", sw["os"])
     console.print(table)
