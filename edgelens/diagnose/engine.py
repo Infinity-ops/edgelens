@@ -30,9 +30,22 @@ v0.1.0 FIX (found via real-hardware testing, not simulated):
     findings (MEMORY_TRANSFER_BOUND, BALANCED's stage read) are
     unaffected — they don't depend on telemetry sample count.
 
-Verdict types: CPU_BOUND_PREPROCESS, INFERENCE_ON_CPU, MEMORY_TRANSFER_BOUND,
+v0.1.0: findings report evidence_strength as a CATEGORY (weak / moderate /
+strong) plus the raw evidence numbers. The 0-1 number is kept only as
+`rank_score` for ordering, because a value like 0.73 reads as a calibrated
+probability and it is not one. Rules use stage ROLES, so they apply to any
+pipeline (vision, timeseries, custom), and scenario packs add their own
+findings. DEADLINE_MISSED fires for any run with a deadline.
+
+Verdict types: DEADLINE_MISSED, CPU_BOUND_PREPROCESS, INFERENCE_ON_CPU, MEMORY_TRANSFER_BOUND,
 GPU_BOUND, THERMAL, MEMORY_BOUND, BALANCED.
 """
+
+from ..core.schema import SCHEMA_VERSION
+
+# Categorical evidence strength cut-offs on the internal rank_score.
+STRONG_AT = 0.75
+MODERATE_AT = 0.5
 
 # Tunable thresholds — deliberately named constants so they're easy to
 # adjust as real-world Jetson data comes in.
@@ -61,10 +74,39 @@ TELEMETRY_DEPENDENT_TYPES = {"THERMAL", "MEMORY_BOUND", "CPU_BOUND_PREPROCESS", 
 # from the provider recorded in pipeline_source, not from sampled load.
 
 
+def strength_label(score):
+    """Categorical evidence strength from the internal ordering score.
+    The score is a heuristic for ranking findings, NOT a probability, so it
+    is never shown as a percentage."""
+    if score >= STRONG_AT:
+        return "strong"
+    if score >= MODERATE_AT:
+        return "moderate"
+    return "weak"
+
+
+def _stage_roles(benchmark_result):
+    """{stage_name: role} from the result's pipeline description, falling
+    back to name-based inference for pre-v0.1.0 files."""
+    from ..core.pipeline import infer_role
+    from ..packs.vision import VisionPack
+    described = (benchmark_result.get("pipeline") or {}).get("stages")
+    if described:
+        return {s["name"]: s.get("role") or infer_role(s["name"]) for s in described}
+    vision = VisionPack()
+    return {n: vision.role_for(n) or infer_role(n)
+            for n in (benchmark_result.get("stage_avg_ms") or {})}
+
+
 def diagnose(benchmark_result):
     stages = benchmark_result.get("stage_avg_ms", {})
     total = sum(stages.values()) or 1e-9
     stage_pct = {k: (v / total) * 100 for k, v in stages.items()}
+    roles = _stage_roles(benchmark_result)
+    role_pct = {}
+    for name, pct in stage_pct.items():
+        role = roles.get(name, "other")
+        role_pct[role] = role_pct.get(role, 0.0) + pct
 
     tel = benchmark_result.get("telemetry", {}) or {}
     sample_count = tel.get("sample_count", 0) or 0
@@ -83,16 +125,19 @@ def diagnose(benchmark_result):
         temps = tel.get("temps_c") or {}
         max_temp = max(temps.values()) if temps else 0
 
-    pre_pct = stage_pct.get("preprocess", 0)
-    transfer_pct = stage_pct.get("h2d_copy", 0) + stage_pct.get("d2h_copy", 0)
-    infer_pct = stage_pct.get("inference", 0)
+    # Rules reason about ROLES, so a sensor pipeline's "filter"+"fft" count
+    # as preprocessing exactly like a camera pipeline's "preprocess".
+    pre_pct = role_pct.get("preprocess", 0)
+    transfer_pct = role_pct.get("transfer", 0)
+    infer_pct = role_pct.get("inference", 0)
+    transfer_names = [n for n in stage_pct if roles.get(n) == "transfer"]
 
     findings = []
 
     if max_temp >= THERMAL_LIMIT_C:
         findings.append({
             "type": "THERMAL",
-            "evidence_strength": round(min(0.95, 0.5 + (max_temp - THERMAL_LIMIT_C) / 40), 2),
+            "rank_score": round(min(0.95, 0.5 + (max_temp - THERMAL_LIMIT_C) / 40), 2),
             "detail": f"Peak temperature {max_temp:.1f}C exceeds {THERMAL_LIMIT_C:.0f}C — "
                       f"thermal throttling likely reducing clocks.",
             "recommendation": "Improve cooling (heatsink/fan/airflow), drop to a lower "
@@ -106,7 +151,7 @@ def diagnose(benchmark_result):
     if mem_pct >= MEMORY_LIMIT_PCT:
         findings.append({
             "type": "MEMORY_BOUND",
-            "evidence_strength": round(min(0.9, 0.5 + (mem_pct - MEMORY_LIMIT_PCT) / 30), 2),
+            "rank_score": round(min(0.9, 0.5 + (mem_pct - MEMORY_LIMIT_PCT) / 30), 2),
             "detail": f"System memory usage at {mem_pct:.1f}% (mean over the run) — risk "
                       f"of swapping, which causes severe, hard-to-diagnose latency spikes.",
             "recommendation": "Reduce batch size, free unused buffers/caches, or move to "
@@ -134,7 +179,7 @@ def diagnose(benchmark_result):
                       f"single-threaded preprocessing while the other cores sit mostly idle.")
         findings.append({
             "type": "CPU_BOUND_PREPROCESS",
-            "evidence_strength": round(min(0.95, 0.4 + pre_pct / 100), 2),
+            "rank_score": round(min(0.95, 0.4 + pre_pct / 100), 2),
             "detail": detail,
             "recommendation": "Move resize/color-conversion to the GPU (CUDA/VPI) or use "
                               "hardware-accelerated decode instead of CPU-side OpenCV; "
@@ -157,7 +202,7 @@ def diagnose(benchmark_result):
     if infer_pct >= INFERENCE_STAGE_PCT_THRESHOLD and "CPUExecutionProvider" in source:
         findings.append({
             "type": "INFERENCE_ON_CPU",
-            "evidence_strength": round(min(0.9, 0.4 + infer_pct / 200), 2),
+            "rank_score": round(min(0.9, 0.4 + infer_pct / 200), 2),
             "detail": f"Inference dominates latency ({infer_pct:.1f}% of pipeline) and runs "
                       f"on onnxruntime's CPUExecutionProvider — the GPU is not used for "
                       f"the model at all.",
@@ -175,24 +220,22 @@ def diagnose(benchmark_result):
     if transfer_pct >= TRANSFER_STAGE_PCT_THRESHOLD:
         findings.append({
             "type": "MEMORY_TRANSFER_BOUND",
-            "evidence_strength": round(min(0.85, 0.35 + transfer_pct / 100), 2),
+            "rank_score": round(min(0.85, 0.35 + transfer_pct / 100), 2),
             "detail": f"Host<->device memory transfers consume {transfer_pct:.1f}% of "
                       f"total latency.",
             "recommendation": "Use pinned/zero-copy memory, or keep pre/postprocessing "
                               "on-GPU to avoid repeated CPU<->GPU copies.",
             "evidence": {
                 "transfer_stage_pct": round(transfer_pct, 1),
-                "h2d_pct": round(stage_pct.get("h2d_copy", 0), 1),
-                "d2h_pct": round(stage_pct.get("d2h_copy", 0), 1),
+                "per_stage_pct": {n: round(stage_pct[n], 1) for n in transfer_names},
                 "threshold_pct": TRANSFER_STAGE_PCT_THRESHOLD,
             },
         })
 
-    if (infer_pct >= INFERENCE_STAGE_PCT_THRESHOLD and gpu >= GPU_BUSY_THRESHOLD
-            and not findings):
+    if infer_pct >= INFERENCE_STAGE_PCT_THRESHOLD and gpu >= GPU_BUSY_THRESHOLD:
         findings.append({
             "type": "GPU_BOUND",
-            "evidence_strength": round(min(0.9, 0.35 + gpu / 100), 2),
+            "rank_score": round(min(0.9, 0.35 + gpu / 100), 2),
             "detail": f"Inference dominates latency ({infer_pct:.1f}% of pipeline) with "
                       f"mean GPU utilization at {gpu:.1f}%. This is the healthy/expected "
                       f"case for a well-optimized pipeline — further gains come from the "
@@ -209,10 +252,41 @@ def diagnose(benchmark_result):
             },
         })
 
+    dl = benchmark_result.get("deadline")
+    if dl and dl.get("misses"):
+        worst_stage = max(stage_pct, key=stage_pct.get) if stage_pct else None
+        lat = benchmark_result.get("latency") or {}
+        findings.append({
+            "type": "DEADLINE_MISSED",
+            "rank_score": round(min(0.95, 0.6 + dl["miss_ratio"] * 3.5), 2),
+            "detail": f"{dl['misses']} of {dl['iterations']} iterations "
+                      f"({dl['miss_ratio']*100:.2f}%) exceeded the {dl['deadline_ms']} ms "
+                      f"deadline; worst {dl['worst_ms']} ms, longest burst "
+                      f"{dl['max_consecutive_misses']} in a row. Largest share of the "
+                      f"budget: '{worst_stage}' ({stage_pct.get(worst_stage, 0):.1f}%).",
+            "recommendation": "Fix the bottleneck findings listed with this one first; if "
+                              "misses are rare bursts, look for stalls in the trace "
+                              "(thermal, other processes, GC) rather than average speed.",
+            "evidence": {
+                "deadline_ms": dl["deadline_ms"], "misses": dl["misses"],
+                "miss_ratio": dl["miss_ratio"], "worst_ms": dl["worst_ms"],
+                "max_consecutive_misses": dl["max_consecutive_misses"],
+                "latency_p99_ms": lat.get("p99"), "dominant_stage": worst_stage,
+            },
+        })
+
+    pack_name = (benchmark_result.get("pipeline") or {}).get("pack")
+    if pack_name:
+        from ..packs import get_pack
+        try:
+            findings.extend(get_pack(pack_name).findings(benchmark_result))
+        except ValueError:
+            pass   # result written by an unknown/third-party pack not installed here
+
     if not findings:
         findings.append({
             "type": "BALANCED",
-            "evidence_strength": 0.5,
+            "rank_score": 0.5,
             "detail": "No single stage or resource dominates the latency budget — the "
                       "pipeline appears reasonably balanced.",
             "recommendation": "Consider a precision/power-mode sweep (edgelens roadmap "
@@ -229,7 +303,7 @@ def diagnose(benchmark_result):
     if not telemetry_reliable:
         for f in findings:
             if f["type"] in TELEMETRY_DEPENDENT_TYPES:
-                f["evidence_strength"] = round(f["evidence_strength"] * LOW_SAMPLE_STRENGTH_PENALTY, 2)
+                f["rank_score"] = round(f["rank_score"] * LOW_SAMPLE_STRENGTH_PENALTY, 2)
                 f["detail"] += (
                     f" [LOW CONFIDENCE: only {sample_count} telemetry sample(s) were "
                     f"collected — the benchmark likely completed faster than the "
@@ -241,9 +315,19 @@ def diagnose(benchmark_result):
                 f["evidence"]["telemetry_sample_count"] = sample_count
                 f["evidence"]["telemetry_reliable"] = False
 
-    findings.sort(key=lambda f: f["evidence_strength"], reverse=True)
+    for f in findings:
+        f["evidence_strength"] = strength_label(f["rank_score"])
+    findings.sort(key=lambda f: f["rank_score"], reverse=True)
 
     return {
+        "schema_version": SCHEMA_VERSION,
+        "data_quality": {
+            "iterations": benchmark_result.get("iterations"),
+            "telemetry_sample_count": sample_count,
+            "telemetry_reliable": telemetry_reliable,
+            "mode": benchmark_result.get("mode"),
+        },
+        "role_pct": {k: round(v, 1) for k, v in role_pct.items()},
         "stage_pct": {k: round(v, 1) for k, v in stage_pct.items()},
         "resource_snapshot": {
             "cpu_percent_mean": round(cpu, 1),

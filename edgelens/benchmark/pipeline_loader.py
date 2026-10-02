@@ -1,61 +1,40 @@
 """
 edgelens.benchmark.pipeline_loader
 ------------------------------------
-Loads a user-supplied Python script and extracts the six pipeline stage
-functions from it, for `edgelens benchmark --pipeline my_pipeline.py`.
+Loads a user script for `edgelens benchmark --pipeline my_pipeline.py`.
 
-This is the general-purpose alternative to `--model`: where `--model`
-only works for a plain ONNX forward pass, `--pipeline` lets you wire in
-a real camera, real preprocessing, a non-ONNX runtime, or anything else
-`stage_fns` already supported from Python — but from the CLI, as a
-file path, with no edgelens import required in your script.
+The script defines ONE of these module-level functions (called once, before
+timing starts — do one-time setup like opening a camera or loading a model
+inside it):
 
-CONTRACT the script must satisfy — define a module-level function:
+    def build_pipeline():            # preferred (v0.1.0+)
+        pipe = edgelens.Pipeline("bearing", pack="timeseries", ...)
+        pipe.add_stage("filter", ...)
+        return pipe
 
-    def build_stage_fns():
-        # Any one-time setup goes here: open a camera, load your real
-        # model, allocate buffers, etc. Called exactly once, before
-        # timing starts.
-        ...
-        return {
-            "capture": capture_fn,
-            "preprocess": preprocess_fn,
-            "h2d_copy": h2d_copy_fn,
-            "inference": inference_fn,
-            "d2h_copy": d2h_copy_fn,
-            "postprocess": postprocess_fn,
-        }
+    def build_stage_fns():           # classic contract, still supported
+        return {"capture": f1, "preprocess": f2, ...}
 
-Each value must be a zero-argument callable. EdgeLens times each one
-individually, in order, once per benchmark iteration. See
-tests/fixtures/example_pipeline.py for a minimal working example.
+Since v0.1.0 a stage dict may use ANY stage names, in any number, in the
+order they should run. The classic six vision names are recognised and get
+the vision pack automatically; other names get the custom pack, with roles
+inferred from the names (override with a Pipeline and role=...).
 """
 
 import importlib.util
 from pathlib import Path
 
-REQUIRED_STAGES = ("capture", "preprocess", "h2d_copy", "inference", "d2h_copy", "postprocess")
-ENTRYPOINT_NAME = "build_stage_fns"
+ENTRYPOINTS = ("build_pipeline", "build_stage_fns")
+ENTRYPOINT_NAME = "build_stage_fns"   # backward-compatible constant
 
 
-def load_stage_fns_from_script(script_path):
-    """Dynamically imports `script_path` and calls its build_stage_fns()
-    to get the six stage functions.
-
-    This is a user-facing contract, not an internal API — every failure
-    mode below raises a specific, actionable RuntimeError rather than
-    letting a raw traceback (ImportError, AttributeError, TypeError...)
-    surface, since the person reading the error is debugging their own
-    script, not EdgeLens' internals.
-    """
+def _load_module(script_path):
     path = Path(script_path)
     if not path.exists():
         raise RuntimeError(f"Pipeline script not found: {script_path}")
-
     spec = importlib.util.spec_from_file_location("edgelens_user_pipeline", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load '{script_path}' as a Python module.")
-
     module = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(module)
@@ -63,57 +42,68 @@ def load_stage_fns_from_script(script_path):
         raise RuntimeError(
             f"Error while importing '{script_path}':\n{type(e).__name__}: {e}"
         ) from e
+    return module
 
-    entrypoint = getattr(module, ENTRYPOINT_NAME, None)
-    if entrypoint is None:
-        raise RuntimeError(
-            f"'{script_path}' must define a top-level function "
-            f"`{ENTRYPOINT_NAME}()` that returns a dict of the six stage "
-            f"functions. See tests/fixtures/example_pipeline.py for an "
-            f"example."
-        )
-    if not callable(entrypoint):
-        raise RuntimeError(
-            f"'{ENTRYPOINT_NAME}' in '{script_path}' must be a function, "
-            f"not a {type(entrypoint).__name__}."
-        )
 
-    try:
-        stage_fns = entrypoint()
-    except Exception as e:
-        raise RuntimeError(
-            f"'{ENTRYPOINT_NAME}()' in '{script_path}' raised an error "
-            f"while running:\n{type(e).__name__}: {e}"
-        ) from e
-
+def _validate_stage_dict(stage_fns, where):
     if not isinstance(stage_fns, dict):
         raise RuntimeError(
-            f"'{ENTRYPOINT_NAME}()' in '{script_path}' must return a dict, "
+            f"{where} must return a dict of stage functions (or an edgelens.Pipeline), "
             f"got {type(stage_fns).__name__}."
         )
-
-    missing = [s for s in REQUIRED_STAGES if s not in stage_fns]
-    if missing:
-        raise RuntimeError(
-            f"'{ENTRYPOINT_NAME}()' in '{script_path}' is missing required "
-            f"stage(s): {', '.join(missing)}.\n"
-            f"Required stages: {', '.join(REQUIRED_STAGES)}."
-        )
-
-    extra = [k for k in stage_fns if k not in REQUIRED_STAGES]
-    if extra:
-        raise RuntimeError(
-            f"'{ENTRYPOINT_NAME}()' in '{script_path}' returned unexpected "
-            f"key(s): {', '.join(extra)}.\n"
-            f"Required stages: {', '.join(REQUIRED_STAGES)}."
-        )
-
-    non_callable = [k for k in REQUIRED_STAGES if not callable(stage_fns[k])]
+    if not stage_fns:
+        raise RuntimeError(f"{where} returned an empty dict — define at least one stage.")
+    bad_keys = [k for k in stage_fns if not isinstance(k, str) or not k]
+    if bad_keys:
+        raise RuntimeError(f"{where}: stage names must be non-empty strings, got {bad_keys!r}.")
+    non_callable = [k for k, v in stage_fns.items() if not callable(v)]
     if non_callable:
         raise RuntimeError(
-            f"'{ENTRYPOINT_NAME}()' in '{script_path}': the following "
-            f"stage(s) are not callable: {', '.join(non_callable)}. Each "
-            f"stage must be a zero-argument function."
+            f"{where}: the following stage(s) are not callable: {', '.join(non_callable)}. "
+            f"Each stage must be a function taking zero arguments, or one (the previous "
+            f"stage's output)."
         )
 
-    return stage_fns
+
+def load_pipeline_from_script(script_path, pack=None):
+    """Import the script and return an edgelens.Pipeline."""
+    from ..core.pipeline import Pipeline
+
+    module = _load_module(script_path)
+    name = next((n for n in ENTRYPOINTS if getattr(module, n, None) is not None), None)
+    if name is None:
+        raise RuntimeError(
+            f"'{script_path}' must define a top-level function `build_pipeline()` "
+            f"(returning an edgelens.Pipeline) or `build_stage_fns()` (returning a "
+            f"dict of stage functions). See tests/fixtures/example_pipeline.py."
+        )
+    entrypoint = getattr(module, name)
+    if not callable(entrypoint):
+        raise RuntimeError(
+            f"'{name}' in '{script_path}' must be a function, not a "
+            f"{type(entrypoint).__name__}."
+        )
+    try:
+        built = entrypoint()
+    except Exception as e:
+        raise RuntimeError(
+            f"'{name}()' in '{script_path}' raised an error while running:\n"
+            f"{type(e).__name__}: {e}"
+        ) from e
+
+    where = f"'{name}()' in '{script_path}'"
+    if isinstance(built, Pipeline):
+        if len(built) == 0:
+            raise RuntimeError(f"{where} returned a Pipeline with no stages.")
+        return built
+    _validate_stage_dict(built, where)
+    try:
+        return Pipeline.from_stage_fns(built, name=Path(script_path).stem, pack=pack)
+    except (TypeError, ValueError) as e:
+        raise RuntimeError(f"{where}: {e}") from e
+
+
+def load_stage_fns_from_script(script_path):
+    """Backward-compatible: return {stage_name: callable} from the script."""
+    pipe = load_pipeline_from_script(script_path)
+    return {s.name: s.fn for s in pipe.stages}

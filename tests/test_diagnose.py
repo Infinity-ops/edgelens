@@ -86,7 +86,8 @@ def test_evidence_strength_is_within_unit_range():
     )
     verdict = diagnose(result)
     for finding in verdict["all_findings"]:
-        assert 0.0 <= finding["evidence_strength"] <= 1.0
+        assert finding["evidence_strength"] in ("weak", "moderate", "strong")
+        assert 0.0 <= finding["rank_score"] <= 1.0
 
 
 def test_low_sample_count_demotes_telemetry_dependent_findings():
@@ -106,7 +107,8 @@ def test_low_sample_count_demotes_telemetry_dependent_findings():
     assert verdict["primary"]["evidence"]["telemetry_reliable"] is False
     # Strength must be lower than the un-demoted value would have been
     # (0.5 + (93-80)/40 = 0.825, capped/rounded to 0.82 before demotion)
-    assert verdict["primary"]["evidence_strength"] < 0.82
+    assert verdict["primary"]["rank_score"] < 0.82
+    assert verdict["primary"]["evidence_strength"] == "weak"   # demoted from strong
 
 
 def test_sufficient_sample_count_is_not_demoted():
@@ -167,3 +169,39 @@ def test_gpu_provider_never_reports_inference_on_cpu():
     )
     result["pipeline_source"] = "onnxruntime:TensorrtExecutionProvider (m.onnx)"
     assert diagnose(result)["primary"]["type"] != "INFERENCE_ON_CPU"
+
+
+# --- v0.1.0: roles, deadlines, packs, categorical strength ---
+
+def test_rules_use_roles_so_sensor_pipelines_get_preprocess_verdicts():
+    result = _bench(stages={"acquire": 0.2, "filter": 3.0, "fft": 4.0, "inference": 2.0},
+                    cpu=92, gpu=10)
+    result["pipeline"] = {"pack": "custom", "stages": [
+        {"name": "acquire", "role": "input"}, {"name": "filter", "role": "preprocess"},
+        {"name": "fft", "role": "preprocess"}, {"name": "inference", "role": "inference"}]}
+    verdict = diagnose(result)
+    assert verdict["primary"]["type"] == "CPU_BOUND_PREPROCESS"
+    assert verdict["role_pct"]["preprocess"] > 70
+
+
+def test_deadline_missed_is_reported_with_dominant_stage():
+    result = _bench(stages={"capture": 1, "preprocess": 2, "inference": 20})
+    result["iterations"] = 100
+    result["deadline"] = {"deadline_ms": 20, "iterations": 100, "misses": 30,
+                          "miss_ratio": 0.3, "worst_ms": 31.0, "max_consecutive_misses": 4}
+    verdict = diagnose(result)
+    f = next(f for f in verdict["all_findings"] if f["type"] == "DEADLINE_MISSED")
+    assert f["evidence"]["dominant_stage"] == "inference"
+    assert f["evidence_strength"] == "strong"
+
+
+def test_strength_labels():
+    from edgelens.diagnose.engine import strength_label
+    assert [strength_label(x) for x in (0.2, 0.5, 0.74, 0.75, 0.95)] == \
+        ["weak", "moderate", "moderate", "strong", "strong"]
+
+
+def test_diagnosis_has_schema_version():
+    from edgelens.core.schema import SCHEMA_VERSION
+    v = diagnose(_bench(stages={"capture": 1, "inference": 1}))
+    assert v["schema_version"] == SCHEMA_VERSION

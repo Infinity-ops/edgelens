@@ -63,26 +63,47 @@ def test_entrypoint_returns_non_dict(tmp_path):
         load_stage_fns_from_script(script)
 
 
-def test_entrypoint_missing_required_stage(tmp_path):
-    script = _write(tmp_path, "bad5.py", (
+def test_any_stage_names_are_allowed_since_v010(tmp_path):
+    # v0.1.0: the six vision names are no longer mandatory. A sensor
+    # pipeline with its own stage names (and count) loads and runs.
+    script = _write(tmp_path, "sensor.py", (
         "def build_stage_fns():\n"
         "    f = lambda: None\n"
-        "    return {'capture': f, 'preprocess': f, 'h2d_copy': f, "
-        "'inference': f, 'd2h_copy': f}\n"  # missing postprocess
+        "    return {'acquire': f, 'filter': f, 'fft': f, 'inference': f, 'decision': f}\n"
     ))
-    with pytest.raises(RuntimeError, match="missing required stage"):
+    fns = load_stage_fns_from_script(script)
+    assert list(fns) == ["acquire", "filter", "fft", "inference", "decision"]
+    result = run_benchmark(iterations=5, warmup=1, pipeline_path=script)
+    assert [s["name"] for s in result["pipeline"]["stages"]] == list(fns)
+    assert result["pipeline"]["pack"] == "custom"
+    roles = {s["name"]: s["role"] for s in result["pipeline"]["stages"]}
+    assert roles == {"acquire": "input", "filter": "preprocess", "fft": "preprocess",
+                     "inference": "inference", "decision": "decision"}
+
+
+def test_classic_six_stage_dict_selects_vision_pack():
+    result = run_benchmark(iterations=5, warmup=1, pipeline_path=EXAMPLE_PIPELINE)
+    assert result["pipeline"]["pack"] == "vision"
+
+
+def test_empty_stage_dict_is_rejected(tmp_path):
+    script = _write(tmp_path, "empty.py", "def build_stage_fns():\n    return {}\n")
+    with pytest.raises(RuntimeError, match="empty dict"):
         load_stage_fns_from_script(script)
 
 
-def test_entrypoint_extra_key(tmp_path):
-    script = _write(tmp_path, "bad6.py", (
-        "def build_stage_fns():\n"
-        "    f = lambda: None\n"
-        "    return {'capture': f, 'preprocess': f, 'h2d_copy': f, "
-        "'inference': f, 'd2h_copy': f, 'postprocess': f, 'extra_stage': f}\n"
+def test_build_pipeline_entrypoint_returns_pipeline(tmp_path):
+    script = _write(tmp_path, "pipe.py", (
+        "import edgelens as el\n"
+        "def build_pipeline():\n"
+        "    p = el.Pipeline('ts', pack='timeseries', sample_rate_hz=1000, window=100, hop=50)\n"
+        "    p.add_stage('filter', lambda: None)\n"
+        "    p.add_stage('inference', lambda: None)\n"
+        "    return p\n"
     ))
-    with pytest.raises(RuntimeError, match="unexpected key"):
-        load_stage_fns_from_script(script)
+    result = run_benchmark(iterations=5, warmup=1, pipeline_path=script)
+    assert result["pipeline"]["pack"] == "timeseries"
+    assert result["requirements"]["deadline_ms"] == 50.0   # hop period by default
 
 
 def test_entrypoint_non_callable_stage_value(tmp_path):
