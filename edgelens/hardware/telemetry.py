@@ -134,6 +134,7 @@ class TelemetryRecorder:
             temps = single.get("temps_c") or {}
             return {
                 "sample_count": 0,
+                "cpu_count": psutil.cpu_count(logical=True),
                 "duration_s": 0.0,
                 "cpu_percent_mean": single["cpu_percent"],
                 "cpu_percent_peak": single["cpu_percent"],
@@ -175,6 +176,10 @@ class TelemetryRecorder:
 
         return {
             "sample_count": len(self._samples),
+            # Core count lets the diagnosis engine tell "one core saturated"
+            # (single-threaded stage) from "all cores busy" — a system-wide
+            # mean of ~25% on a 4-core Nano can be one core at 100%.
+            "cpu_count": psutil.cpu_count(logical=True),
             # Wall-clock span from real timestamps, NOT sample_count *
             # interval_s: one sample (psutil 0.2s + a tegrastats read) takes
             # ~1s on a Jetson Nano, far longer than the requested interval.

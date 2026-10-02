@@ -30,8 +30,8 @@ v0.1.0 FIX (found via real-hardware testing, not simulated):
     findings (MEMORY_TRANSFER_BOUND, BALANCED's stage read) are
     unaffected — they don't depend on telemetry sample count.
 
-Verdict types: CPU_BOUND_PREPROCESS, MEMORY_TRANSFER_BOUND, GPU_BOUND,
-THERMAL, MEMORY_BOUND, BALANCED.
+Verdict types: CPU_BOUND_PREPROCESS, INFERENCE_ON_CPU, MEMORY_TRANSFER_BOUND,
+GPU_BOUND, THERMAL, MEMORY_BOUND, BALANCED.
 """
 
 # Tunable thresholds — deliberately named constants so they're easy to
@@ -43,6 +43,12 @@ PREPROCESS_CPU_THRESHOLD = 70.0
 TRANSFER_STAGE_PCT_THRESHOLD = 20.0
 INFERENCE_STAGE_PCT_THRESHOLD = 50.0
 GPU_BUSY_THRESHOLD = 85.0
+# A serial (single-threaded) stage that saturates ONE core shows up as only
+# 100/N % system-wide CPU on an N-core board (25% on a 4-core Nano). Accept
+# preprocessing as CPU-bound when the mean is at least this fraction of one
+# core's share. Learned from real Jetson Nano data: 33% mean CPU while a
+# NumPy preprocess stage took 33.6% of every frame.
+SINGLE_CORE_FRACTION = 0.8
 
 # Below this many background telemetry samples, CPU/GPU/temperature
 # readings are one-off snapshots, not a load average over the benchmark —
@@ -51,6 +57,8 @@ MIN_RELIABLE_SAMPLES = 3
 LOW_SAMPLE_STRENGTH_PENALTY = 0.5  # multiplier applied when below the floor
 
 TELEMETRY_DEPENDENT_TYPES = {"THERMAL", "MEMORY_BOUND", "CPU_BOUND_PREPROCESS", "GPU_BOUND"}
+# INFERENCE_ON_CPU is deliberately NOT telemetry-dependent: it's decided
+# from the provider recorded in pipeline_source, not from sampled load.
 
 
 def diagnose(benchmark_result):
@@ -109,21 +117,58 @@ def diagnose(benchmark_result):
             },
         })
 
-    if pre_pct >= PREPROCESS_STAGE_PCT_THRESHOLD and cpu >= PREPROCESS_CPU_THRESHOLD:
+    cpu_count = tel.get("cpu_count")
+    one_core_pct = (100.0 / cpu_count) if cpu_count else None
+    all_cores_busy = cpu >= PREPROCESS_CPU_THRESHOLD
+    single_core_busy = (one_core_pct is not None
+                        and cpu >= SINGLE_CORE_FRACTION * one_core_pct)
+
+    if pre_pct >= PREPROCESS_STAGE_PCT_THRESHOLD and (all_cores_busy or single_core_busy):
+        if all_cores_busy:
+            detail = (f"Preprocessing consumes {pre_pct:.1f}% of total pipeline latency "
+                      f"while mean CPU utilization is {cpu:.1f}%.")
+        else:
+            detail = (f"Preprocessing consumes {pre_pct:.1f}% of total pipeline latency. "
+                      f"Mean CPU is {cpu:.1f}% across {cpu_count} cores — about one "
+                      f"core's worth of work ({one_core_pct:.0f}% each), consistent with "
+                      f"single-threaded preprocessing while the other cores sit mostly idle.")
         findings.append({
             "type": "CPU_BOUND_PREPROCESS",
             "evidence_strength": round(min(0.95, 0.4 + pre_pct / 100), 2),
-            "detail": f"Preprocessing consumes {pre_pct:.1f}% of total pipeline latency "
-                      f"while mean CPU utilization is {cpu:.1f}%.",
+            "detail": detail,
             "recommendation": "Move resize/color-conversion to the GPU (CUDA/VPI) or use "
-                              "hardware-accelerated decode instead of CPU-side OpenCV.",
+                              "hardware-accelerated decode instead of CPU-side OpenCV; "
+                              "or overlap preprocessing of frame N+1 with inference of "
+                              "frame N on another core.",
             "evidence": {
                 "preprocess_stage_pct": round(pre_pct, 1),
                 "cpu_percent_mean": round(cpu, 1),
+                "cpu_count": cpu_count,
                 "thresholds": {
                     "stage_pct": PREPROCESS_STAGE_PCT_THRESHOLD,
                     "cpu_pct": PREPROCESS_CPU_THRESHOLD,
+                    "single_core_pct": (round(SINGLE_CORE_FRACTION * one_core_pct, 1)
+                                        if one_core_pct else None),
                 },
+            },
+        })
+
+    source = benchmark_result.get("pipeline_source") or ""
+    if infer_pct >= INFERENCE_STAGE_PCT_THRESHOLD and "CPUExecutionProvider" in source:
+        findings.append({
+            "type": "INFERENCE_ON_CPU",
+            "evidence_strength": round(min(0.9, 0.4 + infer_pct / 200), 2),
+            "detail": f"Inference dominates latency ({infer_pct:.1f}% of pipeline) and runs "
+                      f"on onnxruntime's CPUExecutionProvider — the GPU is not used for "
+                      f"the model at all.",
+            "recommendation": "Run on an accelerator provider: on Jetson, install the "
+                              "JetPack-matched onnxruntime-gpu wheel and rerun with "
+                              "--provider CUDAExecutionProvider or TensorrtExecutionProvider "
+                              "(`edgelens doctor` shows which providers are available).",
+            "evidence": {
+                "inference_stage_pct": round(infer_pct, 1),
+                "pipeline_source": source,
+                "threshold_pct": INFERENCE_STAGE_PCT_THRESHOLD,
             },
         })
 

@@ -118,3 +118,52 @@ def test_sufficient_sample_count_is_not_demoted():
     verdict = diagnose(result)
     assert verdict["telemetry_reliable"] is True
     assert "LOW CONFIDENCE" not in verdict["primary"]["detail"]
+
+
+# --- Regression tests from real Jetson Nano runs (JetPack 4.6, 4 cores) ---
+
+def test_nano_cpu_provider_run_is_inference_on_cpu_not_balanced():
+    # Real numbers: CPUExecutionProvider, inference 91% of frame, CPU 100%.
+    result = _bench(
+        stages={"capture": 0.01, "preprocess": 4.00, "h2d_copy": 0.25,
+                "inference": 44.63, "d2h_copy": 0.01, "postprocess": 0.07},
+        cpu=100.0, gpu=0.0, mem=77, max_temp=54.5, sample_count=21,
+    )
+    result["pipeline_source"] = "onnxruntime:CPUExecutionProvider (small_cnn.onnx)"
+    verdict = diagnose(result)
+    assert verdict["primary"]["type"] == "INFERENCE_ON_CPU"
+
+
+def test_nano_cuda_run_flags_single_threaded_preprocess():
+    # Real numbers: CUDAExecutionProvider, preprocess 33.6%, CPU mean 33% on
+    # 4 cores (= one saturated core), GPU 48%. Used to come out BALANCED.
+    result = _bench(
+        stages={"capture": 0.01, "preprocess": 2.50, "h2d_copy": 0.61,
+                "inference": 4.08, "d2h_copy": 0.18, "postprocess": 0.07},
+        cpu=33.11, gpu=48.19, mem=77, max_temp=53.0, sample_count=21,
+    )
+    result["telemetry"]["cpu_count"] = 4
+    result["pipeline_source"] = "onnxruntime:CUDAExecutionProvider (small_cnn.onnx)"
+    verdict = diagnose(result)
+    assert verdict["primary"]["type"] == "CPU_BOUND_PREPROCESS"
+    assert "single-threaded" in verdict["primary"]["detail"]
+
+
+def test_single_core_rule_needs_cpu_count():
+    # Older JSON without cpu_count keeps the original all-cores threshold.
+    result = _bench(
+        stages={"capture": 0.01, "preprocess": 2.50, "h2d_copy": 0.61,
+                "inference": 4.08, "d2h_copy": 0.18, "postprocess": 0.07},
+        cpu=33.11, gpu=48.19, sample_count=21,
+    )
+    assert diagnose(result)["primary"]["type"] == "BALANCED"
+
+
+def test_gpu_provider_never_reports_inference_on_cpu():
+    result = _bench(
+        stages={"capture": 1, "preprocess": 2, "h2d_copy": 1, "inference": 30,
+                "d2h_copy": 1, "postprocess": 1},
+        cpu=30, gpu=95, sample_count=50,
+    )
+    result["pipeline_source"] = "onnxruntime:TensorrtExecutionProvider (m.onnx)"
+    assert diagnose(result)["primary"]["type"] != "INFERENCE_ON_CPU"
