@@ -205,3 +205,16 @@ def test_diagnosis_has_schema_version():
     from edgelens.core.schema import SCHEMA_VERSION
     v = diagnose(_bench(stages={"capture": 1, "inference": 1}))
     assert v["schema_version"] == SCHEMA_VERSION
+
+
+def test_comfortably_met_deadline_demotes_bottlenecks_to_informational():
+    result = _bench(stages={"filter": 3.0, "fft": 4.0, "inference": 0.2}, cpu=92, gpu=10)
+    result["pipeline"] = {"pack": "custom", "stages": [
+        {"name": "filter", "role": "preprocess"}, {"name": "fft", "role": "preprocess"},
+        {"name": "inference", "role": "inference"}]}
+    result["deadline"] = {"deadline_ms": 50.0, "iterations": 500, "misses": 0,
+                          "miss_ratio": 0.0, "worst_ms": 8.0, "max_consecutive_misses": 0}
+    verdict = diagnose(result)
+    assert verdict["primary"]["type"] == "DEADLINE_MET"
+    pre = next(f for f in verdict["all_findings"] if f["type"] == "CPU_BOUND_PREPROCESS")
+    assert "Not a problem for the stated requirement" in pre["detail"]

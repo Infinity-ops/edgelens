@@ -121,6 +121,7 @@ class Pipeline:
         self.pack = get_pack(pack)
         self.config = self.pack.configure(dict(config))
         self._stages = OrderedDict()
+        self.source = None      # default input stream for run(); see set_source()
 
     # ---- building ----
 
@@ -155,6 +156,12 @@ class Pipeline:
             pipe.add_stage(stage_name, fn, role=role)
         return pipe
 
+    def set_source(self, source):
+        """Default input for run() when none is passed — lets a --pipeline
+        script ship its own data (e.g. a WindowSource replaying a recording)."""
+        self.source = source
+        return self
+
     # ---- introspection ----
 
     @property
@@ -185,7 +192,8 @@ class Pipeline:
         (see edgelens.core.result.build_result)."""
         from .harness import run_harness
         return run_harness(
-            self, iterations=iterations, warmup=warmup, source=source,
+            self, iterations=iterations, warmup=warmup,
+            source=source if source is not None else self.source,
             deadline_ms=deadline_ms, period_ms=period_ms, pace=pace,
             telemetry=telemetry, telemetry_interval_s=telemetry_interval_s,
             idle_baseline_s=idle_baseline_s, pipeline_source=pipeline_source,

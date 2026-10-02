@@ -21,7 +21,7 @@ from .benchmark.onnx_pipeline import parse_input_shapes
 from .benchmark.runner import run_benchmark
 from .compare.engine import compare as run_compare
 from .diagnose.engine import diagnose as run_diagnose
-from .hardware import detector, telemetry
+from .hardware import detector, power, telemetry
 from .report.generator import generate_html_report
 
 app = typer.Typer(
@@ -77,6 +77,91 @@ def _ort_providers_cell(is_jetson):
     return text
 
 
+def _ms(v):
+    return "n/a" if v is None else f"{v:.3f}"
+
+
+def _print_benchmark(result):
+    pipe = result.get("pipeline") or {}
+    roles = {s["name"]: s.get("role", "") for s in pipe.get("stages", [])}
+    stats = result.get("stage_stats_ms") or {}
+    table = Table(title=f"EdgeLens Benchmark ({result['mode']} mode, {pipe.get('pack', 'custom')} "
+                        f"pack, {result['pipeline_source']})")
+    table.add_column("Stage")
+    table.add_column("Role", style="dim")
+    table.add_column("Mean")
+    table.add_column("p99", style="dim")
+    table.add_column("Share")
+    stage_sum = sum(result["stage_avg_ms"].values()) or 1e-9
+    for stage, ms in result["stage_avg_ms"].items():
+        pct = (ms / stage_sum) * 100
+        bar = "#" * max(1, int(pct / 4))
+        table.add_row(stage, roles.get(stage, ""), f"{ms:.3f} ms",
+                      _ms((stats.get(stage) or {}).get("p99")), f"{bar} {pct:.1f}%")
+    console.print(table)
+
+    lat = result.get("latency") or {}
+    console.print(f"[bold]End-to-end:[/bold] mean {_ms(lat.get('mean'))} ms   "
+                  f"[bold]Throughput:[/bold] {result['fps']} it/s   "
+                  f"({result['iterations']} iterations)")
+    console.print(f"min {_ms(lat.get('min'))} · p50 {_ms(lat.get('p50'))} · "
+                  f"p95 {_ms(lat.get('p95'))} · p99 {_ms(lat.get('p99'))} · "
+                  f"p99.9 {_ms(lat.get('p99_9'))} · max {_ms(lat.get('max'))} · "
+                  f"jitter {_ms(lat.get('jitter'))} ms")
+    if lat.get("insufficient_samples"):
+        console.print(f"[dim]Not reported (too few samples): "
+                      f"{'; '.join(lat['insufficient_samples'])}[/dim]")
+
+    dl = result.get("deadline")
+    if dl:
+        style = "green" if dl["met"] else "red"
+        status = "MET" if dl["met"] else "MISSED"
+        console.print(Panel(
+            f"[bold]{status}[/bold]  deadline {dl['deadline_ms']} ms · misses "
+            f"{dl['misses']}/{dl['iterations']} ({dl['miss_ratio']*100:.3f}%) · worst "
+            f"{dl['worst_ms']} ms (overrun {dl['worst_overrun_ms']} ms) · longest burst "
+            f"{dl['max_consecutive_misses']}",
+            title="Deadline", border_style=style, style=style))
+    bl = result.get("backlog")
+    if bl:
+        console.print(f"[dim]Backlog at {bl['period_ms']} ms period ({bl['method']}): "
+                      f"utilization {bl['utilization']}, stable={bl['stable']}, "
+                      f"max backlog {bl['max_backlog_items']} item(s)[/dim]")
+
+    pm = result.get("pack_metrics") or {}
+    if pm.get("real_time_factor"):
+        r = pm["real_time_factor"]
+        console.print(f"[bold]Real-time factor:[/bold] mean {r['mean']} · p99 {r['p99']} · "
+                      f"max {r['max']} (hop period {pm['hop_period_ms']} ms, headroom "
+                      f"{pm['headroom_pct']}%)")
+
+    en = result.get("energy") or {}
+    if en.get("available"):
+        line = (f"[bold]Power:[/bold] {en['power_w_mean']} W mean · "
+                f"[bold]Energy:[/bold] {en['energy_per_iteration_j']*1000:.2f} mJ/iteration · "
+                f"{en['iterations_per_joule']} iterations/J [dim]({en['method']})[/dim]")
+        if en.get("dynamic_energy_per_iteration_j") is not None:
+            line += (f" · dynamic {en['dynamic_energy_per_iteration_j']*1000:.2f} mJ/it "
+                     f"over {en['idle_power_w']} W idle")
+        console.print(line)
+        if en.get("low_confidence"):
+            console.print(f"[yellow]Energy: {en['low_confidence']}[/yellow]")
+
+    tel = result.get("telemetry", {})
+    if tel:
+        console.print(
+            f"[dim]Telemetry over {tel.get('sample_count', 0)} samples "
+            f"({tel.get('duration_s', 0)}s, sampler cost {tel.get('sampler_cost_ms_mean')} ms): "
+            f"CPU mean {tel.get('cpu_percent_mean')}% / peak {tel.get('cpu_percent_peak')}% · "
+            f"GPU mean {tel.get('gpu_percent_mean')}% / peak {tel.get('gpu_percent_peak')}% · "
+            f"peak temp {tel.get('max_temp_c')}C[/dim]"
+        )
+    ident = result.get("identity") or {}
+    if ident:
+        console.print(f"[dim]environment_id {ident.get('environment_id')} · experiment_id "
+                      f"{ident.get('experiment_id')} · run_id {ident.get('run_id')}[/dim]")
+
+
 @app.command()
 def doctor():
     """Environment + hardware fingerprint."""
@@ -118,19 +203,29 @@ def monitor(
                        "(no GPU/tegrastats data available here).[/yellow]")
 
     start = time.time()
+    reader = power.PowerReader()
+    stream = None
+    if telemetry.read_gpu_percent_sysfs() is None and telemetry.TegrastatsStream.available():
+        stream = telemetry.TegrastatsStream(interval_ms=int(interval * 1000))
+        stream.start()
     with Live(console=console, refresh_per_second=4) as live:
         while time.time() - start < duration:
-            snap = telemetry.snapshot()
+            snap = telemetry.snapshot(stream=stream, power_reader=reader if reader.available() else None)
             table = Table(title="EdgeLens Monitor")
             table.add_column("Metric")
             table.add_column("Value")
             table.add_row("CPU", f"{snap['cpu_percent']:.1f}%")
             table.add_row("GPU", f"{snap['gpu_percent']:.1f}%" if snap["gpu_percent"] is not None else "[dim]n/a[/dim]")
             table.add_row("RAM", f"{snap['mem_used_gb']}/{snap['mem_total_gb']} GB ({snap['mem_percent']:.1f}%)")
+            if snap.get("power_w") is not None:
+                rails = ", ".join(f"{k} {v:.2f}W" for k, v in snap["rails_w"].items())
+                table.add_row("Power", f"{snap['power_w']:.2f} W  [dim]({rails})[/dim]")
             for name, val in snap["temps_c"].items():
                 table.add_row(f"Temp [{name}]", f"{val:.1f}C")
             live.update(table)
             time.sleep(interval)
+    if stream is not None:
+        stream.stop()
 
 
 @app.command()
@@ -156,8 +251,19 @@ def benchmark(
         "balanced", help="Demo scenario: balanced|preprocess|memory|gpu|thermal"
     ),
     save: str = typer.Option("edgelens_benchmark.json", help="Output JSON path."),
+    deadline_ms: float = typer.Option(None, "--deadline-ms", help="Per-iteration deadline: "
+                                      "report misses, miss ratio, worst overrun and miss "
+                                      "bursts."),
+    period_ms: float = typer.Option(None, "--period-ms", help="Input period (e.g. 33.3 for "
+                                    "a 30 FPS camera). Without --pace, estimates the "
+                                    "backlog at that rate."),
+    pace: bool = typer.Option(False, "--pace", help="Release iterations every --period-ms "
+                              "and measure true response time, including queueing."),
+    idle_baseline: float = typer.Option(0.0, "--idle-baseline", help="Seconds of idle power "
+                                        "measurement before the run, to report dynamic "
+                                        "(workload-only) energy. Needs INA3221 (Jetson)."),
 ):
-    """Run a benchmark; measure per-stage latency, FPS, and utilization."""
+    """Run a benchmark; measure per-stage latency, tail, deadlines, power and energy."""
     is_jetson = detector.is_jetson()
 
     if not demo and model is None and pipeline is None and not is_jetson:
@@ -180,6 +286,8 @@ def benchmark(
                 iterations=iterations, demo=demo, demo_scenario=scenario,
                 model_path=model, provider=provider, pipeline_path=pipeline,
                 input_shapes=parse_input_shapes(input_shape),
+                deadline_ms=deadline_ms, period_ms=period_ms, pace=pace,
+                idle_baseline_s=idle_baseline or None,
             )
         except RuntimeError as e:
             console.print(f"[red]{e}[/red]")
@@ -188,29 +296,7 @@ def benchmark(
     if result["mode"] == "demo":
         _demo_banner()
 
-    table = Table(title=f"EdgeLens Benchmark ({result['mode']} mode, {result['pipeline_source']})")
-    table.add_column("Stage")
-    table.add_column("Avg latency")
-    table.add_column("Share")
-    total = result["total_latency_ms"] or 1e-9
-    for stage, ms in result["stage_avg_ms"].items():
-        pct = (ms / total) * 100
-        bar = "#" * max(1, int(pct / 4))
-        table.add_row(stage.replace("_", " "), f"{ms:.2f} ms", f"{bar} {pct:.1f}%")
-    console.print(table)
-    console.print(f"[bold]Total:[/bold] {total:.2f} ms   [bold]FPS:[/bold] {result['fps']}")
-    console.print(f"P50 {result['latency_p50_ms']}ms  P95 {result['latency_p95_ms']}ms  "
-                   f"P99 {result['latency_p99_ms']}ms")
-
-    tel = result.get("telemetry", {})
-    if tel:
-        console.print(
-            f"[dim]Telemetry over {tel.get('sample_count', 0)} samples "
-            f"({tel.get('duration_s', 0)}s): "
-            f"CPU mean {tel.get('cpu_percent_mean')}% / peak {tel.get('cpu_percent_peak')}% · "
-            f"GPU mean {tel.get('gpu_percent_mean')}% / peak {tel.get('gpu_percent_peak')}% · "
-            f"peak temp {tel.get('max_temp_c')}C[/dim]"
-        )
+    _print_benchmark(result)
 
     Path(save).write_text(json.dumps(result, indent=2))
     console.print(f"[green]Saved →[/green] {save}")
@@ -240,7 +326,7 @@ def diagnose(
         f"  {k}: {v}" for k, v in (primary.get("evidence") or {}).items()
     )
     console.print(Panel(
-        f"[bold]{primary['type']}[/bold]  [dim](evidence strength {primary['evidence_strength']*100:.0f}%)[/dim]\n\n"
+        f"[bold]{primary['type']}[/bold]  [dim]({primary['evidence_strength']} evidence)[/dim]\n\n"
         f"{primary['detail']}\n\n"
         f"[dim]Evidence:\n{evidence_lines}[/dim]\n\n"
         f"[cyan]→ {primary['recommendation']}[/cyan]",
@@ -248,7 +334,7 @@ def diagnose(
     ))
     for f in verdict["secondary"]:
         console.print(f"  also considered: [bold]{f['type']}[/bold] "
-                       f"(evidence strength {f['evidence_strength']*100:.0f}%) — {f['detail']}")
+                       f"({f['evidence_strength']} evidence) — {f['detail']}")
 
     out = path.with_suffix("").with_suffix(".diagnosis.json")
     out.write_text(json.dumps(verdict, indent=2))
@@ -275,13 +361,13 @@ def report(
     verdict = run_diagnose(bench)
     fingerprint = build_fingerprint(hw_sw_fp, bench, verdict)
 
-    out_path = generate_html_report(hw_sw_fp, bench, verdict, output)
+    out_path = generate_html_report(fingerprint, bench, verdict, output)
     fp_json_path = Path(output).with_suffix(".fingerprint.json")
     fp_json_path.write_text(json.dumps(fingerprint, indent=2))
 
     console.print(f"[green]Report saved →[/green] {out_path}")
     console.print(f"[green]Fingerprint saved →[/green] {fp_json_path}  "
-                   f"[dim](id: {fingerprint['fingerprint_id']})[/dim]")
+                   f"[dim](environment_id: {fingerprint['fingerprint_id']})[/dim]")
 
     if bench.get("mode") == "demo":
         _demo_banner()
@@ -292,6 +378,9 @@ def report(
 def compare(
     before_file: str = typer.Argument(..., help="Path to the 'before' benchmark JSON file."),
     after_file: str = typer.Argument(..., help="Path to the 'after' benchmark JSON file."),
+    strict_env: bool = typer.Option(False, "--strict-env", help="Exit with code 2 when the "
+                                    "two runs come from different environments (power "
+                                    "mode, clocks, board, JetPack, versions)."),
 ):
     """Compare two benchmark runs (before/after) and flag regressions."""
     before_path, after_path = Path(before_file), Path(after_file)
@@ -309,6 +398,18 @@ def compare(
 
     result = run_compare(before, after)
 
+    env = result["environment"]
+    if env["comparable"] is False:
+        lines = "\n".join(f"  {d['label']}: {d['before']} -> {d['after']}"
+                          for d in env["differences"])
+        console.print(Panel(
+            "These runs were taken in DIFFERENT environments, so differences below may "
+            "come from the environment, not from your change:\n" + lines,
+            title="⚠️  Environment mismatch", style="yellow", border_style="yellow"))
+    elif env["comparable"] is None:
+        console.print("[dim]Environment not recorded in one or both files (pre-v0.1.0); "
+                      "cannot check that the runs are comparable.[/dim]")
+
     table = Table(title="EdgeLens Compare")
     table.add_column("Metric")
     table.add_column("Before")
@@ -325,10 +426,11 @@ def compare(
     stage_table.add_column("After (ms)")
     stage_table.add_column("Change")
     for stage, d in result["stages"].items():
-        if d["before_ms"] is None:
+        if d["status"] != "both":
+            stage_table.add_row(stage, _ms(d["before_ms"]), _ms(d["after_ms"]), d["status"])
             continue
         change = f"{d['pct_change']:+.1f}%" if d["pct_change"] is not None else "n/a"
-        stage_table.add_row(stage, f"{d['before_ms']:.2f}", f"{d['after_ms']:.2f}", change)
+        stage_table.add_row(stage, f"{d['before_ms']:.3f}", f"{d['after_ms']:.3f}", change)
     console.print(stage_table)
 
     if result["verdict"] == "REGRESSION":
@@ -336,10 +438,14 @@ def compare(
             "\n".join(result["reasons"]),
             title="❌ REGRESSION", style="bold red", border_style="red",
         ))
-        raise typer.Exit(1)
     else:
         console.print(Panel("No regression detected.", title="✅ PASS", style="bold green",
                              border_style="green"))
+    # Exit codes: 2 = not comparable (with --strict-env), 1 = regression, 0 = pass.
+    if strict_env and env["comparable"] is False:
+        raise typer.Exit(2)
+    if result["verdict"] == "REGRESSION":
+        raise typer.Exit(1)
 
 
 @app.command()

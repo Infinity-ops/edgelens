@@ -69,6 +69,11 @@ SINGLE_CORE_FRACTION = 0.8
 MIN_RELIABLE_SAMPLES = 3
 LOW_SAMPLE_STRENGTH_PENALTY = 0.5  # multiplier applied when below the floor
 
+# Worst-case headroom at which bottleneck findings become informational.
+HEADROOM_DEMOTE_PCT = 50.0
+BOTTLENECK_TYPES = {"CPU_BOUND_PREPROCESS", "MEMORY_TRANSFER_BOUND", "GPU_BOUND",
+                    "INFERENCE_ON_CPU", "BALANCED"}
+
 TELEMETRY_DEPENDENT_TYPES = {"THERMAL", "MEMORY_BOUND", "CPU_BOUND_PREPROCESS", "GPU_BOUND"}
 # INFERENCE_ON_CPU is deliberately NOT telemetry-dependent: it's decided
 # from the provider recorded in pipeline_source, not from sampled load.
@@ -273,6 +278,36 @@ def diagnose(benchmark_result):
                 "max_consecutive_misses": dl["max_consecutive_misses"],
                 "latency_p99_ms": lat.get("p99"), "dominant_stage": worst_stage,
             },
+        })
+
+    # A requirement that is met with plenty of headroom changes what the
+    # bottleneck findings MEAN: "where the time goes / where to optimise for
+    # energy", not "your pipeline has a problem". Demote them and say so.
+    if dl and not dl.get("misses") and dl.get("deadline_ms"):
+        worst = dl.get("worst_ms") or 0.0
+        headroom_pct = 100.0 * (1 - worst / dl["deadline_ms"])
+        if headroom_pct >= HEADROOM_DEMOTE_PCT:
+            for f in findings:
+                if f["type"] in BOTTLENECK_TYPES:
+                    f["rank_score"] = round(f["rank_score"] * 0.5, 2)
+                    f["detail"] += (f" [Not a problem for the stated requirement: the "
+                                    f"{dl['deadline_ms']} ms deadline is met with "
+                                    f"{headroom_pct:.0f}% headroom even in the worst "
+                                    f"iteration. Optimise here only for more headroom or "
+                                    f"lower energy.]")
+        findings.append({
+            "type": "DEADLINE_MET",
+            "rank_score": 0.8 if headroom_pct >= 20 else 0.6,
+            "detail": f"All {dl['iterations']} iterations finished within the "
+                      f"{dl['deadline_ms']} ms deadline; worst {worst} ms "
+                      f"({headroom_pct:.0f}% headroom).",
+            "recommendation": ("Validate under sustained load and at the target power "
+                               "mode before relying on this margin." if headroom_pct >= 20
+                               else "The margin is thin: check the tail (p99.9/max) under "
+                                    "longer runs and thermal load."),
+            "evidence": {"deadline_ms": dl["deadline_ms"], "iterations": dl["iterations"],
+                         "worst_ms": worst, "headroom_pct": round(headroom_pct, 1),
+                         "latency_p99_ms": (benchmark_result.get("latency") or {}).get("p99")},
         })
 
     pack_name = (benchmark_result.get("pipeline") or {}).get("pack")
