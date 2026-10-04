@@ -244,3 +244,24 @@ def test_observer_threads_are_recorded():
         th.start(); th.join()
     threads = {e["thread"] for e in t.result["trace"]["events"]}
     assert len(threads) == 2
+
+
+def test_paced_rtf_uses_service_time_not_response_time():
+    # Reproduces the real Nano run: ~5 ms of work released every 2 ms. The
+    # response time grows with the queue, but RTF must stay ~work/period
+    # (it was reported as 10.4 against the wrong 51.2 ms period).
+    p = el.Pipeline("ts", pack="timeseries", sample_rate_hz=10_000, window=1024, hop=512)
+    p.add_stage("work", lambda: time.sleep(0.004))
+    r = p.run(iterations=15, warmup=0, period_ms=2, pace=True, **FAST)
+    assert r["requirements"]["deadline_ms"] == 2            # explicit period wins over hop
+    assert r["latency"]["max"] > 20                         # queueing is visible in latency
+    rtf = r["pack_metrics"]["real_time_factor"]["mean"]
+    assert 1.8 < rtf < 4.0                                  # ~4 ms / 2 ms
+    assert r["pack_metrics"]["period_ms"] == 2
+
+
+def test_explicit_deadline_beats_period():
+    p = el.Pipeline("x")
+    p.add_stage("a", lambda: None)
+    r = p.run(iterations=3, warmup=0, period_ms=10, deadline_ms=25, **FAST)
+    assert r["requirements"]["deadline_ms"] == 25

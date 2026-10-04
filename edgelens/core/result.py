@@ -10,7 +10,9 @@ Top-level fields:
     pipeline        {name, pack, stages:[{name, role}], config}
     requirements    {deadline_ms, period_ms, paced}
     iterations
-    latency         end-to-end stats (min/mean/std/p50..p99_9/max/jitter)
+    latency         end-to-end stats (min/mean/std/p50..p99_9/max/jitter);
+                    in paced mode this is response time incl. queueing
+    service_latency the pipeline's own work per iteration (= latency unpaced)
     stage_stats_ms  the same stats per stage
     deadline        miss analysis (None without a deadline)
     backlog         queueing estimate when a period is known and not paced
@@ -58,6 +60,7 @@ def energy_summary(power, iterations, mean_e2e_ms, idle_power_w=None):
 
 
 def build_result(*, pipeline_desc, stage_samples_ms, e2e_ms, mode, pipeline_source,
+                 service_ms=None,
                  telemetry_summary=None, telemetry_series=None, events=None,
                  events_truncated=False, deadline_ms=None, period_ms=None, paced=False,
                  idle_power_w=None, pack=None, extra=None):
@@ -65,6 +68,10 @@ def build_result(*, pipeline_desc, stage_samples_ms, e2e_ms, mode, pipeline_sour
     stage_stats = {n: latency_stats(stage_samples_ms.get(n, [])) for n in names}
     lat = latency_stats(e2e_ms)
     mean_e2e = lat.get("mean") or 0.0
+    # Service time = the pipeline's own work per iteration. Equal to latency
+    # when unpaced; in paced mode latency also contains queueing behind
+    # earlier overruns, and capacity metrics must use service time.
+    service_ms = service_ms if service_ms is not None else e2e_ms
 
     result = {
         "schema_version": SCHEMA_VERSION,
@@ -75,9 +82,10 @@ def build_result(*, pipeline_desc, stage_samples_ms, e2e_ms, mode, pipeline_sour
         "requirements": {"deadline_ms": deadline_ms, "period_ms": period_ms, "paced": paced},
         "iterations": len(e2e_ms),
         "latency": lat,
+        "service_latency": lat if service_ms is e2e_ms else latency_stats(service_ms),
         "stage_stats_ms": stage_stats,
         "deadline": deadline_stats(e2e_ms, deadline_ms),
-        "backlog": (simulate_backlog(e2e_ms, period_ms) if (period_ms and not paced) else None),
+        "backlog": (simulate_backlog(service_ms, period_ms) if (period_ms and not paced) else None),
         # ---- legacy flat fields ----
         "stage_avg_ms": {n: (stage_stats[n].get("mean") or 0.0) for n in names},
         "total_latency_ms": round(mean_e2e, 3),

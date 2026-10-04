@@ -101,5 +101,29 @@ def test_recorder_keeps_timestamped_series():
     assert len(series) == summary["sample_count"]
     assert series[0]["t_s"] >= 0
     assert all(b["t_s"] >= a["t_s"] for a, b in zip(series, series[1:]))
-    assert summary["sampler_cost_ms_mean"] is not None
+    assert summary["sampler_cpu_ms_mean"] is not None
+    assert summary["sampler_wall_ms_mean"] >= 0
     assert "power" in summary
+
+
+def test_listed_but_unreadable_power_falls_back(tmp_path):
+    # rails exist in sysfs but every read fails -> recorder must not keep a
+    # dead reader (it would silently disable power for the whole run)
+    dev = tmp_path / "ina3221x" / "6-0040" / "iio:device0"
+    dev.mkdir(parents=True)
+    (dev / "rail_name_0").write_text("POM_5V_IN")
+    (dev / "in_power0_input").write_text("garbage")
+    reader = power.PowerReader(iio_glob=str(tmp_path / "ina3221x" / "*" / "iio:device*"),
+                               hwmon_glob=str(tmp_path / "none*"))
+    assert reader.available() and reader.read() == {}
+    rec = telemetry.TelemetryRecorder(interval_s=0.05, use_tegrastats=False)
+    rec._power = reader
+    rec.start()
+    rec.stop()
+    assert rec._power is None
+
+
+def test_probe_sources_shape():
+    src = telemetry.probe_sources(tegrastats_timeout_s=0.1)
+    assert set(src) == {"gpu_load_sysfs", "power_ina3221", "thermal_zones", "tegrastats"}
+    assert "read_ms" in src["power_ina3221"]

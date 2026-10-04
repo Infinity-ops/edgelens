@@ -63,13 +63,12 @@ tooling already measures — it does not re-implement it.
 
 **Release gate — run `scripts/validate_on_jetson.sh` on the Nano:**
 
-- [ ] sysfs GPU load node read correctly (`/sys/devices/gpu.0/load`)
-- [ ] INA3221 rails found (`POM_5V_IN/GPU/CPU`), power plausible, energy > 0
-- [ ] persistent tegrastats stream works where sysfs is missing
-- [ ] `nvpmodel -q` / `/var/lib/nvpmodel/status` parsed; clock-lock heuristic
-      flips after `sudo jetson_clocks`
-- [ ] CUDA and TensorRT provider runs; multi-input model; timeseries example;
-      paced run
+- [x] sysfs GPU load node read correctly (Nano, JetPack 4.6)
+- [ ] INA3221 power: confirm with `edgelens doctor` → Telemetry sources
+- [x] `nvpmodel` parsed (MAXN / 5W); clock pinning flips after `sudo jetson_clocks`
+- [x] `compare --strict-env` exits 2 across power modes
+- [x] CUDA and TensorRT provider runs; multi-input model; timeseries example;
+      paced run; observer mode
 - [ ] Update README status, set `Development Status :: 3 - Alpha`, tag v0.1.0
 
 ## v0.2 — validate (performance contracts) + Orin depth

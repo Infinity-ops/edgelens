@@ -83,3 +83,21 @@ def test_deadline_miss_ratio_rise_is_a_regression():
     result = compare(before, after)
     assert result["verdict"] == "REGRESSION"
     assert any("Deadline miss ratio" in r for r in result["reasons"])
+
+
+def test_largest_stage_regression_is_by_absolute_ms_not_percent():
+    # Real Nano pair: h2d_copy 0.014 -> 0.050 ms (+257%) is noise;
+    # inference 25.6 -> 83.1 ms is the cause.
+    before = _result(36, 29.0, {"preprocess": 2.058, "h2d_copy": 0.014, "inference": 25.575})
+    after = _result(11.5, 129.0, {"preprocess": 3.465, "h2d_copy": 0.050, "inference": 83.127})
+    reasons = compare(before, after)["reasons"]
+    assert any(r.startswith("Largest stage regression: inference (+57.55 ms") for r in reasons)
+
+
+def test_different_deadlines_are_flagged_as_different_experiments():
+    before = _result(60, 16.0, {"inference": 10})
+    after = _result(60, 16.0, {"inference": 10})
+    before["requirements"] = {"deadline_ms": 100.0, "period_ms": None, "paced": False}
+    after["requirements"] = {"deadline_ms": 0.5, "period_ms": None, "paced": False}
+    diffs = compare(before, after)["requirements_differences"]
+    assert [d["field"] for d in diffs] == ["deadline_ms"]

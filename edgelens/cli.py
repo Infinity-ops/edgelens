@@ -42,10 +42,12 @@ def _demo_banner():
 
 def _non_jetson_notice():
     console.print(Panel(
-        "This doesn't look like a Jetson device. EdgeLens v0.1 targets NVIDIA "
-        "Jetson boards specifically. Commands below will run in [bold]demo mode[/bold] "
-        "(synthetic data) so you can preview the tool and its output format — "
-        "see README.md for real-hardware usage.",
+        "Not a Jetson device. Real measurements still work here: "
+        "[bold]--model[/bold], [bold]--pipeline[/bold] and observer mode "
+        "(edgelens.trace) measure latency, tail, deadlines and CPU/RAM on any Linux "
+        "host. Jetson-only telemetry (GPU load, board power/energy, power mode) is "
+        "unavailable. A bare `edgelens benchmark` with no model or pipeline runs "
+        "[bold]demo mode[/bold] (synthetic data, clearly labelled).",
         title="Notice", style="yellow", border_style="yellow",
     ))
 
@@ -132,7 +134,7 @@ def _print_benchmark(result):
     if pm.get("real_time_factor"):
         r = pm["real_time_factor"]
         console.print(f"[bold]Real-time factor:[/bold] mean {r['mean']} · p99 {r['p99']} · "
-                      f"max {r['max']} (hop period {pm['hop_period_ms']} ms, headroom "
+                      f"max {r['max']} (service time / {pm['period_ms']} ms period, headroom "
                       f"{pm['headroom_pct']}%)")
 
     en = result.get("energy") or {}
@@ -151,7 +153,7 @@ def _print_benchmark(result):
     if tel:
         console.print(
             f"[dim]Telemetry over {tel.get('sample_count', 0)} samples "
-            f"({tel.get('duration_s', 0)}s, sampler cost {tel.get('sampler_cost_ms_mean')} ms): "
+            f"({tel.get('duration_s', 0)}s, sampler {tel.get('sampler_cpu_ms_mean')} ms CPU/sample): "
             f"CPU mean {tel.get('cpu_percent_mean')}% / peak {tel.get('cpu_percent_peak')}% · "
             f"GPU mean {tel.get('gpu_percent_mean')}% / peak {tel.get('gpu_percent_peak')}% · "
             f"peak temp {tel.get('max_temp_c')}C[/dim]"
@@ -188,8 +190,53 @@ def doctor():
         pkg_table.add_row(pkg, ver or "[dim]not installed[/dim]")
     console.print(pkg_table)
 
+    _print_telemetry_sources()
+
     if not hw["is_jetson"]:
         _non_jetson_notice()
+
+
+def _print_telemetry_sources():
+    """Which telemetry sources work here — the first place to look when GPU%,
+    power or energy show up as n/a in a benchmark."""
+    src = telemetry.probe_sources()
+    t = Table(title="Telemetry sources")
+    t.add_column("Source")
+    t.add_column("Status")
+    t.add_column("Value")
+    t.add_column("Read cost", style="dim")
+
+    g = src["gpu_load_sysfs"]
+    t.add_row("GPU load (sysfs)",
+              f"[green]ok[/green] [dim]{g['path']}[/dim]" if g["value_percent"] is not None
+              else "[yellow]not found[/yellow]",
+              f"{g['value_percent']}%" if g["value_percent"] is not None else "-",
+              f"{g['read_ms']} ms")
+
+    pw = src["power_ina3221"]
+    if pw["total_w"] is not None:
+        status, value = "[green]ok[/green]", f"{pw['total_w']:.2f} W ({pw['method']})"
+    elif pw["rails_found"]:
+        status, value = f"[red]{pw['error']}[/red]", ", ".join(pw["rails_found"])
+    else:
+        status, value = "[yellow]no INA3221 in sysfs[/yellow]", "-"
+    t.add_row("Power (INA3221 sysfs)", status, value, f"{pw['read_ms']} ms")
+
+    th = src["thermal_zones"]
+    t.add_row("Thermal zones", "[green]ok[/green]" if th["count"] else "[yellow]none[/yellow]",
+              f"{th['count']} zones, max {th['max_c']} C" if th["count"] else "-",
+              f"{th['read_ms']} ms")
+
+    tg = src["tegrastats"]
+    if not tg["available"]:
+        t.add_row("tegrastats", "[dim]not installed[/dim]", "-", "-")
+    elif tg["first_line_s"] is None:
+        t.add_row("tegrastats", "[red]no output within 3 s[/red]", "-", "-")
+    else:
+        rails = ", ".join(f"{k} {v:.0f} mW" for k, v in tg["rails_mw"].items()) or "no power rails"
+        t.add_row("tegrastats", "[green]ok[/green]", f"GPU {tg['gpu_percent']}% · {rails}",
+                  f"first line {tg['first_line_s']} s")
+    console.print(t)
 
 
 @app.command()
@@ -406,7 +453,14 @@ def compare(
             "These runs were taken in DIFFERENT environments, so differences below may "
             "come from the environment, not from your change:\n" + lines,
             title="⚠️  Environment mismatch", style="yellow", border_style="yellow"))
-    elif env["comparable"] is None:
+    if result.get("requirements_differences"):
+        lines = "\n".join(f"  {d['label']}: {d['before']} -> {d['after']}"
+                          for d in result["requirements_differences"])
+        console.print(Panel(
+            "These runs measured DIFFERENT requirements, so deadline/miss figures are "
+            "not comparable:\n" + lines,
+            title="ℹ️  Different experiments", style="cyan", border_style="cyan"))
+    if env["comparable"] is None:
         console.print("[dim]Environment not recorded in one or both files (pre-v0.1.0); "
                       "cannot check that the runs are comparable.[/dim]")
 

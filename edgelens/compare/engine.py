@@ -19,13 +19,20 @@ REGRESSION_FPS_DROP_PCT = 5.0
 REGRESSION_LATENCY_RISE_PCT = 5.0
 # Absolute rise in deadline miss ratio (percentage points) that is a regression.
 REGRESSION_MISS_RATIO_RISE_PP = 0.1
+# A stage is only named as "the" regression when it added at least this much
+# time, absolute and relative to the before-run's total. A 0.014 -> 0.050 ms
+# copy is +257% but it is noise, not the cause (seen on a real Nano run).
+MIN_STAGE_REGRESSION_MS = 0.05
+MIN_STAGE_REGRESSION_SHARE = 0.01
 
 # Environment fields compared, with readable labels.
 _ENV_FIELDS = (
     ("board", "board"), ("l4t", "L4T/JetPack"), ("cuda", "CUDA"), ("tensorrt", "TensorRT"),
     ("python", "Python"), ("power_mode", "power mode (nvpmodel)"),
-    ("cpu_clocks_locked", "CPU clocks locked (jetson_clocks)"),
-    ("gpu_clocks_locked", "GPU clocks locked (jetson_clocks)"), ("packages", "package versions"),
+    # min == max frequency: set by `jetson_clocks`, but ALSO by fixed-frequency
+    # nvpmodel modes (e.g. the Nano's 5W mode) — so say "pinned", not "jetson_clocks".
+    ("cpu_clocks_locked", "CPU clocks pinned (min = max frequency)"),
+    ("gpu_clocks_locked", "GPU clocks pinned (min = max frequency)"), ("packages", "package versions"),
 )
 
 
@@ -106,7 +113,9 @@ def compare(before, after):
             "status": ("added" if b_ms is None else "removed" if a_ms is None else "both"),
         }
 
-    verdict, reasons = _verdict(metric_deltas, stage_deltas)
+    before_total = sum(v for v in b_stages.values() if v) or 0.0
+    verdict, reasons = _verdict(metric_deltas, stage_deltas, before_total)
+    req_diff = requirements_diff(before, after)
     env_diff = environment_diff(before, after)
     b_id, a_id = before.get("identity") or {}, after.get("identity") or {}
 
@@ -124,13 +133,31 @@ def compare(before, after):
             "before_environment_id": b_id.get("environment_id"),
             "after_environment_id": a_id.get("environment_id"),
         },
+        "requirements_differences": req_diff,
         "same_experiment": (b_id.get("experiment_id") == a_id.get("experiment_id")
                             if b_id.get("experiment_id") and a_id.get("experiment_id") else None),
         "run_ids": [b_id.get("run_id"), a_id.get("run_id")],
     }
 
 
-def _verdict(metric_deltas, stage_deltas):
+def requirements_diff(before, after):
+    """Differences in what was being asked of the runs (deadline, period,
+    pacing, pack). Miss ratios against different deadlines don't compare."""
+    diffs = []
+    b_req, a_req = before.get("requirements") or {}, after.get("requirements") or {}
+    for key, label in (("deadline_ms", "deadline (ms)"), ("period_ms", "period (ms)"),
+                       ("paced", "paced")):
+        if b_req.get(key) != a_req.get(key):
+            diffs.append({"field": key, "label": label,
+                          "before": b_req.get(key), "after": a_req.get(key)})
+    b_pack = (before.get("pipeline") or {}).get("pack")
+    a_pack = (after.get("pipeline") or {}).get("pack")
+    if b_pack != a_pack:
+        diffs.append({"field": "pack", "label": "pack", "before": b_pack, "after": a_pack})
+    return diffs
+
+
+def _verdict(metric_deltas, stage_deltas, before_total=0.0):
     reasons = []
 
     fps_change = (metric_deltas.get("fps") or {}).get("pct_change")
@@ -149,14 +176,23 @@ def _verdict(metric_deltas, stage_deltas):
                            f"({miss['before']*100:.2f}% -> {miss['after']*100:.2f}%)")
 
     if reasons:
-        # Point at the number: the stage with the largest latency increase.
-        worst_stage, worst_pct = None, 0
+        # Point at the cause: the stage that added the most MILLISECONDS,
+        # ignoring negligible ones (big percentages of tiny stages are noise).
+        floor = max(MIN_STAGE_REGRESSION_MS, MIN_STAGE_REGRESSION_SHARE * before_total)
+        worst_stage, worst_ms = None, 0.0
         for stage, d in stage_deltas.items():
-            pct = d["pct_change"]
-            if pct is not None and pct > worst_pct:
-                worst_stage, worst_pct = stage, pct
+            if d["before_ms"] is None or d["after_ms"] is None:
+                continue
+            added = d["after_ms"] - d["before_ms"]
+            if added >= floor and added > worst_ms:
+                worst_stage, worst_ms = stage, added
         if worst_stage:
-            reasons.append(f"Largest stage regression: {worst_stage} (+{worst_pct:.1f}%)")
+            d = stage_deltas[worst_stage]
+            reasons.append(f"Largest stage regression: {worst_stage} "
+                           f"(+{worst_ms:.2f} ms, {d['pct_change']:+.1f}%)")
+        else:
+            reasons.append("No single stage added a meaningful amount of time; look at "
+                           "end-to-end tail and the environment.")
         return "REGRESSION", reasons
 
     return "PASS", reasons

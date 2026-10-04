@@ -36,6 +36,30 @@
 - `report` uses the environment captured at benchmark time.
 - `fingerprint_id` is now an alias of `environment_id`.
 
+### Added after Jetson Nano validation
+- `doctor` prints a *Telemetry sources* table (GPU load, INA3221 power,
+  thermal zones, tegrastats) with values and read cost.
+- Diagnosis `CLOCKS_NOT_PINNED`: long tail with unpinned clocks on Jetson
+  (from a real Nano run: p99 148 ms unpinned vs 9.4 ms pinned).
+- `service_latency` in results; `compare` flags runs with different
+  requirements (deadline/period/pacing/pack).
+
+### Fixed after Jetson Nano validation
+- Paced mode: real-time factor used response time (incl. queueing) and the
+  hop period instead of service time and the actual period (Nano run showed
+  RTF 10.4 instead of ~2.7). An explicit `--period-ms` now also sets the
+  default deadline.
+- `compare` named a 0.014 -> 0.050 ms copy (+257%) as the largest
+  regression; stages are now ranked by milliseconds added, ignoring noise.
+- Clock fields are labelled "pinned (min = max)": the Nano's 5W nvpmodel
+  mode pins CPU clocks too, so "jetson_clocks" was a wrong attribution.
+- Sampler cost is reported as CPU time (`sampler_cpu_ms_mean`); wall time
+  (incl. GIL waits) is kept as `sampler_wall_ms_mean`.
+- tegrastats is run line-buffered (`stdbuf -oL`) so parsed lines arrive on
+  time through a pipe; a power sensor that is listed but unreadable falls
+  back to tegrastats instead of silently disabling power.
+- Non-Jetson notice no longer claims everything runs in demo mode.
+
 ### Fixed
 - Multi-input ONNX models crashed with a raw `ValueError`.
 - Non-image dynamic dimensions were silently set to 224.

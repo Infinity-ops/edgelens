@@ -37,7 +37,7 @@ probability and it is not one. Rules use stage ROLES, so they apply to any
 pipeline (vision, timeseries, custom), and scenario packs add their own
 findings. DEADLINE_MISSED fires for any run with a deadline.
 
-Verdict types: DEADLINE_MISSED, CPU_BOUND_PREPROCESS, INFERENCE_ON_CPU, MEMORY_TRANSFER_BOUND,
+Verdict types: DEADLINE_MISSED, CLOCKS_NOT_PINNED, CPU_BOUND_PREPROCESS, INFERENCE_ON_CPU, MEMORY_TRANSFER_BOUND,
 GPU_BOUND, THERMAL, MEMORY_BOUND, BALANCED.
 """
 
@@ -68,6 +68,9 @@ SINGLE_CORE_FRACTION = 0.8
 # see the module docstring for exactly why this happens.
 MIN_RELIABLE_SAMPLES = 3
 LOW_SAMPLE_STRENGTH_PENALTY = 0.5  # multiplier applied when below the floor
+
+# Tail/median ratio at which unpinned clocks are flagged on Jetson.
+TAIL_RATIO_DVFS = 3.0
 
 # Worst-case headroom at which bottleneck findings become informational.
 HEADROOM_DEMOTE_PCT = 50.0
@@ -278,6 +281,35 @@ def diagnose(benchmark_result):
                 "max_consecutive_misses": dl["max_consecutive_misses"],
                 "latency_p99_ms": lat.get("p99"), "dominant_stage": worst_stage,
             },
+        })
+
+    # Clock scaling (DVFS) on Jetson: with clocks not pinned, the governor
+    # ramps frequencies up and down under bursty load, which shows up as a
+    # long latency tail. Found on a real Nano: unpinned p99 148 ms vs p50
+    # 13 ms; after `jetson_clocks` p99 9.4 ms vs p50 6.5 ms.
+    env = benchmark_result.get("environment") or {}
+    lat = benchmark_result.get("latency") or {}
+    tail = lat.get("p99") if lat.get("p99") is not None else lat.get("max")
+    if (env.get("is_jetson") and lat.get("p50") and tail
+            and (env.get("cpu_clocks_locked") is False or env.get("gpu_clocks_locked") is False)
+            and (lat.get("n") or 0) >= 50 and tail >= TAIL_RATIO_DVFS * lat["p50"]):
+        ratio = tail / lat["p50"]
+        findings.append({
+            "type": "CLOCKS_NOT_PINNED",
+            "rank_score": round(min(0.8, 0.5 + ratio / 40), 2),
+            "detail": f"Tail latency is {ratio:.1f}x the median (p50 {lat['p50']} ms, "
+                      f"{'p99' if lat.get('p99') is not None else 'max'} {tail} ms) while "
+                      f"CPU/GPU clocks are not pinned. Frequency scaling ramping clocks "
+                      f"up and down is a likely cause on Jetson.",
+            "recommendation": "For benchmarks and before/after comparisons, pin clocks: "
+                              "`sudo jetson_clocks --store && sudo jetson_clocks` (undo with "
+                              "`sudo jetson_clocks --restore`). In production this tail is "
+                              "real: decide whether to pin clocks or the power mode.",
+            "evidence": {"cpu_clocks_pinned": env.get("cpu_clocks_locked"),
+                         "gpu_clocks_pinned": env.get("gpu_clocks_locked"),
+                         "power_mode": (env.get("power_mode") or {}).get("name"),
+                         "latency_p50_ms": lat["p50"], "latency_tail_ms": tail,
+                         "tail_to_median_ratio": round(ratio, 1)},
         })
 
     # A requirement that is met with plenty of headroom changes what the

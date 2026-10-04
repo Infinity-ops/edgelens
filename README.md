@@ -34,28 +34,58 @@ GPU load, board power and energy per window.)_
 
 ## Status of this release (v0.1.0)
 
-- **Validated on hardware:** Jetson Nano (JetPack 4.6 / L4T R32.7.6, Python
-  3.8 venv). Verified there: `doctor`, ONNX Runtime CPU and CUDA execution
-  providers (including the IOBinding H2D/inference/D2H path), and the
-  tegrastats GPU% reading. Two diagnosis rules (`INFERENCE_ON_CPU`,
-  single-core `CPU_BOUND_PREPROCESS`) came from those real runs.
-- **New in v0.1.0, not yet run on a physical board:** the sysfs GPU-load
-  reader, INA3221 power/energy (Nano iio and Orin hwmon layouts), the
-  persistent tegrastats stream, nvpmodel/clock-lock detection. They are
-  written against the documented kernel interfaces and covered by tests with
-  fake sysfs trees. `scripts/validate_on_jetson.sh` exercises all of them
-  and packs the raw outputs; v0.1.0 is tagged once that passes on the Nano.
-- Stage timing is wall-clock (`time.perf_counter_ns`). CUDA-event GPU-side
-  timing is on the roadmap.
-- Power figures are on-module INA3221 sensor readings, reported with their
-  method (`input_rail` or `sum_of_rails`). They are not a calibrated power
-  meter, and `sum_of_rails` (AGX Orin) excludes the carrier board.
-- Percentiles are only reported when the sample count supports them (p99
-  needs ≥100 samples, p99.9 needs ≥1000); otherwise they are shown as
-  "not reported" rather than invented.
-- `--demo` mode (synthetic data) is labelled everywhere: terminal, JSON
-  (`"mode": "demo"`) and the HTML report (banner and watermark).
-- Tested on Python 3.8 and 3.12.
+**Validated on a real Jetson Nano** (JetPack 4.6 / L4T R32.7.6, Python 3.8
+venv, ONNX Runtime CPU, CUDA and TensorRT providers):
+
+| Area | Verified on the Nano |
+| --- | --- |
+| Engine | `--model` (single and multi-input), `--pipeline` (vision and timeseries), observer mode, paced mode |
+| Statistics | per-stage and end-to-end latency, p50–p99.9, max, jitter, percentile sample-count rule |
+| Requirements | deadline met / missed / thin-margin detection, miss bursts, real-time factor |
+| Environment | power mode (nvpmodel) and clock pinning (jetson_clocks) detected; `compare --strict-env` exits 2 across MAXN vs 5W |
+| Telemetry | CPU, RAM, thermal zones, GPU load (sysfs) |
+| Outputs | JSON schema v1 with trace, telemetry series and identities; HTML report; compare exit codes |
+
+**Implemented, not yet verified on real hardware:**
+
+- **Board power and energy** (INA3221). Unit-tested against the documented
+  Nano and Orin sysfs layouts, but not yet confirmed on a board.
+  `edgelens doctor` shows a *Telemetry sources* table; if it says power
+  is not available on your board, please open an issue with that table.
+- **Jetson Orin** support in general (hwmon power layout, JetPack 5/6 GPU
+  load paths).
+
+**Known limits (by design in v0.1):**
+
+- Stage timing is host wall-clock (`time.perf_counter_ns`), stages run
+  sequentially in one thread. GPU-side CUDA-event timing and concurrent
+  stages come later.
+- The telemetry sampler is a Python thread in the measured process. Its
+  CPU cost per sample is reported in every result (`sampler_cpu_ms_mean`)
+  so the observer effect is visible, not hidden.
+- Power figures are on-module sensor readings with their method
+  (`input_rail` / `sum_of_rails`), not a calibrated power meter.
+- No built-in camera, video, audio or CAN readers: your own capture code
+  becomes the first stage (or use observer mode in your existing loop).
+  Recorded signals can be replayed with `WindowSource`.
+
+## Real results on a Jetson Nano
+
+Measured with this release (`tests/fixtures/small_cnn.onnx`, 300 iterations
+unless noted):
+
+| Run | Mean | p99 | What EdgeLens reported |
+| --- | --- | --- | --- |
+| CPU provider, MAXN | 27.8 ms | 30.3 ms | `INFERENCE_ON_CPU`: 92% of the time is CPU inference |
+| CPU provider, 5W mode | 86.8 ms | 184.3 ms | `compare --strict-env`: environment mismatch (power mode), exit 2 |
+| TensorRT, clocks not pinned (100 it.) | 17.8 ms | 148.1 ms | tail is 11x the median; clocks not pinned |
+| TensorRT, after `jetson_clocks` (100 it.) | 6.8 ms | 9.4 ms | 2.6x faster mean, 16x lower p99 |
+| Timeseries pipeline (10 kHz, 1024/512 window), 2,000 windows | 5.4 ms | 8.4 ms | real-time factor 0.11; 0 of 2,000 deadline misses at 51.2 ms; p99.9 10.5 ms |
+| Same, released every 2 ms (`--pace`) | — | — | cannot keep up: queue grows to ~1 s; measured, not simulated |
+
+The clock-pinning row is the kind of thing EdgeLens exists for: same board,
+same model, same code, and a 16x difference in tail latency that FPS alone
+would never show.
 
 ## Install
 
@@ -162,7 +192,7 @@ Third-party packs: subclass `edgelens.packs.Pack` and call
 
 | Command                                   | Purpose                                                                                                                  |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `edgelens doctor`                         | Hardware + software fingerprint (board, JetPack/L4T, CUDA, TensorRT, ORT providers, packages)                              |
+| `edgelens doctor`                         | Hardware + software fingerprint (board, JetPack/L4T, CUDA, TensorRT, ORT providers, packages) and which telemetry sources work (GPU load, power, thermal, tegrastats) |
 | `edgelens monitor`                        | Live dashboard: CPU / GPU / RAM / temperatures / board power                                                             |
 | `edgelens benchmark`                      | `--model`, `--pipeline` or `--demo`; per-stage + end-to-end latency, tail, jitter, deadline, power/energy, trace          |
 | `edgelens diagnose`                       | Evidence-based verdict (deadline, bottleneck, thermal, memory, pack-specific) with categorical evidence strength          |
@@ -181,7 +211,8 @@ differ, with `--strict-env`), so it drops straight into CI.
 Every run (benchmark, observer, demo) writes the same JSON document:
 
 - `pipeline` — name, pack, stages with roles, config
-- `latency` — min / mean / std / p50 / p90 / p95 / p99 / p99.9 / max / jitter / tail spread (end-to-end, per iteration)
+- `latency` — min / mean / std / p50 / p90 / p95 / p99 / p99.9 / max / jitter / tail spread (end-to-end per iteration; response time incl. queueing in paced mode)
+- `service_latency` — the pipeline's own work per iteration (what capacity and real-time factor are computed from)
 - `stage_stats_ms` — the same statistics per stage
 - `requirements`, `deadline` — misses, miss ratio, worst overrun, longest miss burst, median slack
 - `backlog` — queueing estimate at the input period (labelled simulated; use `--pace` to measure it)
@@ -189,7 +220,7 @@ Every run (benchmark, observer, demo) writes the same JSON document:
 - `telemetry` + `telemetry_series` — mean/peak and the full timestamped samples (CPU, GPU, RAM, EMC, temperature, power), plus the sampler's own cost
 - `energy` — mean power, energy per iteration, iterations per joule, dynamic energy over idle
 - `trace` — one event per stage per iteration (`iter`, `stage`, `start_ns`, `dur_ns`, `thread`)
-- `environment` + `identity` — `environment_id` (board, JetPack, versions, **power mode, clock locking**), `experiment_id` (pipeline, config, model hash), `run_id`
+- `environment` + `identity` — `environment_id` (board, JetPack, versions, **power mode, clock pinning**), `experiment_id` (pipeline, config, model hash), `run_id`
 
 Pre-v0.1.0 files (no `schema_version`) still work with `diagnose`, `report`
 and `compare`.

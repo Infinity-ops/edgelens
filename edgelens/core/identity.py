@@ -74,8 +74,10 @@ def _min_eq_max(min_path, max_path):
 
 
 def detect_clock_locking():
-    """Heuristic for `jetson_clocks`: it pins min frequency to max. Reading
-    `jetson_clocks --show` needs root; these sysfs files don't."""
+    """True when min frequency == max frequency ("pinned"). `jetson_clocks`
+    does this, but so do fixed-frequency nvpmodel modes (verified on a Nano:
+    the 5W mode pins the CPU). Reading `jetson_clocks --show` needs root;
+    these sysfs files don't."""
     cpu = _min_eq_max("/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq",
                       "/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq")
     gpu = None

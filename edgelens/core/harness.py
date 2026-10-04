@@ -56,8 +56,10 @@ def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=No
     if iterations < 1:
         raise ValueError("iterations must be >= 1")
     pack, cfg = pipeline.pack, pipeline.config
+    # Precedence: explicit deadline > explicit period (an input arriving
+    # every P ms must finish within P ms) > the pack's default.
     if deadline_ms is None:
-        deadline_ms = pack.default_deadline_ms(cfg)
+        deadline_ms = period_ms if period_ms is not None else pack.default_deadline_ms(cfg)
     if period_ms is None:
         period_ms = pack.default_period_ms(cfg)
     if pace and not period_ms:
@@ -78,7 +80,7 @@ def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=No
     idle_w = measure_idle_power(idle_baseline_s) if idle_baseline_s else None
 
     samples = {s.name: [] for s in stages}
-    e2e, events = [], []
+    e2e, service, events = [], [], []
     truncated = False
     tid = threading.get_ident()
     recorder = None
@@ -98,6 +100,7 @@ def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=No
                 it_start = release           # response time counts from release
             else:
                 it_start = time.perf_counter_ns()
+            work_start = time.perf_counter_ns()  # service time excludes queueing
             for st in stages:
                 t0 = time.perf_counter_ns()
                 value = _call(st, value, it)
@@ -108,13 +111,16 @@ def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=No
                                    "dur_ns": t1 - t0, "thread": tid})
                 else:
                     truncated = True
-            e2e.append((time.perf_counter_ns() - it_start) / 1e6)
+            it_end = time.perf_counter_ns()
+            e2e.append((it_end - it_start) / 1e6)
+            service.append((it_end - work_start) / 1e6)
     finally:
         tel_summary = recorder.stop() if recorder else {}
         series = recorder.series() if recorder else []
 
     result = build_result(
         pipeline_desc=pipeline.describe(), stage_samples_ms=samples, e2e_ms=e2e,
+        service_ms=service,
         mode="hardware", pipeline_source=pipeline_source or f"pipeline:{pipeline.name}",
         telemetry_summary=tel_summary, telemetry_series=series, events=events,
         events_truncated=truncated, deadline_ms=deadline_ms, period_ms=period_ms,

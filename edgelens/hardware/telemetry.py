@@ -154,9 +154,14 @@ class TegrastatsStream:
     def start(self):
         if not self.available():
             return False
+        cmd = ["tegrastats", "--interval", str(int(self.interval_ms))]
+        if shutil.which("stdbuf"):
+            # Through a pipe, tegrastats' stdout is block-buffered, so parsed
+            # lines can arrive seconds late. Force line buffering.
+            cmd = ["stdbuf", "-oL"] + cmd
         try:
             self._proc = subprocess.Popen(
-                ["tegrastats", "--interval", str(int(self.interval_ms))],
+                cmd,
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 universal_newlines=True, bufsize=1,
             )
@@ -214,6 +219,7 @@ def read_gpu_percent_tegrastats():
 def snapshot(stream=None, power_reader=None):
     """One telemetry sample. Safe on any host (Jetson or not), non-blocking."""
     t0 = time.perf_counter()
+    c0 = time.thread_time()
     mem = psutil.virtual_memory()
     swap = psutil.swap_memory()
     teg = stream.latest() if stream is not None else None
@@ -243,7 +249,10 @@ def snapshot(stream=None, power_reader=None):
         "power_w": power_mod.total_power_w(rails) if rails else None,
         "timestamp": time.time(),
     }
+    # Wall time includes waiting for the GIL while the workload thread runs,
+    # so it overstates the sampler's real cost; CPU time is what it steals.
     sample["_cost_ms"] = (time.perf_counter() - t0) * 1000.0
+    sample["_cpu_ms"] = (time.thread_time() - c0) * 1000.0
     return sample
 
 
@@ -272,6 +281,10 @@ class TelemetryRecorder:
     def start(self):
         self._samples = []
         self._stop_event.clear()
+        # A sensor that is listed but can't be read (permissions, driver
+        # quirks) must not silently disable power: verify one real read.
+        if self._power is not None and self._power.available() and not self._power.read():
+            self._power = None
         want_stream = self._use_tegrastats
         if want_stream is None:
             # Only needed when sysfs can't give GPU load or power directly.
@@ -343,6 +356,7 @@ class TelemetryRecorder:
         mem_vals = column("mem_percent")
         emc_vals = column("emc_percent")
         costs = column("_cost_ms")
+        cpu_costs = column("_cpu_ms")
 
         temp_keys = set()
         for s in self._samples:
@@ -364,7 +378,10 @@ class TelemetryRecorder:
             # Wall-clock span from real timestamps, NOT n * interval_s.
             "duration_s": round(span, 2),
             "effective_interval_s": round(span / (n - 1), 3) if n > 1 else None,
-            "sampler_cost_ms_mean": round(statistics.mean(costs), 3) if costs else None,
+            # Observer effect, made visible: CPU time the sampler thread spent
+            # per sample, and the wall time a sample took (incl. GIL waits).
+            "sampler_cpu_ms_mean": round(statistics.mean(cpu_costs), 3) if cpu_costs else None,
+            "sampler_wall_ms_mean": round(statistics.mean(costs), 3) if costs else None,
             "cpu_percent_mean": mean(cpu_vals),
             "cpu_percent_peak": peak(cpu_vals),
             "gpu_percent_mean": mean(gpu_vals),
@@ -383,3 +400,56 @@ class TelemetryRecorder:
         }
         summary["power"] = power_mod.summarize_power(self._samples)
         return summary
+
+
+# --------------------------------------------------------------------------
+# source probe (for `edgelens doctor`)
+
+def _timed(fn):
+    t0 = time.perf_counter()
+    try:
+        value, err = fn(), None
+    except Exception as e:      # pragma: no cover - defensive
+        value, err = None, f"{type(e).__name__}: {e}"
+    return value, round((time.perf_counter() - t0) * 1000.0, 3), err
+
+
+def probe_sources(tegrastats_timeout_s=3.0):
+    """Which telemetry sources work on this host, their current values and
+    how long one read takes. This is what `edgelens doctor` prints, and the
+    first thing to look at when a metric shows up as n/a."""
+    out = {}
+    gpu_path = _find_gpu_load_path()
+    value, ms, err = _timed(read_gpu_percent_sysfs)
+    out["gpu_load_sysfs"] = {"path": gpu_path, "value_percent": value, "read_ms": ms,
+                             "error": err}
+
+    reader = power_mod.PowerReader()
+    rails, ms, err = _timed(reader.read)
+    total, method = power_mod.total_power(rails) if rails else (None, None)
+    out["power_ina3221"] = {"rails_found": reader.rails(), "rails_w": rails or {},
+                            "total_w": total, "method": method, "read_ms": ms,
+                            "error": err if err else (None if rails or not reader.rails()
+                                                      else "rails listed but unreadable")}
+
+    temps, ms, err = _timed(read_temps)
+    out["thermal_zones"] = {"count": len(temps), "max_c": max(temps.values()) if temps else None,
+                            "read_ms": ms, "error": err}
+
+    teg = {"available": TegrastatsStream.available(), "first_line_s": None,
+           "gpu_percent": None, "rails_mw": {}}
+    if teg["available"]:
+        stream = TegrastatsStream(interval_ms=200)
+        t0 = time.time()
+        if stream.start():
+            while time.time() - t0 < tegrastats_timeout_s:
+                latest = stream.latest()
+                if latest:
+                    teg["first_line_s"] = round(time.time() - t0, 2)
+                    teg["gpu_percent"] = latest.get("gpu_percent")
+                    teg["rails_mw"] = latest.get("rails_mw") or {}
+                    break
+                time.sleep(0.05)
+            stream.stop()
+    out["tegrastats"] = teg
+    return out

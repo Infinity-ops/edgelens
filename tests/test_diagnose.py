@@ -218,3 +218,26 @@ def test_comfortably_met_deadline_demotes_bottlenecks_to_informational():
     assert verdict["primary"]["type"] == "DEADLINE_MET"
     pre = next(f for f in verdict["all_findings"] if f["type"] == "CPU_BOUND_PREPROCESS")
     assert "Not a problem for the stated requirement" in pre["detail"]
+
+
+def _jetson_env(cpu_locked, gpu_locked):
+    return {"is_jetson": True, "cpu_clocks_locked": cpu_locked, "gpu_clocks_locked": gpu_locked,
+            "power_mode": {"id": 0, "name": "MAXN"}}
+
+
+def test_unpinned_clocks_with_long_tail_is_flagged():
+    # Real Nano numbers (TensorRT, small_cnn, 100 iterations, clocks not pinned)
+    result = _bench(stages={"preprocess": 6.156, "h2d_copy": 1.449, "inference": 9.608})
+    result["environment"] = _jetson_env(False, False)
+    result["latency"] = {"n": 100, "p50": 13.093, "p99": 148.088, "max": 188.471}
+    f = next(f for f in diagnose(result)["all_findings"] if f["type"] == "CLOCKS_NOT_PINNED")
+    assert f["evidence"]["tail_to_median_ratio"] == 11.3
+    assert "jetson_clocks" in f["recommendation"]
+
+
+def test_pinned_clocks_or_tight_tail_is_not_flagged():
+    # Same board after `sudo jetson_clocks`: p99 9.404 vs p50 6.544
+    result = _bench(stages={"preprocess": 2.08, "h2d_copy": 0.885, "inference": 3.47})
+    result["environment"] = _jetson_env(True, True)
+    result["latency"] = {"n": 100, "p50": 6.544, "p99": 9.404, "max": 18.196}
+    assert all(f["type"] != "CLOCKS_NOT_PINNED" for f in diagnose(result)["all_findings"])

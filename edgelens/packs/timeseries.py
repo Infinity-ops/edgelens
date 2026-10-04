@@ -72,34 +72,41 @@ class TimeseriesPack(Pack):
 
     def metrics(self, result):
         cfg = (result.get("pipeline") or {}).get("config") or {}
-        period = cfg.get("hop_period_ms")
-        lat = result.get("latency") or {}
-        if not period or not lat.get("n"):
+        req = result.get("requirements") or {}
+        # The period inputs actually arrived at: an explicit --period-ms wins
+        # over the hop period derived from sample_rate/hop.
+        period = req.get("period_ms") or cfg.get("hop_period_ms")
+        svc = result.get("service_latency") or result.get("latency") or {}
+        if not period or not svc.get("n"):
             return {}
 
         def rtf(v):
             return None if v is None else round(v / period, 4)
 
-        mean = lat["mean"]
+        mean = svc["mean"]
+        sr = cfg.get("sample_rate_hz")
         return {
-            "hop_period_ms": period,
+            "period_ms": period,
+            "hop_period_ms": cfg.get("hop_period_ms"),
             "window_duration_ms": cfg.get("window_duration_ms"),
             "overlap_pct": cfg.get("overlap_pct"),
-            "real_time_factor": {"mean": rtf(mean), "p99": rtf(lat.get("p99")),
-                                 "max": rtf(lat.get("max"))},
+            # RTF = SERVICE time / period. Never response time: in paced mode
+            # that includes queueing and would overstate the factor.
+            "real_time_factor": {"mean": rtf(mean), "p99": rtf(svc.get("p99")),
+                                 "max": rtf(svc.get("max"))},
             "keeps_up_on_average": mean < period,
             "headroom_pct": round(100.0 * (1 - mean / period), 2),
-            # Highest sample rate this pipeline could sustain on average with
-            # the same window/hop: sample_rate / RTF.
-            "max_sustainable_sample_rate_hz": (round(cfg["sample_rate_hz"] * period / mean, 1)
-                                               if mean > 0 else None),
+            # Highest sample rate sustainable on average with this window/hop.
+            "max_sustainable_sample_rate_hz": (round(sr * cfg["hop_period_ms"] / mean, 1)
+                                               if (sr and cfg.get("hop_period_ms") and mean > 0)
+                                               else None),
         }
 
     def findings(self, result):
         m = (result.get("pack_metrics") or {})
-        if not m.get("hop_period_ms"):
+        if not m.get("period_ms"):
             return []
-        period = m["hop_period_ms"]
+        period = m["period_ms"]
         r = m["real_time_factor"]
         backlog = result.get("backlog") or {}
         out = []
@@ -115,7 +122,7 @@ class TimeseriesPack(Pack):
                                   "move filtering/FFT to the GPU, or use a lighter model. "
                                   f"At this speed the pipeline sustains about "
                                   f"{m.get('max_sustainable_sample_rate_hz')} Hz.",
-                "evidence": {"real_time_factor_mean": r["mean"], "hop_period_ms": period,
+                "evidence": {"real_time_factor_mean": r["mean"], "period_ms": period,
                              "max_sustainable_sample_rate_hz": m.get("max_sustainable_sample_rate_hz")},
             })
         elif r["max"] is not None and r["max"] >= 1.0:
@@ -123,7 +130,7 @@ class TimeseriesPack(Pack):
                 "type": "TAIL_OVERRUNS_HOP",
                 "rank_score": 0.7,
                 "detail": f"On average the pipeline keeps up (RTF {r['mean']:.2f}), but "
-                          f"the slowest windows take {r['max']:.2f}x the hop period, so "
+                          f"the slowest windows take {r['max']:.2f}x the input period, so "
                           f"short backlogs form behind them.",
                 "recommendation": "Look for periodic stalls (GC, thermal, other processes) "
                                   "in the trace; pin threads or raise priority; buffer at "
