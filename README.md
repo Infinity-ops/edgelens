@@ -6,6 +6,7 @@
 [![PyPI](https://img.shields.io/pypi/v/edgelens.svg)](https://pypi.org/project/edgelens/)
 [![Python](https://img.shields.io/pypi/pyversions/edgelens.svg)](https://pypi.org/project/edgelens/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![EdgeLens Demo](https://raw.githubusercontent.com/Infinity-ops/edgelens/main/docs/assets/edgelens-demo.gif)
 
 > Same Jetson Nano, same model, same code: **p99 latency 148 ms → 9.4 ms**
 > after pinning clocks. FPS never showed it. EdgeLens did.
@@ -70,21 +71,21 @@ flowchart LR
 **Validated on a real Jetson Nano** (JetPack 4.6 / L4T R32.7.6, Python 3.8
 venv, ONNX Runtime CPU, CUDA and TensorRT providers):
 
-| Area | Verified on the Nano |
-| --- | --- |
-| Engine | `--model` (single and multi-input), `--pipeline` (vision and timeseries), observer mode, paced mode |
-| Statistics | per-stage and end-to-end latency, p50–p99.9, max, jitter, percentile sample-count rule |
-| Requirements | deadline met / missed / thin-margin detection, miss bursts, real-time factor |
-| Environment | power mode (nvpmodel) and clock pinning (jetson_clocks) detected; `compare --strict-env` exits 2 across MAXN vs 5W |
-| Telemetry | CPU, RAM, thermal zones, GPU load (sysfs) |
+| Area           | Verified on the Nano                                                                                                                                     |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Engine         | `--model` (single and multi-input), `--pipeline` (vision and timeseries), observer mode, paced mode                                                      |
+| Statistics     | per-stage and end-to-end latency, p50–p99.9, max, jitter, percentile sample-count rule                                                                   |
+| Requirements   | deadline met / missed / thin-margin detection, miss bursts, real-time factor                                                                             |
+| Environment    | power mode (nvpmodel) and clock pinning (jetson_clocks) detected; `compare --strict-env` exits 2 across MAXN vs 5W                                       |
+| Telemetry      | CPU, RAM, thermal zones, GPU load (sysfs)                                                                                                                |
 | Power & energy | INA3221 `POM_5V_IN` read from sysfs: 4.2 W mean, 51.3 mJ per inference (TensorRT, small CNN). Needs root or a one-time `chmod` on JetPack 4.6, see below |
-| Outputs | JSON schema v1 with trace, telemetry series and identities; HTML report; compare exit codes |
+| Outputs        | JSON schema v1 with trace, telemetry series and identities; HTML report; compare exit codes                                                              |
 
 **Implemented, not yet verified on real hardware:**
 
 - **Jetson Orin** support in general (hwmon power layout, JetPack 5/6 GPU
   load paths). Unit-tested against the documented layouts only.
-  `edgelens doctor` shows a *Telemetry sources* table; if a source is
+  `edgelens doctor` shows a _Telemetry sources_ table; if a source is
   missing on your board, please open an issue with that table.
 
 **Known limits (by design in v0.1):**
@@ -112,15 +113,15 @@ venv, ONNX Runtime CPU, CUDA and TensorRT providers):
 Measured with this release (`tests/fixtures/small_cnn.onnx`, 300 iterations
 unless noted):
 
-| Run | Mean | p99 | What EdgeLens reported |
-| --- | --- | --- | --- |
-| CPU provider, MAXN | 27.8 ms | 30.3 ms | `INFERENCE_ON_CPU`: 92% of the time is CPU inference |
-| CPU provider, 5W mode | 86.8 ms | 184.3 ms | `compare --strict-env`: environment mismatch (power mode), exit 2 |
-| TensorRT, clocks not pinned (100 it.) | 17.8 ms | 148.1 ms | tail is 11x the median; clocks not pinned |
-| TensorRT, after `jetson_clocks` (100 it.) | 6.8 ms | 9.4 ms | 2.6x faster mean, 16x lower p99 |
-| TensorRT, with board power (clocks not pinned) | 14.2 ms | 113.4 ms | 4.2 W mean · 51.3 mJ per inference · 19.5 inferences per joule |
-| Timeseries pipeline (10 kHz, 1024/512 window), 2,000 windows | 5.4 ms | 8.4 ms | real-time factor 0.11; 0 of 2,000 deadline misses at 51.2 ms; p99.9 10.5 ms |
-| Same, released every 2 ms (`--pace`) | — | — | cannot keep up: queue grows to ~1 s; measured, not simulated |
+| Run                                                          | Mean    | p99      | What EdgeLens reported                                                      |
+| ------------------------------------------------------------ | ------- | -------- | --------------------------------------------------------------------------- |
+| CPU provider, MAXN                                           | 27.8 ms | 30.3 ms  | `INFERENCE_ON_CPU`: 92% of the time is CPU inference                        |
+| CPU provider, 5W mode                                        | 86.8 ms | 184.3 ms | `compare --strict-env`: environment mismatch (power mode), exit 2           |
+| TensorRT, clocks not pinned (100 it.)                        | 17.8 ms | 148.1 ms | tail is 11x the median; clocks not pinned                                   |
+| TensorRT, after `jetson_clocks` (100 it.)                    | 6.8 ms  | 9.4 ms   | 2.6x faster mean, 16x lower p99                                             |
+| TensorRT, with board power (clocks not pinned)               | 14.2 ms | 113.4 ms | 4.2 W mean · 51.3 mJ per inference · 19.5 inferences per joule              |
+| Timeseries pipeline (10 kHz, 1024/512 window), 2,000 windows | 5.4 ms  | 8.4 ms   | real-time factor 0.11; 0 of 2,000 deadline misses at 51.2 ms; p99.9 10.5 ms |
+| Same, released every 2 ms (`--pace`)                         | —       | —        | cannot keep up: queue grows to ~1 s; measured, not simulated                |
 
 The clock-pinning row is the kind of thing EdgeLens exists for: same board,
 same model, same code, and a 16x difference in tail latency that FPS alone
@@ -149,11 +150,11 @@ pip install -e ".[dev,onnx]"       # on Jetson: pip install -e ".[dev]"
 python -m pytest -q
 ```
 
-| Extra      | Adds                         | When you need it                          |
-| ---------- | ---------------------------- | ----------------------------------------- |
-| `dev`      | `pytest`                     | Running `tests/`                          |
-| `onnx`     | `onnxruntime` (CPU)          | `--model` on a non-Jetson host            |
-| `fixtures` | `onnx` (the model library)   | Only to regenerate the test `.onnx` files |
+| Extra      | Adds                       | When you need it                          |
+| ---------- | -------------------------- | ----------------------------------------- |
+| `dev`      | `pytest`                   | Running `tests/`                          |
+| `onnx`     | `onnxruntime` (CPU)        | `--model` on a non-Jetson host            |
+| `fixtures` | `onnx` (the model library) | Only to regenerate the test `.onnx` files |
 
 `onnx` is kept out of `dev` on purpose: recent releases pull in
 `protobuf>=6`, which broke sibling packages pinned to protobuf 5.x in real
@@ -228,25 +229,25 @@ diagnosis rules in that scenario's language. Stages carry a **role**
 `other`), inferred from the name or set explicitly, so the generic
 diagnosis rules work for every pipeline.
 
-| Pack         | For                                         | Adds                                                                                                       |
-| ------------ | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `vision`     | camera / video / image                      | classic 6-stage template; `target_fps` → frame budget as deadline; `BELOW_TARGET_FPS`                      |
-| `timeseries` | sensor, vibration, audio, IMU, CAN          | `sample_rate_hz`/`window`/`hop` → hop period as deadline; real-time factor, headroom, max sustainable rate; `CANNOT_KEEP_UP`, `TAIL_OVERRUNS_HOP`, `HIGH_OVERLAP_COST`; `WindowSource` replay |
-| `custom`     | anything else                               | generic metrics and rules                                                                                  |
+| Pack         | For                                | Adds                                                                                                                                                                                          |
+| ------------ | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vision`     | camera / video / image             | classic 6-stage template; `target_fps` → frame budget as deadline; `BELOW_TARGET_FPS`                                                                                                         |
+| `timeseries` | sensor, vibration, audio, IMU, CAN | `sample_rate_hz`/`window`/`hop` → hop period as deadline; real-time factor, headroom, max sustainable rate; `CANNOT_KEEP_UP`, `TAIL_OVERRUNS_HOP`, `HIGH_OVERLAP_COST`; `WindowSource` replay |
+| `custom`     | anything else                      | generic metrics and rules                                                                                                                                                                     |
 
 Third-party packs: subclass `edgelens.packs.Pack` and call
 `el.register_pack(MyPack())`.
 
 ## Commands
 
-| Command                                   | Purpose                                                                                                                  |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Command                                   | Purpose                                                                                                                                                               |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `edgelens doctor`                         | Hardware + software fingerprint (board, JetPack/L4T, CUDA, TensorRT, ORT providers, packages) and which telemetry sources work (GPU load, power, thermal, tegrastats) |
-| `edgelens monitor`                        | Live dashboard: CPU / GPU / RAM / temperatures / board power                                                             |
-| `edgelens benchmark`                      | `--model`, `--pipeline` or `--demo`; per-stage + end-to-end latency, tail, jitter, deadline, power/energy, trace          |
-| `edgelens diagnose`                       | Evidence-based verdict (deadline, bottleneck, thermal, memory, pack-specific) with categorical evidence strength          |
-| `edgelens report`                         | Self-contained HTML report, attachable to an issue                                                                        |
-| `edgelens compare before.json after.json` | Before/after diff of any pipeline; PASS/REGRESSION; warns when the environment differs (`--strict-env` → exit code 2)       |
+| `edgelens monitor`                        | Live dashboard: CPU / GPU / RAM / temperatures / board power                                                                                                          |
+| `edgelens benchmark`                      | `--model`, `--pipeline` or `--demo`; per-stage + end-to-end latency, tail, jitter, deadline, power/energy, trace                                                      |
+| `edgelens diagnose`                       | Evidence-based verdict (deadline, bottleneck, thermal, memory, pack-specific) with categorical evidence strength                                                      |
+| `edgelens report`                         | Self-contained HTML report, attachable to an issue                                                                                                                    |
+| `edgelens compare before.json after.json` | Before/after diff of any pipeline; PASS/REGRESSION; warns when the environment differs (`--strict-env` → exit code 2)                                                 |
 
 Useful `benchmark` flags: `--deadline-ms`, `--period-ms`, `--pace`,
 `--idle-baseline SECONDS` (measures idle power first, then reports the
@@ -286,12 +287,12 @@ large headroom, bottleneck findings are marked as "where to optimise", not
 
 ## Why not just jtop / Nsight / trtexec?
 
-| Tool                  | Answers                                                                     |
-| --------------------- | --------------------------------------------------------------------------- |
-| jetson-stats (jtop)   | What is my board doing right now?                                           |
-| Nsight Systems        | What is my whole system doing, at the CUDA level?                           |
-| trtexec               | How fast is this one engine?                                                |
-| **EdgeLens**          | **Does my application meet its budget, why not, what does it cost in energy, and did my change help?** |
+| Tool                | Answers                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------ |
+| jetson-stats (jtop) | What is my board doing right now?                                                                      |
+| Nsight Systems      | What is my whole system doing, at the CUDA level?                                                      |
+| trtexec             | How fast is this one engine?                                                                           |
+| **EdgeLens**        | **Does my application meet its budget, why not, what does it cost in energy, and did my change help?** |
 
 EdgeLens does not replace them, and it does not import jetson-stats (AGPL);
 it reads the same kernel interfaces directly and stays MIT.
