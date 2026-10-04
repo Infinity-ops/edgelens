@@ -1,6 +1,22 @@
 # EdgeLens
 
-**Measure, diagnose and validate AI pipelines on edge devices.**
+**Measure. Diagnose. Validate. Edge AI performance engineering for real pipelines.**
+
+[![tests](https://github.com/Infinity-ops/edgelens/actions/workflows/tests.yml/badge.svg)](https://github.com/Infinity-ops/edgelens/actions/workflows/tests.yml)
+[![PyPI](https://img.shields.io/pypi/v/edgelens.svg)](https://pypi.org/project/edgelens/)
+[![Python](https://img.shields.io/pypi/pyversions/edgelens.svg)](https://pypi.org/project/edgelens/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+> Same Jetson Nano, same model, same code: **p99 latency 148 ms → 9.4 ms**
+> after pinning clocks. FPS never showed it. EdgeLens did.
+> ([measured](#real-results-on-a-jetson-nano))
+
+```bash
+pip install edgelens
+edgelens doctor                                   # is this board set up right?
+edgelens benchmark --model model.onnx --deadline-ms 33
+edgelens diagnose                                 # why it is slow, with evidence
+```
 
 Most edge monitoring tools tell you _what_ the board is doing (CPU 47%, GPU
 92%, 61 °C). EdgeLens tells you **why your pipeline is slow, whether it meets
@@ -31,6 +47,23 @@ $ edgelens diagnose ts.json
 
 _(Real output, run on a laptop CPU. On a Jetson the same run also reports
 GPU load, board power and energy per window.)_
+
+## How it works
+
+```mermaid
+flowchart LR
+    A["Your pipeline<br/>model · camera · sensor · custom stages"] --> B["EdgeLens engine<br/>harness or observer mode"]
+    B --> C["Per-stage + end-to-end trace"]
+    B --> D["Telemetry<br/>CPU · GPU · RAM · thermal · power"]
+    B --> E["Environment<br/>JetPack · power mode · clocks"]
+    C --> F["Latency · tail · deadlines · energy"]
+    D --> F
+    F --> G["Diagnosis with evidence"]
+    E --> H["Fair compare<br/>PASS / REGRESSION"]
+    F --> H
+    G --> I["JSON + HTML report"]
+    H --> I
+```
 
 ## Status of this release (v0.1.0)
 
@@ -96,20 +129,30 @@ would never show.
 ## Install
 
 ```bash
-git clone https://github.com/Infinity-ops/edgelens
-cd edgelens
-pip install -e ".[dev,onnx]"     # core + pytest + onnxruntime (CPU)
+pip install edgelens               # core: any Linux host, Python 3.8+
+pip install "edgelens[onnx]"       # + onnxruntime (CPU) for --model
 ```
 
-On Jetson, use NVIDIA's JetPack-matched `onnxruntime-gpu` wheel instead of
-the PyPI `onnxruntime` for CUDA/TensorRT (see the
-[Jetson Zoo](https://elinux.org/Jetson_Zoo#ONNX_Runtime)). `edgelens doctor`
-tells you which execution providers you actually have.
+**On Jetson, don't install the `[onnx]` extra.** It pulls the CPU-only
+`onnxruntime` from PyPI, which replaces NVIDIA's GPU build. Install the
+JetPack-matched `onnxruntime-gpu` wheel (see the
+[Jetson Zoo](https://elinux.org/Jetson_Zoo#ONNX_Runtime)), then plain
+`pip install edgelens`. `edgelens doctor` shows which execution providers
+you actually have (you want `Tensorrt, CUDA, CPU`).
 
-| Extra      | Adds                         | When you need it                         |
-| ---------- | ---------------------------- | ---------------------------------------- |
-| `dev`      | `pytest`                     | Running `tests/`                         |
-| `onnx`     | `onnxruntime`                | `--model` with a real `.onnx` file       |
+From source (contributors):
+
+```bash
+git clone https://github.com/Infinity-ops/edgelens
+cd edgelens
+pip install -e ".[dev,onnx]"       # on Jetson: pip install -e ".[dev]"
+python -m pytest -q
+```
+
+| Extra      | Adds                         | When you need it                          |
+| ---------- | ---------------------------- | ----------------------------------------- |
+| `dev`      | `pytest`                     | Running `tests/`                          |
+| `onnx`     | `onnxruntime` (CPU)          | `--model` on a non-Jetson host            |
 | `fixtures` | `onnx` (the model library)   | Only to regenerate the test `.onnx` files |
 
 `onnx` is kept out of `dev` on purpose: recent releases pull in
@@ -252,6 +295,14 @@ large headroom, bottleneck findings are marked as "where to optimise", not
 
 EdgeLens does not replace them, and it does not import jetson-stats (AGPL);
 it reads the same kernel interfaces directly and stays MIT.
+
+## Contributing and citing
+
+Bug reports with `edgelens doctor` output from your board are the most
+valuable contribution right now, especially from Jetson Orin, Xavier and
+Orin Nano. See [CONTRIBUTING.md](CONTRIBUTING.md). If you use EdgeLens in
+research, please cite it ([CITATION.cff](CITATION.cff); GitHub's "Cite this
+repository" button).
 
 ## License
 

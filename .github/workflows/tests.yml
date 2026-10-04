@@ -1,0 +1,79 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      # Errors only (syntax errors, undefined names, unused imports...);
+      # no style rules imposed on contributors.
+      - run: ruff check --select E9,F edgelens tests examples
+
+  test:
+    # ubuntu-22.04: still ships Python 3.8 builds for setup-python, and
+    # 3.8 is what Jetson Nano users run in a venv.
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
+        extras: ["dev,onnx"]
+        include:
+          # Without onnxruntime: proves the ONNX tests skip cleanly and the
+          # core engine has no hidden dependency on it.
+          - python-version: "3.12"
+            extras: "dev"
+    name: test (py${{ matrix.python-version }}, ${{ matrix.extras }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[${{ matrix.extras }}]"
+      - run: python -m pytest -q -ra
+
+  package:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check --strict dist/*
+      # Install the built wheel in a clean venv (not the source tree) and run
+      # the CLI: catches missing packages/modules that editable installs hide.
+      - name: Smoke-test the wheel
+        run: |
+          python -m venv /tmp/wheel-venv
+          /tmp/wheel-venv/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/wheel-venv/bin/edgelens --help
+          /tmp/wheel-venv/bin/edgelens doctor
+          /tmp/wheel-venv/bin/edgelens benchmark --demo --iterations 20 --save /tmp/demo.json
+          /tmp/wheel-venv/bin/edgelens diagnose /tmp/demo.json
+          /tmp/wheel-venv/bin/python -c "import edgelens as el; p = el.Pipeline('smoke'); p.add_stage('a', lambda: None); print(p.run(iterations=5, warmup=0, telemetry=False)['schema_version'])"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

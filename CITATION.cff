@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use EdgeLens in your research, please cite it as below."
+title: "EdgeLens: measure, diagnose and validate AI pipelines on edge devices"
+type: software
+authors:
+  - family-names: Ambigapathy
+    given-names: Narmada
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/Infinity-ops/edgelens"
+keywords:
+  - edge AI
+  - NVIDIA Jetson
+  - performance engineering
+  - real-time
+  - latency
+  - energy efficiency
+abstract: >-
+  EdgeLens measures AI pipelines on edge devices stage by stage, reports tail
+  latency, deadline misses, power and energy, records the hardware/software
+  environment (including power mode and clock pinning) for reproducible
+  comparisons, and gives evidence-based bottleneck diagnoses.

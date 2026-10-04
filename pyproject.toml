@@ -12,19 +12,24 @@ license = { text = "MIT" }
 authors = [{ name = "EdgeLens contributors" }]
 keywords = ["jetson", "nvidia", "edge-ai", "profiling", "tensorrt", "cuda", "benchmark", "real-time", "energy", "latency", "deadline"]
 classifiers = [
-    # Pre-Alpha until scripts/validate_on_jetson.sh passes on the Nano for
-    # the new v0.1.0 hardware paths (sysfs GPU load, INA3221 power, persistent
-    # tegrastats, nvpmodel). The original paths were validated on a Nano
-    # (JetPack 4.6). Then bump to Alpha — see ROADMAP.md release gate.
+    # Alpha: every v0.1.0 hardware path passed scripts/validate_on_jetson.sh
+    # on a Jetson Nano (JetPack 4.6). Orin is implemented, not yet validated.
     # NOTE: license uses the TOML-table form `{ text = "MIT" }` on purpose:
     # the SPDX string form needs setuptools>=77, which doesn't support
     # Python 3.8. Newer setuptools accepts the
     # table form with a deprecation warning. Switch to `license = "MIT"`
     # when 3.8 support is dropped. No "License ::" classifier — deprecated.
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: System :: Benchmark",
     "Operating System :: POSIX :: Linux",
     "Topic :: Software Development :: Debuggers",
     "Topic :: System :: Hardware",
@@ -52,6 +57,7 @@ fixtures = ["onnx>=1.14.0"]
 Homepage = "https://github.com/Infinity-ops/edgelens"
 Repository = "https://github.com/Infinity-ops/edgelens"
 Issues = "https://github.com/Infinity-ops/edgelens/issues"
+Changelog = "https://github.com/Infinity-ops/edgelens/blob/main/CHANGELOG.md"
 
 [project.scripts]
 edgelens = "edgelens.cli:app"

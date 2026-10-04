@@ -69,9 +69,24 @@ tooling already measures — it does not re-implement it.
 - [x] `compare --strict-env` exits 2 across power modes
 - [x] CUDA and TensorRT provider runs; multi-input model; timeseries example;
       paced run; observer mode
-- [ ] Update README status, set `Development Status :: 3 - Alpha`, tag v0.1.0
+- [x] README status updated, `Development Status :: 3 - Alpha`
+- [x] CI: lint, tests on Python 3.8–3.13 (with and without onnxruntime),
+      wheel build + smoke test; release workflow (TestPyPI / PyPI)
+- [ ] Set the release date in CHANGELOG.md, tag v0.1.0, publish
+
+## Release themes
+
+| Release | Theme | One line |
+| --- | --- | --- |
+| v0.1 | **Measure** | Measure and diagnose real edge AI pipelines |
+| v0.2 | **Validate** | Prove a workload meets its performance contract, on Jetson AGX Orin (Industrial) |
+| v0.3 | **Understand the runtime** | Continuous workloads: queues, drops, concurrency, multiple models |
+| v0.4 | **Optimize** | Find the best configuration under your constraints |
 
 ## v0.2 — validate (performance contracts) + Orin depth
+
+- **First milestone: physical validation on Jetson AGX Orin Industrial**
+  (`scripts/validate_on_jetson.sh`), before any new Orin feature
 
 - Contract YAML (latency percentiles, deadline miss ratio, power, energy,
   quality) and `edgelens validate contract.yaml` with per-requirement

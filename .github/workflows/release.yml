@@ -1,0 +1,66 @@
+name: release
+
+# Publishing uses PyPI "trusted publishing" (OIDC): no API token is stored in
+# GitHub. One-time setup is described in CONTRIBUTING.md ("Releasing").
+#
+#   Run this workflow manually            -> TestPyPI (dry run)
+#   Publish a GitHub Release (tag v0.1.0)  -> PyPI
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build twine
+      - name: Tag must match the package version
+        if: github.event_name == 'release'
+        run: |
+          VERSION=$(python -c "import re,pathlib;print(re.search(r'^version = \"(.+?)\"', pathlib.Path('pyproject.toml').read_text(), re.M).group(1))")
+          test "v${VERSION}" = "${GITHUB_REF_NAME}" || { echo "Tag ${GITHUB_REF_NAME} != v${VERSION} in pyproject.toml"; exit 1; }
+      - run: python -m build
+      - run: twine check --strict dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  testpypi:
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-22.04
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  pypi:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-22.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

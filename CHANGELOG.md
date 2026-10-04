@@ -68,6 +68,14 @@
   `sudo edgelens` run) gives a one-line error with the `chown` fix instead
   of a traceback.
 
+### Project
+- GitHub Actions: lint, tests on Python 3.8–3.13 (with and without
+  onnxruntime), wheel build + clean-venv smoke test; release workflow with
+  PyPI trusted publishing (manual run -> TestPyPI, GitHub Release -> PyPI).
+- `CITATION.cff`, `CONTRIBUTING.md`, bug-report / hardware-report issue
+  forms, PR template. README: badges, `pip install edgelens` first,
+  architecture diagram, measured headline result. Classifier: Alpha.
+
 ### Fixed
 - Multi-input ONNX models crashed with a raw `ValueError`.
 - Non-image dynamic dimensions were silently set to 224.

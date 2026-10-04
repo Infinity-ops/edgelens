@@ -1,0 +1,27 @@
+name: Hardware report
+description: Share EdgeLens results from a board (works or not), especially Orin, Xavier, Orin Nano
+labels: [hardware]
+body:
+  - type: input
+    id: board
+    attributes:
+      label: Board and JetPack version
+      placeholder: "Jetson AGX Orin Industrial, JetPack 6.x"
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `edgelens doctor`
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation script result
+      description: Run `bash scripts/validate_on_jetson.sh` from a source checkout and attach the .tar.gz (drag it into this box), or paste steps.log.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything that looked wrong or missing
