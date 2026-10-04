@@ -102,3 +102,15 @@ def test_pre_v010_json_still_diagnoses_reports_and_compares(tmp_path):
 def test_monitor_runs_briefly():
     res = runner.invoke(app, ["monitor", "--duration", "1", "--interval", "0.2"])
     assert res.exit_code == 0, res.output
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root can write anywhere")
+def test_unwritable_save_path_gives_one_line_error_not_traceback(tmp_path):
+    # Real Nano case: power.json created by an earlier `sudo edgelens` run.
+    target = tmp_path / "power.json"
+    target.write_text("{}")
+    target.chmod(0o400)
+    res = runner.invoke(app, ["benchmark", "--demo", "--iterations", "5", "--save", str(target)])
+    assert res.exit_code == 1
+    assert "Could not write" in res.output and "chown" in res.output
+    assert "Traceback" not in res.output

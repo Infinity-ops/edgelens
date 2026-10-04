@@ -59,6 +59,14 @@
   time through a pipe; a power sensor that is listed but unreadable falls
   back to tegrastats instead of silently disabling power.
 - Non-Jetson notice no longer claims everything runs in demo mode.
+- Power on the Jetson Nano (JetPack 4.6): the INA3221 files are root-only
+  (mode 0600). This looked like "no INA3221 in sysfs"; EdgeLens now reports
+  `permission_denied` with a one-line `chmod` fix (covering the rail-name
+  files too) in `doctor` and after `benchmark`. Verified on a Nano: 4.2 W,
+  51.3 mJ per inference.
+- Writing an output file that is not writable (e.g. created by an earlier
+  `sudo edgelens` run) gives a one-line error with the `chown` fix instead
+  of a traceback.
 
 ### Fixed
 - Multi-input ONNX models crashed with a raw `ValueError`.

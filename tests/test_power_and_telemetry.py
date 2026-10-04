@@ -127,3 +127,48 @@ def test_probe_sources_shape():
     src = telemetry.probe_sources(tegrastats_timeout_s=0.1)
     assert set(src) == {"gpu_load_sysfs", "power_ina3221", "thermal_zones", "tegrastats"}
     assert "read_ms" in src["power_ina3221"]
+
+
+# --- root-only sensor files (real Jetson Nano, JetPack 4.6: mode 0600) ---
+
+import os
+
+needs_non_root = pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                                    reason="root can read mode-0600 files")
+
+
+def _nano_root_only(tmp_path):
+    glob_ = _make_nano_iio(tmp_path)
+    dev = tmp_path / "ina3221x" / "6-0040" / "iio:device0"
+    for f in dev.iterdir():
+        f.chmod(0o600 if f.name.startswith(("rail_name", "in_power")) else 0o644)
+        f.chmod(0o000)  # unreadable for this (non-root) user, like 0600 root:root on the Nano
+    return glob_
+
+
+@needs_non_root
+def test_root_only_sensor_is_reported_as_permission_denied_with_fix(tmp_path):
+    reader = power.PowerReader(iio_glob=_nano_root_only(tmp_path), hwmon_glob=str(tmp_path / "x*"))
+    assert not reader.available()
+    assert reader.permission_denied()
+    fix = reader.fix_command()
+    # one command must cover BOTH the values and the rail names
+    assert fix.startswith("sudo chmod o+r ")
+    assert "rail_name_*" in fix and "in_power*_input" in fix
+
+
+@needs_non_root
+def test_recorder_reports_reason_instead_of_silent_no_power(tmp_path):
+    reader = power.PowerReader(iio_glob=_nano_root_only(tmp_path), hwmon_glob=str(tmp_path / "x*"))
+    rec = telemetry.TelemetryRecorder(interval_s=0.02, use_tegrastats=False)
+    rec._power, rec._power_denied = reader, reader.denied
+    rec.start()
+    summary = rec.stop()
+    assert summary["power"]["available"] is False
+    assert summary["power"]["reason"] == "permission_denied"
+    assert "sudo chmod o+r" in summary["power"]["fix"]
+
+
+def test_readable_sensor_has_no_denied_files(tmp_path):
+    reader = power.PowerReader(iio_glob=_make_nano_iio(tmp_path), hwmon_glob=str(tmp_path / "x*"))
+    assert reader.available() and not reader.permission_denied() and reader.denied == []

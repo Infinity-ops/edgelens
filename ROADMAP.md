@@ -64,7 +64,7 @@ tooling already measures — it does not re-implement it.
 **Release gate — run `scripts/validate_on_jetson.sh` on the Nano:**
 
 - [x] sysfs GPU load node read correctly (Nano, JetPack 4.6)
-- [ ] INA3221 power: confirm with `edgelens doctor` → Telemetry sources
+- [x] INA3221 power on the Nano (root-only files detected, fix printed; 4.2 W / 51.3 mJ per inference)
 - [x] `nvpmodel` parsed (MAXN / 5W); clock pinning flips after `sudo jetson_clocks`
 - [x] `compare --strict-env` exits 2 across power modes
 - [x] CUDA and TensorRT provider runs; multi-input model; timeseries example;
@@ -77,6 +77,8 @@ tooling already measures — it does not re-implement it.
   quality) and `edgelens validate contract.yaml` with per-requirement
   PASS/FAIL and violation events
 - Stable, documented Python API
+- Non-root power access: optional systemd/udev helper so the INA3221 files
+  stay readable across reboots
 - Orin platform profile: DLA activity, EMC frequency, per-rail power,
   throttle detection, real thermal trip points instead of a fixed 80 C
 - `quality_metrics=` hook (quality × latency × energy, e.g. FP32 vs INT8)

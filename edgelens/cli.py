@@ -79,6 +79,23 @@ def _ort_providers_cell(is_jetson):
     return text
 
 
+def _write_or_exit(path, text):
+    """Write an output file, or explain the failure in one line (no traceback).
+    Typical case: the file was created by an earlier `sudo edgelens ...` run
+    and is owned by root."""
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(text)
+    except OSError as e:
+        hint = ""
+        if isinstance(e, PermissionError) and Path(path).exists():
+            hint = (f"\n'{path}' already exists and is not writable by you; if an earlier "
+                    f"run used sudo it is owned by root. Fix:  sudo chown $USER {path}  "
+                    f"or save elsewhere with --save.")
+        console.print(f"[red]Could not write {path}: {e.strerror or e}[/red]{hint}")
+        raise typer.Exit(1)
+
+
 def _ms(v):
     return "n/a" if v is None else f"{v:.3f}"
 
@@ -138,6 +155,10 @@ def _print_benchmark(result):
                       f"{pm['headroom_pct']}%)")
 
     en = result.get("energy") or {}
+    pw = (result.get("telemetry") or {}).get("power") or {}
+    if not en.get("available") and pw.get("reason") == "permission_denied":
+        console.print(f"[yellow]Power: sensor is root-only, not measured. Fix: "
+                      f"{pw.get('fix')}  (details: edgelens doctor)[/yellow]")
     if en.get("available"):
         line = (f"[bold]Power:[/bold] {en['power_w_mean']} W mean · "
                 f"[bold]Energy:[/bold] {en['energy_per_iteration_j']*1000:.2f} mJ/iteration · "
@@ -216,6 +237,8 @@ def _print_telemetry_sources():
     pw = src["power_ina3221"]
     if pw["total_w"] is not None:
         status, value = "[green]ok[/green]", f"{pw['total_w']:.2f} W ({pw['method']})"
+    elif pw.get("permission_denied"):
+        status, value = "[red]found, root-only[/red]", "see fix below"
     elif pw["rails_found"]:
         status, value = f"[red]{pw['error']}[/red]", ", ".join(pw["rails_found"])
     else:
@@ -237,6 +260,14 @@ def _print_telemetry_sources():
         t.add_row("tegrastats", "[green]ok[/green]", f"GPU {tg['gpu_percent']}% · {rails}",
                   f"first line {tg['first_line_s']} s")
     console.print(t)
+    if pw.get("permission_denied") and pw.get("fix"):
+        console.print(Panel(
+            "The board's power sensor (INA3221) exists but is readable by root only, so "
+            "power and energy are not reported. Make it readable (until the next reboot):\n\n"
+            f"  {pw['fix']}\n\n"
+            "Or run a single benchmark as root:  sudo $(which edgelens) benchmark ... "
+            "(files it saves will then be owned by root).",
+            title="Power: permission needed", style="yellow", border_style="yellow"))
 
 
 @app.command()
@@ -345,7 +376,7 @@ def benchmark(
 
     _print_benchmark(result)
 
-    Path(save).write_text(json.dumps(result, indent=2))
+    _write_or_exit(Path(save), json.dumps(result, indent=2))
     console.print(f"[green]Saved →[/green] {save}")
 
     if result["mode"] == "demo":
@@ -384,7 +415,7 @@ def diagnose(
                        f"({f['evidence_strength']} evidence) — {f['detail']}")
 
     out = path.with_suffix("").with_suffix(".diagnosis.json")
-    out.write_text(json.dumps(verdict, indent=2))
+    _write_or_exit(out, json.dumps(verdict, indent=2))
     console.print(f"[green]Saved →[/green] {out}")
 
     if data.get("mode") == "demo":
@@ -410,7 +441,7 @@ def report(
 
     out_path = generate_html_report(fingerprint, bench, verdict, output)
     fp_json_path = Path(output).with_suffix(".fingerprint.json")
-    fp_json_path.write_text(json.dumps(fingerprint, indent=2))
+    _write_or_exit(fp_json_path, json.dumps(fingerprint, indent=2))
 
     console.print(f"[green]Report saved →[/green] {out_path}")
     console.print(f"[green]Fingerprint saved →[/green] {fp_json_path}  "

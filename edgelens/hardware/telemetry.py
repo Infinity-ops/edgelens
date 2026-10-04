@@ -276,6 +276,7 @@ class TelemetryRecorder:
         self._stream = None
         self._use_tegrastats = use_tegrastats
         self._power = power_mod.PowerReader() if use_power else None
+        self._power_denied = self._power.denied if self._power is not None else []
         self.start_time = None
 
     def start(self):
@@ -398,7 +399,11 @@ class TelemetryRecorder:
             "mem_percent": mean(mem_vals),
             "temps_c": temps_mean,
         }
-        summary["power"] = power_mod.summarize_power(self._samples)
+        reason = fix = None
+        if self._power_denied:
+            reason = "permission_denied"
+            fix = power_mod.permission_fix_command(self._power_denied)
+        summary["power"] = power_mod.summarize_power(self._samples, reason, fix)
         return summary
 
 
@@ -429,6 +434,8 @@ def probe_sources(tegrastats_timeout_s=3.0):
     total, method = power_mod.total_power(rails) if rails else (None, None)
     out["power_ina3221"] = {"rails_found": reader.rails(), "rails_w": rails or {},
                             "total_w": total, "method": method, "read_ms": ms,
+                            "permission_denied": reader.permission_denied(),
+                            "fix": reader.fix_command(),
                             "error": err if err else (None if rails or not reader.rails()
                                                       else "rails listed but unreadable")}
 
