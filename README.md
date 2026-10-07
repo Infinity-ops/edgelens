@@ -92,7 +92,8 @@ pip install edgelens               # core: any Linux host, Python 3.8+
 pip install "edgelens[onnx]"       # + onnxruntime (CPU) for --model
 ```
 
-**On Jetson, don't install the `[onnx]` extra.** It pulls the CPU-only
+**On Jetson, don't install the `[onnx]` extra.** On JetPack 4.x, first run `python -m pip install --upgrade pip` inside a new venv:
+the pip that `python3.8 -m venv` creates is too old for current wheels and tries to compile NumPy. It pulls the CPU-only
 `onnxruntime` from PyPI, which replaces NVIDIA's GPU build. Install the
 JetPack-matched `onnxruntime-gpu` wheel (see the
 [Jetson Zoo](https://elinux.org/Jetson_Zoo#ONNX_Runtime)), then plain
