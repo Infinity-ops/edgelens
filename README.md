@@ -40,6 +40,7 @@ pip install edgelens
 edgelens doctor                                   # is this board ready to benchmark?
 edgelens benchmark --model model.onnx --deadline-ms 33
 edgelens diagnose                                 # why it is slow, with evidence
+edgelens validate --p99-ms 33 --max-miss-ratio 0.001   # PASS / FAIL against your requirement
 ```
 
 Most edge monitoring tools tell you _what_ the board is doing (CPU 47%, GPU
@@ -48,8 +49,8 @@ is a loop, and EdgeLens is built around it:
 
 | Question                                 | EdgeLens v0.1                                                                                                          | Coming                                                                                                         |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **Does my system meet its requirement?** | `benchmark --deadline-ms`: misses, miss bursts, p99.9, real-time factor                                                | v0.2: full performance contracts (latency, deadline, power, energy, quality) → `edgelens validate` PASS / FAIL |
-| **If not, why?**                         | `diagnose`: the limiting stage and resource, with the measured evidence behind it                                      | v0.3: concurrent stages, queues, critical path                                                                 |
+| **Does my system meet its requirement?** | `validate --p99-ms 10 --max-miss-ratio 0.001 --max-energy-mj 60`: PASS / FAIL / INCONCLUSIVE per requirement, with the measured value | v0.2: contract files, quality and thermal requirements, validated on Jetson AGX Orin |
+| **If not, why?** | `validate` names the limiting stage and attaches the diagnosis; `diagnose` on its own gives the full evidence | v0.3: concurrent stages, queues, critical path |
 | **What should I change?**                | each finding names the next experiment to run                                                                          | v0.4: run the experiments for you, under your constraints                                                      |
 | **Did the change actually help?**        | `compare`: before/after per stage; warns when the runs come from different environments (`--strict-env` fails instead) | —                                                                                                              |
 
@@ -279,13 +280,20 @@ Third-party packs: subclass `edgelens.packs.Pack` and call
 | `edgelens diagnose`                       | Evidence-based verdict (deadline, bottleneck, thermal, memory, pack-specific) with categorical evidence strength                                               |
 | `edgelens report`                         | Self-contained HTML report, attachable to an issue                                                                                                             |
 | `edgelens compare before.json after.json` | Before/after diff of any pipeline; PASS/REGRESSION; warns when the environment differs (`--strict-env` → exit code 2)                                          |
+| `edgelens validate run.json --p99-ms 10 ...` | Requirements → PASS / FAIL / INCONCLUSIVE with measured values; on FAIL the limiting stage and why. Never PASSes a requirement the run cannot measure. Exit codes 0 / 1 / 2 |
 
 Useful `benchmark` flags: `--deadline-ms`, `--period-ms`, `--pace`,
 `--idle-baseline SECONDS` (measures idle power first, then reports the
 workload's dynamic energy), `--input-shape`, `--provider`.
 
 Exit codes: `compare` returns 0 (pass), 1 (regression), 2 (environments
-differ, with `--strict-env`), so it drops straight into CI.
+differ, with `--strict-env`); `validate` returns 0 (pass), 1 (fail),
+2 (inconclusive). Both drop straight into CI.
+
+`validate` requirements (any combination): `--p50-ms`, `--p95-ms`, `--p99-ms`
+(needs ≥ 100 iterations), `--p99.9-ms` (needs ≥ 1000), `--max-latency-ms`,
+`--max-miss-ratio` (needs a run with `--deadline-ms`), `--min-fps`,
+`--max-power-w`, `--max-energy-mj` (need a readable power sensor).
 
 ## What a result contains (`schema_version: 1`)
 
@@ -343,6 +351,6 @@ MIT, see [LICENSE](https://github.com/Infinity-ops/edgelens/blob/main/LICENSE).
 
 ## Roadmap
 
-See [ROADMAP.md](https://github.com/Infinity-ops/edgelens/blob/main/ROADMAP.md): v0.2 performance contracts and `validate`, Orin-class
+See [ROADMAP.md](https://github.com/Infinity-ops/edgelens/blob/main/ROADMAP.md): v0.2 contract files for `validate` and Jetson AGX Orin validation, Orin-class
 platform depth (DLA, EMC, per-rail power, throttling); v0.3 streaming,
 LLM and multi-model packs; v0.4 experiments and edge/cloud.

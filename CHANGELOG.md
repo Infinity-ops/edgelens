@@ -80,6 +80,16 @@
   forms, PR template. README: badges, `pip install edgelens` first,
   architecture diagram, measured headline result. Classifier: Alpha.
 
+### Added: `edgelens validate`
+- Checks a saved run against requirements given as flags (latency
+  percentiles, worst case, deadline miss ratio, throughput, power, energy
+  per iteration) and answers PASS / FAIL / INCONCLUSIVE per requirement with
+  the measured value. On FAIL it names the limiting stage and attaches the
+  run's diagnosis. A requirement the run cannot measure (too few iterations
+  for the percentile, no deadline, no power sensor, a `--demo` result) is
+  never a PASS. Exit codes 0 / 1 / 2; verdict saved as `*.validation.json`.
+  Contract files come in v0.2.
+
 ### Fixed in the pre-release review
 - The sdist was missing `tests/__init__.py` and `tests/fixtures/` (the test
   suite failed when run from the sdist); added `MANIFEST.in`.

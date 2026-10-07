@@ -72,6 +72,8 @@ tooling already measures — it does not re-implement it.
 - [x] README status updated, `Development Status :: 3 - Alpha`
 - [x] CI: lint, tests on Python 3.8–3.13 (with and without onnxruntime),
       wheel build + smoke test; release workflow (TestPyPI / PyPI)
+- [ ] `edgelens validate` on real Nano runs: FAIL on an unpinned run, PASS on
+      the same requirement after `jetson_clocks` (one paired example)
 - [ ] Set the release date in CHANGELOG.md, tag v0.1.0, publish
 
 ## What would show v0.1 is worth continuing
@@ -87,7 +89,7 @@ is a problem engineers actually have. Stars are not the signal. These are:
   1. EdgeLens identified the dominant stage in a real latency problem;
   2. a change was made and `compare` showed the measured before → after;
   3. a stated requirement (e.g. p99 < 10 ms, < 0.1 % misses) got a PASS or
-     FAIL with evidence.
+     FAIL with evidence (`edgelens validate`).
 
 The *Case study* issue form collects these.
 
@@ -105,8 +107,9 @@ The *Case study* issue form collects these.
 - **First milestone: physical validation on Jetson AGX Orin Industrial**
   (`scripts/validate_on_jetson.sh`), before any new Orin feature
 
-- Contract YAML (latency percentiles, deadline miss ratio, power, energy,
-  quality) and `edgelens validate contract.yaml` with per-requirement
+- Contract files: `edgelens validate --contract contract.yaml` (v0.1 already
+  validates the same requirements given as flags), adding quality,
+  thermal and per-rail requirements, with per-requirement
   PASS/FAIL, the limiting stage with its evidence, and the recommended next
   experiments; violation events for runtime monitors
 - Stable, documented Python API
