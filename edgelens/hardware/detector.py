@@ -6,13 +6,11 @@ TensorRT, key Python packages) without depending on any AGPL-licensed
 code (notably, this does NOT import jetson-stats — it reads the same
 underlying /proc, /sys and /etc sources directly).
 
-NOTE ON VALIDATION: the is_jetson()/detect_board()/detect_jetpack()/
-detect_cuda() functions read real Jetson system files
-(/proc/device-tree/model, /etc/nv_tegra_release, /usr/local/cuda/version.json)
-per NVIDIA's documented layout. They have not been exercised against
-physical Jetson hardware by the author of this scaffold — please
-validate on your board and file an issue with your `edgelens doctor`
-output if anything looks wrong.
+Validation: these readers (/proc/device-tree/model, /etc/nv_tegra_release,
+/usr/local/cuda/version.json, dpkg/header/library TensorRT fallbacks) are
+verified on a Jetson Nano (JetPack 4.6 / L4T R32.7.6). Other modules follow
+NVIDIA's documented layout but are not yet verified — please open an issue
+with your `edgelens doctor` output if anything looks wrong.
 """
 
 import glob
@@ -42,7 +40,10 @@ _PKG_DISTS = {
 def _read_file(path):
     try:
         with open(path, "r") as f:
-            return f.read().strip()
+            # Device-tree strings end in a NUL byte, which .strip() keeps:
+            # on a real Nano the board name was stored as "...Kit\u0000" in
+            # every result JSON and printed glued to the shell prompt.
+            return f.read().replace("\x00", "").strip()
     except Exception:
         return None
 

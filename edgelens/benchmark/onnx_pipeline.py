@@ -57,31 +57,101 @@ def has_onnxruntime() -> bool:
     return ort is not None
 
 
+GPU_EXECUTION_PROVIDERS = ("TensorrtExecutionProvider", "CUDAExecutionProvider")
+DEFAULT_PREFERENCE = ("TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider")
+
+CUDA_UNLOADABLE_ADVICE = (
+    "onnxruntime-gpu is installed, but its CUDA/cuDNN libraries are missing or the wrong "
+    "version for this build, so the GPU providers cannot load. Install the CUDA and cuDNN "
+    "versions your onnxruntime-gpu needs (onnxruntime.ai -> CUDA Execution Provider -> "
+    "Requirements); on Jetson use the Jetson Zoo wheel matching your JetPack. For CPU-only "
+    "use: pip uninstall onnxruntime-gpu && pip install onnxruntime"
+)
+
+_cuda_probe_result = None
+
+
 def available_providers():
+    """Providers this onnxruntime build was COMPILED with. Not proof that they
+    can load: see usable_providers()."""
     if ort is None:
         return []
     return ort.get_available_providers()
 
 
-def pick_provider(prefer=None):
-    """Pick the best available ONNX Runtime execution provider.
+def cuda_probe():
+    """(usable, reason): can this process actually use the CUDA provider?
 
-    prefer: optional ordered list of provider names to try first.
-    Returns None if onnxruntime has no providers available at all
-    (should not happen — CPUExecutionProvider ships with every build).
+    get_available_providers() lists compiled-in providers only. Found on a
+    real laptop: onnxruntime-gpu listed Tensorrt+CUDA, but libcublasLt was not
+    installed; sessions silently fell back to CPU and the first device copy
+    crashed. Allocating one CUDA tensor loads the provider library, which is
+    the cheapest real check. Cached per process.
     """
-    avail = available_providers()
-    if not avail:
+    global _cuda_probe_result
+    if _cuda_probe_result is None:
+        if ort is None or "CUDAExecutionProvider" not in available_providers():
+            _cuda_probe_result = (False, "CUDAExecutionProvider is not in this onnxruntime build")
+        else:
+            ort.set_default_logger_severity(4)      # our message replaces ORT's log spam
+            try:
+                ort.OrtValue.ortvalue_from_numpy(np.zeros(1, dtype=np.float32), "cuda", 0)
+                _cuda_probe_result = (True, None)
+            except Exception as e:
+                msg = str(e)
+                if "not available" in msg or "cannot open shared object" in msg:
+                    # ORT's own text is a source path + C++ signature; say it plainly.
+                    reason = "the CUDA/cuDNN libraries this onnxruntime-gpu build needs could not be loaded"
+                else:
+                    lines = msg.strip().splitlines()
+                    reason = (lines[-1] if lines else type(e).__name__)[:200]
+                _cuda_probe_result = (False, reason)
+            finally:
+                ort.set_default_logger_severity(3)
+    return _cuda_probe_result
+
+
+def unloadable_providers():
+    """GPU providers that are listed but cannot load in this process."""
+    listed = available_providers()
+    gpu_listed = [p for p in listed if p in GPU_EXECUTION_PROVIDERS]
+    if not gpu_listed or cuda_probe()[0]:
+        return []
+    return gpu_listed
+
+
+def usable_providers():
+    """Listed providers minus GPU providers whose libraries cannot load."""
+    bad = set(unloadable_providers())
+    return [p for p in available_providers() if p not in bad]
+
+
+def pick_provider(prefer=None):
+    """Best USABLE provider in preference order (TensorRT > CUDA > CPU).
+
+    Returns None only if onnxruntime has no providers at all (should not
+    happen — CPUExecutionProvider ships with every build).
+    """
+    usable = usable_providers()
+    if not usable:
         return None
-    prefer = prefer or [
-        "TensorrtExecutionProvider",
-        "CUDAExecutionProvider",
-        "CPUExecutionProvider",
-    ]
-    for p in prefer:
-        if p in avail:
+    for p in (prefer or DEFAULT_PREFERENCE):
+        if p in usable:
             return p
-    return avail[0]
+    return usable[0]
+
+
+def _session_with(model_path, provider):
+    """(session, fallback_message). onnxruntime does not fail when a provider
+    can't be enabled: it silently falls back to CPU (and prints an 'EP Error'
+    banner). Return the session plus what it printed, so the caller can
+    check which provider is really active."""
+    import contextlib
+    import io
+    captured = io.StringIO()
+    with contextlib.redirect_stdout(captured):
+        session = ort.InferenceSession(model_path, providers=[provider])
+    return session, captured.getvalue().strip()
 
 
 # ONNX tensor type string -> NumPy dtype. Covers what edge models use.
@@ -199,21 +269,59 @@ class OnnxStagePipeline:
             )
 
         self.model_path = model_path
-        self.provider = provider or pick_provider()
-        if self.provider is None:
-            raise RuntimeError("No ONNX Runtime execution providers are available.")
-
+        # Providers tried and skipped in auto mode, with the reason; recorded
+        # in the result so a CPU number is never mistaken for a GPU number.
+        self.provider_fallbacks = []
         avail = available_providers()
-        if self.provider not in avail:
-            raise RuntimeError(
-                f"Requested provider '{self.provider}' is not available. "
-                f"Available providers: {avail}"
-            )
+        if provider is not None:
+            # Explicit --provider: use exactly that one or fail loudly. A run
+            # labelled CUDA that silently measured CPU is the worst outcome.
+            if provider not in avail:
+                raise RuntimeError(
+                    f"Requested provider '{provider}' is not available. "
+                    f"Available providers: {avail}"
+                )
+            if provider in unloadable_providers():
+                raise RuntimeError(
+                    f"'{provider}' is listed by onnxruntime but cannot load here "
+                    f"({cuda_probe()[1]}).\n{CUDA_UNLOADABLE_ADVICE}\n"
+                    f"Or measure on the CPU: --provider CPUExecutionProvider"
+                )
+            candidates, strict = [provider], True
+        else:
+            usable = usable_providers()
+            if not usable:
+                raise RuntimeError("No ONNX Runtime execution providers are available.")
+            for p in unloadable_providers():
+                self.provider_fallbacks.append(
+                    {"provider": p, "reason": f"listed but cannot load: {cuda_probe()[1]}"})
+            candidates = ([p for p in DEFAULT_PREFERENCE if p in usable]
+                          + [p for p in usable if p not in DEFAULT_PREFERENCE])
+            strict = False
 
-        try:
-            self.session = ort.InferenceSession(model_path, providers=[self.provider])
-        except Exception as e:
-            raise RuntimeError(f"onnxruntime could not load '{model_path}': {e}") from e
+        self.session = None
+        for cand in candidates:
+            try:
+                session, banner = _session_with(model_path, cand)
+            except Exception as e:
+                raise RuntimeError(f"onnxruntime could not load '{model_path}': {e}") from e
+            active = session.get_providers()
+            if cand in active:
+                self.session, self.provider = session, cand
+                break
+            detail = next((ln.strip() for ln in banner.splitlines()
+                           if ln.strip().startswith("EP Error")), "")[:300]
+            if strict:
+                raise RuntimeError(
+                    f"onnxruntime could not enable '{cand}' and fell back to {active}, so this "
+                    f"run would be labelled {cand} while measuring something else. "
+                    f"{detail}\nInstall the libraries this provider needs (CUDA/cuDNN/"
+                    f"TensorRT), or measure on the CPU: --provider CPUExecutionProvider"
+                )
+            self.provider_fallbacks.append(
+                {"provider": cand, "reason": detail or f"fell back to {active}"})
+        if self.session is None:
+            raise RuntimeError("No ONNX Runtime execution provider could be enabled.")
 
         inputs = self.session.get_inputs()
         self.output_names = [o.name for o in self.session.get_outputs()]

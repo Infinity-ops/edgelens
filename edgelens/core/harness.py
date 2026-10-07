@@ -68,9 +68,28 @@ def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=No
 
     stages = pipeline.stages
     src = iter(source) if source is not None else None
+    consumed = [0]
+
+    def next_input():
+        """Next item from the source. A finite source (list, generator, a
+        camera iterator that ends) used to escape as a bare StopIteration
+        with no message; say what ran out and how to fix it."""
+        if src is None:
+            return None
+        try:
+            item = next(src)
+        except StopIteration:
+            raise ValueError(
+                f"The input source ran out after {consumed[0]} item(s), but warmup + "
+                f"iterations needs {warmup + iterations}. Pass a longer source, lower "
+                f"iterations/warmup, or use a source that repeats (WindowSource wraps "
+                f"around; itertools.cycle(...) for a list)."
+            ) from None
+        consumed[0] += 1
+        return item
 
     def one_pass(it):
-        value = next(src) if src is not None else None
+        value = next_input()
         for st in stages:
             value = _call(st, value, it)
 
@@ -91,7 +110,7 @@ def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=No
     try:
         period_ns = int(period_ms * 1e6) if (pace and period_ms) else None
         for it in range(iterations):
-            value = next(src) if src is not None else None
+            value = next_input()
             if period_ns is not None:
                 release = t_origin + it * period_ns
                 now = time.perf_counter_ns()

@@ -224,5 +224,7 @@ def generate_html_report(fingerprint, benchmark, diagnosis, output_path):
 </body>
 </html>"""
 
-    Path(output_path).write_text(html)
+    # utf-8 explicitly: the page declares <meta charset="utf-8"> and contains
+    # non-ASCII (—, →, ⚠); the locale default crashed under LANG=C.
+    Path(output_path).write_text(html, encoding="utf-8")
     return str(Path(output_path).resolve())

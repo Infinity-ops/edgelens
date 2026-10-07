@@ -94,7 +94,8 @@ def _resolve_pipeline(given, model_path, provider, stage_fns, pipeline_path, inp
         onnx = OnnxStagePipeline(model_path, provider=provider, input_shapes=input_shapes)
         pipe = Pipeline.from_stage_fns(onnx.stage_fns(), name="onnx", pack="vision",
                                        model_inputs=onnx.input_summary(),
-                                       provider=onnx.provider)
+                                       provider=onnx.provider,
+                                       provider_fallbacks=onnx.provider_fallbacks)
         # identity needs the model hash: run() attaches identity, re-attach with it below
         pipe._model_path = model_path
         return pipe, f"onnxruntime:{onnx.provider} ({model_path})", model_path
