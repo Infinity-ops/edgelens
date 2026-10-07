@@ -22,6 +22,8 @@ from .benchmark.onnx_pipeline import parse_input_shapes
 from .benchmark.runner import run_benchmark
 from .compare.engine import compare as run_compare
 from .diagnose.engine import diagnose as run_diagnose
+from .validate.engine import exit_code as validate_exit_code
+from .validate.engine import validate as run_validate
 from .hardware import detector, power, readiness, telemetry
 from .report.generator import generate_html_report
 
@@ -592,6 +594,99 @@ def compare(
         raise typer.Exit(2)
     if result["verdict"] == "REGRESSION":
         raise typer.Exit(1)
+
+
+@app.command()
+def validate(
+    benchmark_file: str = typer.Argument("edgelens_benchmark.json",
+                                         help="Path to a benchmark/trace result JSON file."),
+    p50_ms: float = typer.Option(None, "--p50-ms", help="Max end-to-end p50 latency (ms)."),
+    p95_ms: float = typer.Option(None, "--p95-ms", help="Max end-to-end p95 latency (ms)."),
+    p99_ms: float = typer.Option(None, "--p99-ms", help="Max end-to-end p99 latency (ms). "
+                                 "Needs >= 100 iterations."),
+    p99_9_ms: float = typer.Option(None, "--p99.9-ms", help="Max end-to-end p99.9 latency "
+                                   "(ms). Needs >= 1000 iterations."),
+    max_latency_ms: float = typer.Option(None, "--max-latency-ms",
+                                         help="Max worst-case (observed) latency (ms)."),
+    max_miss_ratio: float = typer.Option(None, "--max-miss-ratio", help="Max deadline miss "
+                                         "ratio, e.g. 0.001 for 0.1%. The run must have a "
+                                         "deadline (benchmark --deadline-ms)."),
+    min_fps: float = typer.Option(None, "--min-fps", help="Min throughput (iterations/s)."),
+    max_power_w: float = typer.Option(None, "--max-power-w", help="Max mean board power (W)."),
+    max_energy_mj: float = typer.Option(None, "--max-energy-mj",
+                                        help="Max energy per iteration (mJ)."),
+):
+    """Check a run against requirements: PASS / FAIL / INCONCLUSIVE, with evidence.
+
+    Exit codes: 0 PASS, 1 FAIL, 2 INCONCLUSIVE (a requirement this run cannot
+    measure, or a --demo result)."""
+    path = Path(benchmark_file)
+    data = _load_result_or_exit(path)
+    reqs = {"p50_ms": p50_ms, "p95_ms": p95_ms, "p99_ms": p99_ms, "p99_9_ms": p99_9_ms,
+            "max_latency_ms": max_latency_ms, "max_miss_ratio": max_miss_ratio,
+            "min_fps": min_fps, "max_power_w": max_power_w, "max_energy_mj": max_energy_mj}
+    try:
+        verdict = run_validate(data, reqs)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    if data.get("mode") == "demo":
+        _demo_banner()
+
+    def fmt(v, unit):
+        if v is None:
+            return "—"
+        if unit == "":
+            return f"{v * 100:.3f}%"
+        return f"{v:g} {unit}"
+
+    style = {"PASS": "green", "FAIL": "red", "NOT_MEASURED": "yellow"}
+    table = Table(title="Requirements")
+    table.add_column("Requirement")
+    table.add_column("Limit")
+    table.add_column("Measured")
+    table.add_column("Result")
+    for r in verdict["checks"]:
+        op = "≤" if r["direction"] == "max" else "≥"
+        status = f"[{style[r['status']]}]{r['status'].replace('_', ' ')}[/{style[r['status']]}]"
+        if r.get("reason"):
+            status += f"\n[dim]{r['reason']}[/dim]"
+        elif r.get("detail"):
+            status += f"\n[dim]{r['detail']}[/dim]"
+        table.add_row(r["label"], f"{op} {fmt(r['limit'], r['unit'])}",
+                      fmt(r["measured"], r["unit"]), status)
+    console.print(table)
+
+    if verdict["verdict"] == "FAIL":
+        ls = verdict.get("limiting_stage")
+        d = verdict["diagnosis"]["primary"]
+        body = ""
+        if ls:
+            tail = (f"p99 {ls['p99_ms']} ms" if ls["basis"] == "p99"
+                    else f"mean {ls['mean_ms']} ms")
+            body += f"[bold]Limiting stage:[/bold] {ls['stage']} ({tail})\n\n"
+        evidence = "\n".join(f"  {k}: {v}" for k, v in (d.get("evidence") or {}).items())
+        body += (f"[bold]Why:[/bold] {d['type']} ({d['evidence_strength']} evidence)\n"
+                 f"{d['detail']}\n[dim]{evidence}[/dim]\n\n"
+                 f"[cyan]Next experiment → {d['recommendation']}[/cyan]")
+        console.print(Panel(body, title="❌ REQUIREMENTS NOT MET", border_style="red"))
+    elif verdict["verdict"] == "PASS":
+        console.print(Panel("Every requirement was measured and met.",
+                            title="✅ PASS", style="bold green", border_style="green"))
+    else:
+        console.print(Panel("\n".join(verdict["notes"]),
+                            title="⚠️  INCONCLUSIVE", style="yellow", border_style="yellow"))
+
+    run = verdict["run"]
+    console.print(f"[dim]{run['iterations']} iterations · {run.get('board') or 'unknown board'}"
+                  f"{' · ' + run['power_mode'] if run.get('power_mode') else ''} · "
+                  f"environment_id {run.get('environment_id')} · run_id {run.get('run_id')}[/dim]")
+
+    out = path.with_suffix("").with_suffix(".validation.json")
+    _write_or_exit(out, json.dumps(verdict, indent=2))
+    console.print(f"[green]Saved →[/green] {out}")
+    raise typer.Exit(validate_exit_code(verdict["verdict"]))
 
 
 @app.command()
