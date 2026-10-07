@@ -6,6 +6,7 @@
 [![PyPI](https://img.shields.io/pypi/v/edgelens.svg)](https://pypi.org/project/edgelens/)
 [![Python](https://img.shields.io/pypi/pyversions/edgelens.svg)](https://pypi.org/project/edgelens/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![EdgeLens Demo](docs/assets/edgelens-demo.gif)
 <p align="center">
   <img src="https://raw.githubusercontent.com/Infinity-ops/edgelens/main/docs/assets/edgelens-demo.gif" alt="EdgeLens on a Jetson Nano: benchmark, pin clocks, benchmark again, compare" width="100%">
 </p>
