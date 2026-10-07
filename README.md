@@ -14,6 +14,7 @@
 <p align="center">
   <img src="https://raw.githubusercontent.com/Infinity-ops/edgelens/main/docs/assets/edgelens-demo.gif" alt="EdgeLens on a Jetson Nano: benchmark, pin clocks, benchmark again, compare" width="100%">
 </p>
+<sub>Rendered by EdgeLens from two real runs on a Jetson Nano (JetPack 4.6, TensorRT, 100 iterations each), before and after <code>sudo jetson_clocks</code>; full numbers in the results table below.</sub>
 
 > Same Jetson Nano, same model, same code: **p99 latency 148 ms → 9.4 ms**
 > after pinning clocks. FPS never showed it. EdgeLens did.
