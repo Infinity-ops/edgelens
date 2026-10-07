@@ -21,7 +21,7 @@
 
 ```bash
 pip install edgelens
-edgelens doctor                                   # is this board set up right?
+edgelens doctor                                   # is this board ready to benchmark?
 edgelens benchmark --model model.onnx --deadline-ms 33
 edgelens diagnose                                 # why it is slow, with evidence
 ```
@@ -249,7 +249,7 @@ Third-party packs: subclass `edgelens.packs.Pack` and call
 
 | Command                                   | Purpose                                                                                                                                                               |
 | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `edgelens doctor`                         | Hardware + software fingerprint (board, JetPack/L4T, CUDA, TensorRT, ORT providers, packages) and which telemetry sources work (GPU load, power, thermal, tegrastats) |
+| `edgelens doctor`                         | Hardware + software fingerprint, which telemetry sources work, and **benchmark readiness** (clocks pinned? GPU inference? power readable?) with copyable fixes |
 | `edgelens monitor`                        | Live dashboard: CPU / GPU / RAM / temperatures / board power                                                                                                          |
 | `edgelens benchmark`                      | `--model`, `--pipeline` or `--demo`; per-stage + end-to-end latency, tail, jitter, deadline, power/energy, trace                                                      |
 | `edgelens diagnose`                       | Evidence-based verdict (deadline, bottleneck, thermal, memory, pack-specific) with categorical evidence strength                                                      |
@@ -301,8 +301,9 @@ large headroom, bottleneck findings are marked as "where to optimise", not
 | trtexec             | How fast is this one engine?                                                                           |
 | **EdgeLens**        | **Does my application meet its budget, why not, what does it cost in energy, and did my change help?** |
 
-EdgeLens does not replace them, and it does not import jetson-stats (AGPL);
-it reads the same kernel interfaces directly and stays MIT.
+**Use jtop to watch your board. Use EdgeLens to measure your application.**
+EdgeLens does not replace these tools, and it does not import jetson-stats
+(AGPL); it reads the same kernel interfaces directly and stays MIT.
 
 ## Contributing and citing
 
