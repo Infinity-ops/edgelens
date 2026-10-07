@@ -23,6 +23,21 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install build twine
+      # Never publish code whose tests fail: this job does not depend on the
+      # separate `tests` workflow, so run the suite here before building.
+      - name: Run tests
+        run: |
+          pip install -e ".[dev,onnx]"
+          python -m pytest -q
+      - name: Version must be identical in pyproject.toml and edgelens/__init__.py
+        run: |
+          python - <<'EOF'
+          import re, pathlib, sys
+          py = re.search(r'^version = "(.+?)"', pathlib.Path("pyproject.toml").read_text(), re.M).group(1)
+          init = re.search(r'^__version__ = "(.+?)"', pathlib.Path("edgelens/__init__.py").read_text(), re.M).group(1)
+          print(f"pyproject.toml: {py}   edgelens/__init__.py: {init}")
+          sys.exit(0 if py == init else "version mismatch: fix one of the two files")
+          EOF
       - name: Tag must match the package version
         if: github.event_name == 'release'
         run: |

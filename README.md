@@ -9,7 +9,7 @@
 [![tests](https://github.com/Infinity-ops/edgelens/actions/workflows/tests.yml/badge.svg)](https://github.com/Infinity-ops/edgelens/actions/workflows/tests.yml)
 [![PyPI](https://img.shields.io/pypi/v/edgelens.svg)](https://pypi.org/project/edgelens/)
 [![Python](https://img.shields.io/pypi/pyversions/edgelens.svg)](https://pypi.org/project/edgelens/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Infinity-ops/edgelens/blob/main/LICENSE)
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Infinity-ops/edgelens/main/docs/assets/edgelens-demo.gif" alt="EdgeLens on a Jetson Nano: benchmark, pin clocks, benchmark again, compare" width="100%">
@@ -17,7 +17,7 @@
 
 > Same Jetson Nano, same model, same code: **p99 latency 148 ms → 9.4 ms**
 > after pinning clocks. FPS never showed it. EdgeLens did.
-> ([measured](#real-results-on-a-jetson-nano))
+> ([measured](https://github.com/Infinity-ops/edgelens#real-results-on-a-jetson-nano))
 
 ## See it catch a win (and verify it)
 
@@ -333,16 +333,16 @@ EdgeLens does not replace these tools, and it does not import jetson-stats
 
 Bug reports with `edgelens doctor` output from your board are the most
 valuable contribution right now, especially from Jetson Orin, Xavier and
-Orin Nano. See [CONTRIBUTING.md](CONTRIBUTING.md). If you use EdgeLens in
-research, please cite it ([CITATION.cff](CITATION.cff); GitHub's "Cite this
+Orin Nano. See [CONTRIBUTING.md](https://github.com/Infinity-ops/edgelens/blob/main/CONTRIBUTING.md). If you use EdgeLens in
+research, please cite it ([CITATION.cff](https://github.com/Infinity-ops/edgelens/blob/main/CITATION.cff); GitHub's "Cite this
 repository" button).
 
 ## License
 
-MIT, see `LICENSE`.
+MIT, see [LICENSE](https://github.com/Infinity-ops/edgelens/blob/main/LICENSE).
 
 ## Roadmap
 
-See `ROADMAP.md`: v0.2 performance contracts and `validate`, Orin-class
+See [ROADMAP.md](https://github.com/Infinity-ops/edgelens/blob/main/ROADMAP.md): v0.2 performance contracts and `validate`, Orin-class
 platform depth (DLA, EMC, per-rail power, throttling); v0.3 streaming,
 LLM and multi-model packs; v0.4 experiments and edge/cloud.

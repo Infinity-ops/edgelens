@@ -95,10 +95,11 @@ def capture_environment(hw_sw=None):
     hw, sw = fp["hardware"], fp["software"]
     cpu_locked, gpu_locked = detect_clock_locking()
     try:
-        from ..benchmark.onnx_pipeline import available_providers
+        from ..benchmark.onnx_pipeline import available_providers, usable_providers
         providers = available_providers()
+        usable = usable_providers()
     except Exception:
-        providers = []
+        providers, usable = [], []
     return {
         "board": hw.get("model"),
         "is_jetson": hw.get("is_jetson"),
@@ -109,6 +110,8 @@ def capture_environment(hw_sw=None):
         "os": sw.get("os"),
         "packages": sw.get("packages"),
         "ort_providers": providers,
+        # listed AND loadable (onnxruntime-gpu without CUDA libs lists CUDA)
+        "ort_providers_usable": usable,
         "power_mode": detect_power_mode(),
         "cpu_clocks_locked": cpu_locked,
         "gpu_clocks_locked": gpu_locked,

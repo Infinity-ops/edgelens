@@ -5,6 +5,7 @@ Command-line interface: doctor, monitor, benchmark, diagnose, report, compare.
 """
 
 import json
+import sys
 import time
 from pathlib import Path
 from typing import List
@@ -24,8 +25,24 @@ from .diagnose.engine import diagnose as run_diagnose
 from .hardware import detector, power, readiness, telemetry
 from .report.generator import generate_html_report
 
+def _never_crash_on_console_encoding():
+    """Output uses →, ✓, ⚠ and em dashes. Under a non-UTF-8 locale with output
+    piped (CI logs, `edgelens ... > steps.log`), printing one of them raised
+    UnicodeEncodeError and lost the run's console output. Replace instead."""
+    for stream in (sys.stdout, sys.stderr):
+        enc = (getattr(stream, "encoding", None) or "").lower().replace("-", "")
+        if enc and enc != "utf8" and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except Exception:
+                pass
+
+
+_never_crash_on_console_encoding()
+
 app = typer.Typer(
-    help="EdgeLens — an open-source performance doctor for NVIDIA Jetson AI workloads.",
+    help="EdgeLens — measure, diagnose and validate AI pipelines on edge devices "
+         "(deep NVIDIA Jetson support).",
     no_args_is_help=True,
 )
 console = Console()
@@ -67,33 +84,63 @@ def _tensorrt_cell(sw):
 
 def _ort_providers_cell(is_jetson):
     try:
-        from .benchmark.onnx_pipeline import available_providers
+        from .benchmark.onnx_pipeline import available_providers, unloadable_providers
         providers = available_providers()
+        unloadable = unloadable_providers()
     except Exception:  # broken/ABI-mismatched onnxruntime must not kill doctor
-        providers = []
+        providers, unloadable = [], []
     if not providers:
         return "[dim]onnxruntime not installed[/dim]"
     text = ", ".join(p.replace("ExecutionProvider", "") for p in providers)
-    if is_jetson and set(providers) <= {"CPUExecutionProvider", "AzureExecutionProvider"}:
+    if unloadable:
+        names = ", ".join(p.replace("ExecutionProvider", "") for p in unloadable)
+        text += f" [yellow]({names} listed but cannot load — see Benchmark readiness)[/yellow]"
+    elif is_jetson and set(providers) <= {"CPUExecutionProvider", "AzureExecutionProvider"}:
         text += " [yellow](CPU-only build — `--model` benchmarks will not use the GPU)[/yellow]"
     return text
 
 
-def _write_or_exit(path, text):
-    """Write an output file, or explain the failure in one line (no traceback).
+def _exit_on_write_error(path, e):
+    """Explain a failed write in one line (no traceback) and exit 1.
     Typical case: the file was created by an earlier `sudo edgelens ...` run
     and is owned by root."""
+    hint = ""
+    if isinstance(e, PermissionError) and Path(path).exists():
+        hint = (f"\n'{path}' already exists and is not writable by you; if an earlier "
+                f"run used sudo it is owned by root. Fix:  sudo chown $USER {path}  "
+                f"or save elsewhere.")
+    console.print(f"[red]Could not write {path}: {e.strerror or e}[/red]{hint}")
+    raise typer.Exit(1)
+
+
+def _write_or_exit(path, text):
+    """Write an output file, or explain the failure in one line (no traceback)."""
     try:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        Path(path).write_text(text)
+        Path(path).write_text(text, encoding="utf-8")
     except OSError as e:
-        hint = ""
-        if isinstance(e, PermissionError) and Path(path).exists():
-            hint = (f"\n'{path}' already exists and is not writable by you; if an earlier "
-                    f"run used sudo it is owned by root. Fix:  sudo chown $USER {path}  "
-                    f"or save elsewhere with --save.")
-        console.print(f"[red]Could not write {path}: {e.strerror or e}[/red]{hint}")
+        _exit_on_write_error(path, e)
+
+
+def _load_result_or_exit(path):
+    """Read an EdgeLens result JSON, or explain in one line why it can't be
+    used (missing, unreadable, not JSON, not a result) and exit 1."""
+    path = Path(path)
+    if not path.is_file():
+        console.print(f"[red]No such file: {path}[/red] — run `edgelens benchmark` first.")
         raise typer.Exit(1)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as e:
+        console.print(f"[red]Cannot read {path} as an EdgeLens result: "
+                      f"{type(e).__name__}: {e}[/red]")
+        raise typer.Exit(1)
+    if not isinstance(data, dict) or "stage_avg_ms" not in data:
+        console.print(f"[red]{path} is JSON but not an EdgeLens benchmark/trace result "
+                      f"(no 'stage_avg_ms'). Pass the file written by `edgelens benchmark` "
+                      f"or `edgelens.trace(..., save=...)`.[/red]")
+        raise typer.Exit(1)
+    return data
 
 
 def _ms(v):
@@ -118,6 +165,10 @@ def _print_benchmark(result):
         table.add_row(stage, roles.get(stage, ""), f"{ms:.3f} ms",
                       _ms((stats.get(stage) or {}).get("p99")), f"{bar} {pct:.1f}%")
     console.print(table)
+
+    for fb in (pipe.get("config") or {}).get("provider_fallbacks") or []:
+        console.print(f"Skipped {fb['provider']}: {fb['reason']}", style="yellow",
+                      markup=False, highlight=False)
 
     lat = result.get("latency") or {}
     console.print(f"[bold]End-to-end:[/bold] mean {_ms(lat.get('mean'))} ms   "
@@ -327,15 +378,16 @@ def monitor(
 
 @app.command()
 def benchmark(
-    iterations: int = typer.Option(50, help="Number of timed iterations."),
+    iterations: int = typer.Option(50, min=1, help="Number of timed iterations."),
     model: str = typer.Option(None, "--model", help="Path to a real .onnx model — runs a "
                                "real ONNX Runtime session (CPU on a laptop, CUDA/TensorRT "
                                "on Jetson if available)."),
     pipeline: str = typer.Option(None, "--pipeline", help="Path to a Python script "
-                                  "defining build_stage_fns() — for a real camera, a "
-                                  "non-ONNX runtime, or anything --model's plain ONNX "
-                                  "forward pass can't express. See "
-                                  "tests/fixtures/example_pipeline.py."),
+                                  "defining build_pipeline() (returns an "
+                                  "edgelens.Pipeline) or build_stage_fns() (returns a "
+                                  "dict of stage functions) — for a real camera, a "
+                                  "non-ONNX runtime, or any custom stages. See "
+                                  "examples/timeseries_vibration.py."),
     provider: str = typer.Option(None, "--provider", help="Override the ONNX Runtime "
                                   "execution provider, e.g. CUDAExecutionProvider. "
                                   "Only applies with --model."),
@@ -406,13 +458,10 @@ def benchmark(
 def diagnose(
     benchmark_file: str = typer.Argument("edgelens_benchmark.json", help="Path to a benchmark JSON file."),
 ):
-    """Rule-based bottleneck verdict: CPU-bound / GPU-bound / thermal / memory-bound."""
+    """Evidence-based verdict: deadline, bottleneck stage/resource, thermal, memory,
+    clocks, plus scenario-pack findings."""
     path = Path(benchmark_file)
-    if not path.exists():
-        console.print(f"[red]No such file: {benchmark_file}[/red] — run `edgelens benchmark` first.")
-        raise typer.Exit(1)
-
-    data = json.loads(path.read_text())
+    data = _load_result_or_exit(path)
     if data.get("mode") == "demo":
         _demo_banner()
 
@@ -448,17 +497,16 @@ def report(
 ):
     """Generate a self-contained HTML report (fingerprint + benchmark + diagnosis)."""
     path = Path(benchmark_file)
-    if not path.exists():
-        console.print(f"[red]No such file: {benchmark_file}[/red] — run `edgelens benchmark` first.")
-        raise typer.Exit(1)
-
-    Path(output).parent.mkdir(parents=True, exist_ok=True)
+    bench = _load_result_or_exit(path)
     hw_sw_fp = detector.full_fingerprint()
-    bench = json.loads(path.read_text())
     verdict = run_diagnose(bench)
     fingerprint = build_fingerprint(hw_sw_fp, bench, verdict)
 
-    out_path = generate_html_report(fingerprint, bench, verdict, output)
+    try:
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        out_path = generate_html_report(fingerprint, bench, verdict, output)
+    except OSError as e:
+        _exit_on_write_error(output, e)
     fp_json_path = Path(output).with_suffix(".fingerprint.json")
     _write_or_exit(fp_json_path, json.dumps(fingerprint, indent=2))
 
@@ -480,14 +528,8 @@ def compare(
                                     "mode, clocks, board, JetPack, versions)."),
 ):
     """Compare two benchmark runs (before/after) and flag regressions."""
-    before_path, after_path = Path(before_file), Path(after_file)
-    for p in (before_path, after_path):
-        if not p.exists():
-            console.print(f"[red]No such file: {p}[/red]")
-            raise typer.Exit(1)
-
-    before = json.loads(before_path.read_text())
-    after = json.loads(after_path.read_text())
+    before = _load_result_or_exit(before_file)
+    after = _load_result_or_exit(after_file)
 
     if before.get("mode") == "demo" or after.get("mode") == "demo":
         console.print("[yellow]Note: comparing one or more --demo (simulated) results — "

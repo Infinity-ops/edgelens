@@ -26,13 +26,16 @@ def _check(name, status, value, advice=None, fix=None):
     return {"name": name, "status": status, "value": value, "advice": advice, "fix": fix}
 
 
-def assess(is_jetson, power_mode, cpu_pinned, gpu_pinned, providers, power_probe):
+def assess(is_jetson, power_mode, cpu_pinned, gpu_pinned, providers, power_probe,
+           unloadable=()):
     """Return a list of readiness checks.
 
     is_jetson    bool
     power_mode   {"id": int, "name": str} or None
     cpu_pinned / gpu_pinned   True / False / None (unknown)
     providers    onnxruntime execution providers ([] when not installed)
+    unloadable   listed GPU providers whose libraries cannot load (CUDA/cuDNN
+                 missing or mismatched): they would silently fall back to CPU
     power_probe  telemetry.probe_sources()["power_ina3221"]
     """
     checks = []
@@ -65,8 +68,16 @@ def assess(is_jetson, power_mode, cpu_pinned, gpu_pinned, providers, power_probe
             "Needed only for `benchmark --model`. On Jetson install NVIDIA's "
             "onnxruntime-gpu wheel; elsewhere: pip install \"edgelens[onnx]\"."))
     else:
-        gpu = [p.replace("ExecutionProvider", "") for p in providers if p in GPU_PROVIDERS]
-        if gpu:
+        gpu = [p.replace("ExecutionProvider", "") for p in providers
+               if p in GPU_PROVIDERS and p not in unloadable]
+        if unloadable:
+            from ..benchmark.onnx_pipeline import CUDA_UNLOADABLE_ADVICE
+            checks.append(_check(
+                "GPU inference", WARN,
+                "listed, cannot load (" + ", ".join(
+                    p.replace("ExecutionProvider", "") for p in unloadable) + ")",
+                CUDA_UNLOADABLE_ADVICE))
+        elif gpu:
             checks.append(_check("GPU inference", OK, ", ".join(gpu)))
         elif is_jetson:
             checks.append(_check(
@@ -95,6 +106,9 @@ def assess(is_jetson, power_mode, cpu_pinned, gpu_pinned, providers, power_probe
 def summary(checks, is_jetson=True):
     warnings = [c for c in checks if c["status"] == WARN]
     if not is_jetson:
+        if warnings:   # e.g. GPU providers listed but unloadable on a laptop
+            return WARN, (f"{len(warnings)} item(s) can distort or limit results: "
+                          + ", ".join(c["name"] for c in warnings) + ".")
         return INFO, ("Not a Jetson: no board-level checks apply. Latency, tail and "
                       "deadline results are valid for this host.")
     if not warnings:
@@ -106,11 +120,12 @@ def summary(checks, is_jetson=True):
 
 def gather(is_jetson, power_probe):
     """Collect live inputs for assess() on this host."""
-    from ..benchmark.onnx_pipeline import available_providers
+    from ..benchmark.onnx_pipeline import available_providers, unloadable_providers
     from ..core.identity import detect_clock_locking, detect_power_mode
 
     cpu, gpu = detect_clock_locking() if is_jetson else (None, None)
     return assess(is_jetson=is_jetson,
                   power_mode=detect_power_mode() if is_jetson else None,
                   cpu_pinned=cpu, gpu_pinned=gpu,
-                  providers=available_providers(), power_probe=power_probe)
+                  providers=available_providers(), power_probe=power_probe,
+                  unloadable=unloadable_providers())

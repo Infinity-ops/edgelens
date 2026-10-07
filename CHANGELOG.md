@@ -80,6 +80,30 @@
   forms, PR template. README: badges, `pip install edgelens` first,
   architecture diagram, measured headline result. Classifier: Alpha.
 
+### Fixed in the pre-release review
+- The sdist was missing `tests/__init__.py` and `tests/fixtures/` (the test
+  suite failed when run from the sdist); added `MANIFEST.in`.
+- The release workflow ran no tests before publishing; it now runs the suite
+  and checks that `pyproject.toml` and `edgelens.__version__` agree.
+- README links were relative and broke on the PyPI project page.
+- Board name kept the device-tree NUL byte (`"...Developer Kit\u0000"`).
+- `INFERENCE_ON_CPU` told users on hosts without any GPU provider to install
+  the Jetson onnxruntime-gpu wheel; the advice now depends on what the host has.
+- Single-core `CPU_BOUND_PREPROCESS` text claimed "other cores sit idle"; it
+  now reports the measured cores-busy figure.
+- HTML report and console output crashed (`UnicodeEncodeError`) under a
+  non-UTF-8 locale.
+- A finite input source that ran out escaped as a bare `StopIteration`; it
+  now says how many items were needed.
+- `diagnose`/`report`/`compare` gave a traceback for a malformed or non-result
+  JSON file; `--iterations 0` was accepted.
+- GPU providers that onnxruntime lists but cannot load (onnxruntime-gpu without
+  matching CUDA/cuDNN — found on a real laptop) were treated as available:
+  `benchmark --model` crashed and `doctor` reported GPU inference as ok. EdgeLens
+  now checks that CUDA really loads, picks the best provider that does, records
+  skipped providers with the reason, fails loudly for an explicit `--provider`
+  that would silently fall back to CPU, and `doctor` warns.
+
 ### Fixed
 - Multi-input ONNX models crashed with a raw `ValueError`.
 - Non-image dynamic dimensions were silently set to 224.

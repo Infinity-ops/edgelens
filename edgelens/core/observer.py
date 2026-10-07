@@ -105,7 +105,7 @@ class Tracer:
         if self.result is None:
             raise RuntimeError("Tracer.save() is available after the `with` block ends.")
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        Path(path).write_text(json.dumps(self.result, indent=2))
+        Path(path).write_text(json.dumps(self.result, indent=2), encoding="utf-8")
         return str(path)
 
     # ---- recording ----

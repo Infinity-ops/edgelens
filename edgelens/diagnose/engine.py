@@ -6,29 +6,13 @@ correlation between stage-time share and system telemetry) rather than
 a black-box model — a correct simple rule beats a fragile clever one,
 and the reasoning is fully inspectable/explainable to the developer.
 
-v0.1.0 CHANGE FROM THE ALPHA SCAFFOLD:
-    The old output called its heuristic score "confidence" (e.g.
-    "confidence 78%"), which reads as a statistically calibrated
-    probability. It wasn't one — it was `0.4 + stage_pct / 100`, an
-    ad-hoc scoring formula. Every finding now reports:
-      - evidence_strength: the same 0-1 heuristic score, honestly named
-      - evidence: the actual measured numbers that produced the verdict
-
-v0.1.0 FIX (found via real-hardware testing, not simulated):
-    psutil.cpu_percent(interval=X) BLOCKS for X seconds per call. The
-    default telemetry sampling interval is 200ms. A fast benchmark (a
-    tiny model, or few iterations) can finish its entire timed loop in
-    single-digit milliseconds — faster than one sampling interval — so
-    the background TelemetryRecorder gets exactly ONE sample. Reporting
-    that one instantaneous reading as if it reflects sustained load
-    during the benchmark is misleading, especially for THERMAL (a
-    laptop/board's ambient temperature at that instant may have nothing
-    to do with a benchmark that ran for 5ms). All telemetry-dependent
-    findings now check sample_count and, below MIN_RELIABLE_SAMPLES,
-    are demoted: evidence_strength is halved and a caveat is appended
-    to `detail` explaining exactly why. Purely stage-timing-based
-    findings (MEMORY_TRANSFER_BOUND, BALANCED's stage read) are
-    unaffected — they don't depend on telemetry sample count.
+Low telemetry sample counts (found on real hardware): a fast benchmark can
+finish before the background sampler has collected more than one or two
+samples, and reporting one instantaneous reading as sustained load is
+misleading (especially THERMAL). Telemetry-dependent findings therefore
+check sample_count and, below MIN_RELIABLE_SAMPLES, have their rank_score
+halved and a caveat appended to `detail`. Purely stage-timing-based
+findings (MEMORY_TRANSFER_BOUND, BALANCED's stage read) are unaffected.
 
 v0.1.0: findings report evidence_strength as a CATEGORY (weak / moderate /
 strong) plus the raw evidence numbers. The 0-1 number is kept only as
@@ -78,6 +62,7 @@ BOTTLENECK_TYPES = {"CPU_BOUND_PREPROCESS", "MEMORY_TRANSFER_BOUND", "GPU_BOUND"
                     "INFERENCE_ON_CPU", "BALANCED"}
 
 TELEMETRY_DEPENDENT_TYPES = {"THERMAL", "MEMORY_BOUND", "CPU_BOUND_PREPROCESS", "GPU_BOUND"}
+GPU_EXECUTION_PROVIDERS = ("TensorrtExecutionProvider", "CUDAExecutionProvider")
 # INFERENCE_ON_CPU is deliberately NOT telemetry-dependent: it's decided
 # from the provider recorded in pipeline_source, not from sampled load.
 
@@ -181,10 +166,15 @@ def diagnose(benchmark_result):
             detail = (f"Preprocessing consumes {pre_pct:.1f}% of total pipeline latency "
                       f"while mean CPU utilization is {cpu:.1f}%.")
         else:
+            # Say only what was measured: the cores-busy figure, not a claim
+            # that the other cores are idle (ORT threads and the sampler use
+            # CPU too). Real Nano run: 42% mean on 4 cores = ~1.7 cores busy.
+            cores_busy = cpu * cpu_count / 100.0
             detail = (f"Preprocessing consumes {pre_pct:.1f}% of total pipeline latency. "
-                      f"Mean CPU is {cpu:.1f}% across {cpu_count} cores — about one "
-                      f"core's worth of work ({one_core_pct:.0f}% each), consistent with "
-                      f"single-threaded preprocessing while the other cores sit mostly idle.")
+                      f"Mean CPU is {cpu:.1f}% across {cpu_count} cores (~{cores_busy:.1f} "
+                      f"of {cpu_count} cores busy) — the CPU as a whole is not saturated, "
+                      f"which is consistent with a single-threaded preprocessing stage "
+                      f"limiting each frame rather than total CPU capacity.")
         findings.append({
             "type": "CPU_BOUND_PREPROCESS",
             "rank_score": round(min(0.95, 0.4 + pre_pct / 100), 2),
@@ -208,19 +198,44 @@ def diagnose(benchmark_result):
 
     source = benchmark_result.get("pipeline_source") or ""
     if infer_pct >= INFERENCE_STAGE_PCT_THRESHOLD and "CPUExecutionProvider" in source:
+        run_env = benchmark_result.get("environment") or {}
+        # Prefer what could actually load; older files only list compiled-in ones.
+        eps = run_env.get("ort_providers_usable", run_env.get("ort_providers")) or []
+        gpu_eps = [p for p in eps if p in GPU_EXECUTION_PROVIDERS]
+        # "The GPU is not used" is only true advice where a GPU path exists:
+        # a Jetson, or a host whose onnxruntime has a GPU provider. On a
+        # laptop without one, telling the user to install a Jetson wheel is
+        # wrong; say what was measured and what helps on THIS host.
+        gpu_path_exists = bool(run_env.get("is_jetson") or gpu_eps)
+        if gpu_path_exists:
+            detail = (f"Inference dominates latency ({infer_pct:.1f}% of pipeline) and runs "
+                      f"on onnxruntime's CPUExecutionProvider — the GPU is not used for "
+                      f"the model at all.")
+            recommendation = ("Run on an accelerator provider" +
+                              (f" (available here: {', '.join(gpu_eps)})" if gpu_eps else
+                               ": on Jetson, install the JetPack-matched onnxruntime-gpu "
+                               "wheel") +
+                              " and rerun with --provider CUDAExecutionProvider or "
+                              "TensorrtExecutionProvider (`edgelens doctor` shows which "
+                              "providers are available).")
+        else:
+            detail = (f"Inference dominates latency ({infer_pct:.1f}% of pipeline) and runs "
+                      f"on the CPU (CPUExecutionProvider); this host's onnxruntime has no "
+                      f"GPU execution provider that can load.")
+            recommendation = ("On this host: a smaller or INT8-quantized model or a lower "
+                              "input resolution. For accelerator numbers, run the same "
+                              "command on the target device (on Jetson with NVIDIA's "
+                              "onnxruntime-gpu wheel and --provider TensorrtExecutionProvider).")
         findings.append({
             "type": "INFERENCE_ON_CPU",
             "rank_score": round(min(0.9, 0.4 + infer_pct / 200), 2),
-            "detail": f"Inference dominates latency ({infer_pct:.1f}% of pipeline) and runs "
-                      f"on onnxruntime's CPUExecutionProvider — the GPU is not used for "
-                      f"the model at all.",
-            "recommendation": "Run on an accelerator provider: on Jetson, install the "
-                              "JetPack-matched onnxruntime-gpu wheel and rerun with "
-                              "--provider CUDAExecutionProvider or TensorrtExecutionProvider "
-                              "(`edgelens doctor` shows which providers are available).",
+            "detail": detail,
+            "recommendation": recommendation,
             "evidence": {
                 "inference_stage_pct": round(infer_pct, 1),
                 "pipeline_source": source,
+                "gpu_execution_providers_available": gpu_eps,
+                "is_jetson": run_env.get("is_jetson"),
                 "threshold_pct": INFERENCE_STAGE_PCT_THRESHOLD,
             },
         })

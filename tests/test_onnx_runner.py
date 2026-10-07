@@ -85,8 +85,8 @@ def test_capture_stage_is_cheap_not_dominated_by_rng():
 
 def _has_cuda_provider():
     try:
-        from edgelens.benchmark.onnx_pipeline import available_providers
-        return "CUDAExecutionProvider" in available_providers()
+        from edgelens.benchmark.onnx_pipeline import usable_providers
+        return "CUDAExecutionProvider" in usable_providers()
     except Exception:
         return False
 
