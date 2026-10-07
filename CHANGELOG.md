@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 — unreleased (pending Jetson Nano validation, see ROADMAP.md)
+## 0.1.0 — — 2026-10-07
 
 ### Added
 - Generic `edgelens.Pipeline` engine: any named stages with roles; harness
