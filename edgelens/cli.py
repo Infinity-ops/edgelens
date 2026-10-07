@@ -21,7 +21,7 @@ from .benchmark.onnx_pipeline import parse_input_shapes
 from .benchmark.runner import run_benchmark
 from .compare.engine import compare as run_compare
 from .diagnose.engine import diagnose as run_diagnose
-from .hardware import detector, power, telemetry
+from .hardware import detector, power, readiness, telemetry
 from .report.generator import generate_html_report
 
 app = typer.Typer(
@@ -211,10 +211,36 @@ def doctor():
         pkg_table.add_row(pkg, ver or "[dim]not installed[/dim]")
     console.print(pkg_table)
 
-    _print_telemetry_sources()
+    src = _print_telemetry_sources()
+    _print_readiness(hw["is_jetson"], src["power_ina3221"])
 
     if not hw["is_jetson"]:
         _non_jetson_notice()
+
+
+def _print_readiness(is_jetson, power_probe):
+    """Benchmark readiness: is this board in a state that gives trustworthy,
+    comparable numbers? (clocks, power mode, GPU providers, power sensor)"""
+    checks = readiness.gather(is_jetson, power_probe)
+    icon = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]", "info": "[dim]·[/dim]"}
+    t = Table(title="Benchmark readiness")
+    t.add_column("")
+    t.add_column("Check")
+    t.add_column("State")
+    t.add_column("What it means", style="dim")
+    for c in checks:
+        t.add_row(icon[c["status"]], c["name"], c["value"], c["advice"] or "")
+    console.print(t)
+    fixes = [c for c in checks if c["status"] == "warn" and c.get("fix")]
+    if fixes:
+        console.print("[bold]To fix:[/bold]")
+        for c in fixes:
+            # soft_wrap + no markup: the command stays on one copyable line
+            console.print(f"  # {c['name']}", style="dim")
+            console.print(f"  {c['fix']}", soft_wrap=True, markup=False, highlight=False)
+    status, text = readiness.summary(checks, is_jetson)
+    style = {"ok": "green", "warn": "yellow", "info": "dim"}[status]
+    console.print(f"[{style}]{text}[/{style}]")
 
 
 def _print_telemetry_sources():
@@ -238,7 +264,7 @@ def _print_telemetry_sources():
     if pw["total_w"] is not None:
         status, value = "[green]ok[/green]", f"{pw['total_w']:.2f} W ({pw['method']})"
     elif pw.get("permission_denied"):
-        status, value = "[red]found, root-only[/red]", "see fix below"
+        status, value = "[yellow]found, root-only[/yellow]", "fix under Benchmark readiness"
     elif pw["rails_found"]:
         status, value = f"[red]{pw['error']}[/red]", ", ".join(pw["rails_found"])
     else:
@@ -260,14 +286,7 @@ def _print_telemetry_sources():
         t.add_row("tegrastats", "[green]ok[/green]", f"GPU {tg['gpu_percent']}% · {rails}",
                   f"first line {tg['first_line_s']} s")
     console.print(t)
-    if pw.get("permission_denied") and pw.get("fix"):
-        console.print(Panel(
-            "The board's power sensor (INA3221) exists but is readable by root only, so "
-            "power and energy are not reported. Make it readable (until the next reboot):\n\n"
-            f"  {pw['fix']}\n\n"
-            "Or run a single benchmark as root:  sudo $(which edgelens) benchmark ... "
-            "(files it saves will then be owned by root).",
-            title="Power: permission needed", style="yellow", border_style="yellow"))
+    return src
 
 
 @app.command()

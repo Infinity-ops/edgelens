@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 — — 2026-10-07
+## 0.1.0 — 2026-10-07
 
 ### Added
 - Generic `edgelens.Pipeline` engine: any named stages with roles; harness
@@ -37,6 +37,10 @@
 - `fingerprint_id` is now an alias of `environment_id`.
 
 ### Added after Jetson Nano validation
+- `doctor` shows **Benchmark readiness**: power mode, clock pinning, GPU
+  inference providers and power-sensor access, each with a copyable fix.
+  Built from the three issues hit on a real Nano (unpinned clocks, PyPI
+  onnxruntime replacing the GPU build, root-only power sensor).
 - `doctor` prints a *Telemetry sources* table (GPU load, INA3221 power,
   thermal zones, tegrastats) with values and read cost.
 - Diagnosis `CLOCKS_NOT_PINNED`: long tail with unpinned clocks on Jetson
