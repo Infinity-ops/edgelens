@@ -14,46 +14,30 @@
 <p align="center">
   <img src="https://raw.githubusercontent.com/Infinity-ops/edgelens/main/docs/assets/edgelens-demo.gif" alt="EdgeLens on a Jetson Nano: benchmark, pin clocks, benchmark again, compare" width="100%">
 </p>
-<sub>Rendered by EdgeLens from two real runs on a Jetson Nano (JetPack 4.6, TensorRT, 100 iterations each), before and after <code>sudo jetson_clocks</code>; full numbers in the results table below.</sub>
+<sub>Rendered by EdgeLens from two real runs on a Jetson Nano (JetPack 4.6, TensorRT, 100 iterations each), before and after <code>sudo jetson_clocks</code>; full numbers in <a href="docs/jetson.md">docs/jetson.md</a>.</sub>
 
 > Same Jetson Nano, same model, same code: **p99 latency 148 ms → 9.4 ms**
 > after pinning clocks. FPS never showed it. EdgeLens did.
-> ([measured](https://github.com/Infinity-ops/edgelens#real-results-on-a-jetson-nano))
-
-## See it catch a win (and verify it)
-
-```bash
-edgelens benchmark --model model.onnx --provider CPUExecutionProvider --iterations 100 --save cpu.json
-edgelens benchmark --model model.onnx --provider TensorrtExecutionProvider --iterations 300 --save trt.json
-edgelens compare cpu.json trt.json
-```
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Infinity-ops/edgelens/main/docs/assets/edgelens-compare-demo.gif" alt="EdgeLens comparing CPU vs TensorRT inference on a Jetson Nano, ending in a PASS verdict" width="100%">
-</p>
-
-`compare` doesn't just print two numbers side by side — it tells you whether
-the change is a real improvement or a regression, per metric and per stage,
-and fails CI (`--strict-env`, exit code 2) if the environment changed under you.
+> ([measured](docs/jetson.md#real-results-on-a-jetson-nano))
 
 ```bash
 pip install edgelens
-edgelens doctor                                   # is this board ready to benchmark?
+edgelens doctor                                        # is this board ready to benchmark?
 edgelens benchmark --model model.onnx --deadline-ms 33
-edgelens diagnose                                 # why it is slow, with evidence
-edgelens validate --p99-ms 33 --max-miss-ratio 0.001   # PASS / FAIL against your requirement
+edgelens diagnose                                       # why it is slow, with evidence
+edgelens validate --p99-ms 33 --max-miss-ratio 0.001    # PASS / FAIL against your requirement
 ```
 
 Most edge monitoring tools tell you _what_ the board is doing (CPU 47%, GPU
 92%, 61 °C). That is not the engineering question. The engineering question
 is a loop, and EdgeLens is built around it:
 
-| Question                                 | EdgeLens v0.1                                                                                                          | Coming                                                                                                         |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Question                                 | EdgeLens v0.1                                                                                                                         | Coming                                                                               |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | **Does my system meet its requirement?** | `validate --p99-ms 10 --max-miss-ratio 0.001 --max-energy-mj 60`: PASS / FAIL / INCONCLUSIVE per requirement, with the measured value | v0.2: contract files, quality and thermal requirements, validated on Jetson AGX Orin |
-| **If not, why?** | `validate` names the limiting stage and attaches the diagnosis; `diagnose` on its own gives the full evidence | v0.3: concurrent stages, queues, critical path |
-| **What should I change?**                | each finding names the next experiment to run                                                                          | v0.4: run the experiments for you, under your constraints                                                      |
-| **Did the change actually help?**        | `compare`: before/after per stage; warns when the runs come from different environments (`--strict-env` fails instead) | —                                                                                                              |
+| **If not, why?**                         | `validate` names the limiting stage and attaches the diagnosis; `diagnose` on its own gives the full evidence                         | v0.3: concurrent stages, queues, critical path                                       |
+| **What should I change?**                | each finding names the next experiment to run                                                                                         | v0.4: run the experiments for you, under your constraints                            |
+| **Did the change actually help?**        | `compare`: before/after per stage; warns when the runs come from different environments (`--strict-env` fails instead)                | —                                                                                    |
 
 Measured fact → evidence → hypothesis → experiment → measured result.
 Every number EdgeLens reports was measured on the board; nothing is inferred
@@ -82,83 +66,24 @@ $ edgelens diagnose ts.json
 _(Real output, run on a laptop CPU. On a Jetson the same run also reports
 GPU load, board power and energy per window.)_
 
-## How it works
+## See it catch a win
 
-```mermaid
-flowchart LR
-    A["Your pipeline<br/>model · camera · sensor · custom stages"] --> B["EdgeLens engine<br/>harness or observer mode"]
-    B --> C["Per-stage + end-to-end trace"]
-    B --> D["Telemetry<br/>CPU · GPU · RAM · thermal · power"]
-    B --> E["Environment<br/>JetPack · power mode · clocks"]
-    C --> F["Latency · tail · deadlines · energy"]
-    D --> F
-    F --> G["Diagnosis with evidence"]
-    E --> H["Fair compare<br/>PASS / REGRESSION"]
-    F --> H
-    G --> I["JSON + HTML report"]
-    H --> I
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Infinity-ops/edgelens/main/docs/assets/edgelens-compare-demo.gif" alt="EdgeLens comparing CPU vs TensorRT inference on a Jetson Nano, ending in a PASS verdict" width="100%">
+</p>
 
-## Status of this release (v0.1.0)
+`edgelens compare before.json after.json` doesn't just print two numbers
+side by side — it tells you whether the change is a real improvement or a
+regression, per metric and per stage, and fails CI (`--strict-env`, exit
+code 2) if the environment changed under you.
 
-**Validated on a real Jetson Nano** (JetPack 4.6 / L4T R32.7.6, Python 3.8
-venv, ONNX Runtime CPU, CUDA and TensorRT providers):
+## Status
 
-| Area           | Verified on the Nano                                                                                                                                     |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Engine         | `--model` (single and multi-input), `--pipeline` (vision and timeseries), observer mode, paced mode                                                      |
-| Statistics     | per-stage and end-to-end latency, p50–p99.9, max, jitter, percentile sample-count rule                                                                   |
-| Requirements   | deadline met / missed / thin-margin detection, miss bursts, real-time factor                                                                             |
-| Environment    | power mode (nvpmodel) and clock pinning (jetson_clocks) detected; `compare --strict-env` exits 2 across MAXN vs 5W                                       |
-| Telemetry      | CPU, RAM, thermal zones, GPU load (sysfs)                                                                                                                |
-| Power & energy | INA3221 `POM_5V_IN` read from sysfs: 4.2 W mean, 51.3 mJ per inference (TensorRT, small CNN). Needs root or a one-time `chmod` on JetPack 4.6, see below |
-| Outputs        | JSON schema v1 with trace, telemetry series and identities; HTML report; compare exit codes                                                              |
-
-**Implemented, not yet verified on real hardware:**
-
-- **Jetson Orin** support in general (hwmon power layout, JetPack 5/6 GPU
-  load paths). Unit-tested against the documented layouts only.
-  `edgelens doctor` shows a _Telemetry sources_ table; if a source is
-  missing on your board, please open an issue with that table.
-
-**Known limits (by design in v0.1):**
-
-- Stage timing is host wall-clock (`time.perf_counter_ns`), stages run
-  sequentially in one thread. GPU-side CUDA-event timing and concurrent
-  stages come later.
-- The telemetry sampler is a Python thread in the measured process. Its
-  CPU cost per sample is reported in every result (`sampler_cpu_ms_mean`)
-  so the observer effect is visible, not hidden.
-- Power figures are on-module sensor readings with their method
-  (`input_rail` / `sum_of_rails`), not a calibrated power meter.
-- **Jetson Nano / JetPack 4.x: the power sensor files are root-only.**
-  `edgelens doctor` detects this and prints the fix. Either make them
-  readable until the next reboot:
-  `sudo chmod o+r /sys/bus/i2c/drivers/ina3221x/*/iio:device*/rail_name_* /sys/bus/i2c/drivers/ina3221x/*/iio:device*/in_power*_input`
-  or run one benchmark as root: `sudo $(which edgelens) benchmark ...`
-  (its output files are then owned by root).
-- No built-in camera, video, audio or CAN readers: your own capture code
-  becomes the first stage (or use observer mode in your existing loop).
-  Recorded signals can be replayed with `WindowSource`.
-
-## Real results on a Jetson Nano
-
-Measured with this release (`tests/fixtures/small_cnn.onnx`, 300 iterations
-unless noted):
-
-| Run                                                          | Mean    | p99      | What EdgeLens reported                                                      |
-| ------------------------------------------------------------ | ------- | -------- | --------------------------------------------------------------------------- |
-| CPU provider, MAXN                                           | 27.8 ms | 30.3 ms  | `INFERENCE_ON_CPU`: 92% of the time is CPU inference                        |
-| CPU provider, 5W mode                                        | 86.8 ms | 184.3 ms | `compare --strict-env`: environment mismatch (power mode), exit 2           |
-| TensorRT, clocks not pinned (100 it.)                        | 17.8 ms | 148.1 ms | tail is 11x the median; clocks not pinned                                   |
-| TensorRT, after `jetson_clocks` (100 it.)                    | 6.8 ms  | 9.4 ms   | 2.6x faster mean, 16x lower p99                                             |
-| TensorRT, with board power (clocks not pinned)               | 14.2 ms | 113.4 ms | 4.2 W mean · 51.3 mJ per inference · 19.5 inferences per joule              |
-| Timeseries pipeline (10 kHz, 1024/512 window), 2,000 windows | 5.4 ms  | 8.4 ms   | real-time factor 0.11; 0 of 2,000 deadline misses at 51.2 ms; p99.9 10.5 ms |
-| Same, released every 2 ms (`--pace`)                         | —       | —        | cannot keep up: queue grows to ~1 s; measured, not simulated                |
-
-The clock-pinning row is the kind of thing EdgeLens exists for: same board,
-same model, same code, and a 16x difference in tail latency that FPS alone
-would never show.
+**Validated on a real Jetson Nano** (JetPack 4.6 / L4T R32.7.6): core
+engine, statistics, requirements, telemetry, and power/energy all verified
+against real hardware. **Jetson Orin support is implemented, not yet
+hardware-verified.** Full per-area validation table, known limits, and
+measured results: [docs/jetson.md](docs/jetson.md).
 
 ## Install
 
@@ -195,92 +120,23 @@ testing.
 
 ## Three ways in
 
-### 1. Just a model: `--model`
+1. **Just a model** — `edgelens benchmark --model model.onnx --deadline-ms 33`
+2. **Your own pipeline, EdgeLens drives the loop** — `import edgelens as el`, define stages, `pipe.run(...)`
+3. **Keep your loop, add three lines** — `with el.trace(...) as t: ... with t.stage("inference"): ...`
 
-```bash
-edgelens benchmark --model model.onnx --deadline-ms 33
-edgelens benchmark --model sensor_model.onnx --input-shape vib:1x8x2048   # dynamic/multi-input
-```
-
-Every model input is fed with its declared dtype. Dynamic dimensions of
-non-image inputs are never guessed: EdgeLens asks for `--input-shape`
-rather than benchmarking a workload that doesn't exist.
-
-### 2. Your own pipeline, EdgeLens drives the loop (harness mode)
-
-```python
-import edgelens as el
-
-pipe = el.Pipeline("bearing-monitor", pack="timeseries",
-                   sample_rate_hz=10_000, window=1024, hop=512)
-pipe.set_source(el.WindowSource("vibration.npy", window=1024, hop=512))
-
-@pipe.stage
-def filter(window): ...            # one argument: receives the previous stage's output
-
-@pipe.stage
-def fft(x): ...
-
-@pipe.stage(role="inference", device="gpu")
-def classify(features): ...
-
-result = pipe.run(iterations=2000)      # deadline defaults to the 51.2 ms hop period
-print(result["latency"]["p99"], result["deadline"]["miss_ratio"],
-      result["pack_metrics"]["real_time_factor"])
-```
-
-The same pipeline from the CLI: put it in a script with a
-`build_pipeline()` function and run
-`edgelens benchmark --pipeline my_pipeline.py`. See
-`examples/timeseries_vibration.py`. Scripts with the classic
-`build_stage_fns()` returning a dict still work, and since v0.1.0 the dict
-may use **any stage names**.
-
-`pace=True` (CLI `--pace` with `--period-ms`) releases iterations on a fixed
-schedule and measures true response time, including queueing behind a slow
-iteration.
-
-### 3. Keep your loop, add three lines (observer mode)
-
-```python
-with el.trace("webcam-detector", pack="vision", target_fps=30, save="run.json") as t:
-    while running:
-        with t.iteration():
-            with t.stage("capture"):    frame = cam.read()
-            with t.stage("inference"):  dets = model(frame)
-            with t.stage("postprocess"): out = nms(dets)
-```
-
-Then `edgelens diagnose run.json` and `edgelens report run.json` work exactly
-as for a benchmark. See `examples/observer_vision_loop.py`.
-
-## Scenario packs
-
-One generic engine; packs add a stage template, scenario metrics and
-diagnosis rules in that scenario's language. Stages carry a **role**
-(`input`, `preprocess`, `transfer`, `inference`, `postprocess`, `decision`,
-`other`), inferred from the name or set explicitly, so the generic
-diagnosis rules work for every pipeline.
-
-| Pack         | For                                | Adds                                                                                                                                                                                          |
-| ------------ | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vision`     | camera / video / image             | classic 6-stage template; `target_fps` → frame budget as deadline; `BELOW_TARGET_FPS`                                                                                                         |
-| `timeseries` | sensor, vibration, audio, IMU, CAN | `sample_rate_hz`/`window`/`hop` → hop period as deadline; real-time factor, headroom, max sustainable rate; `CANNOT_KEEP_UP`, `TAIL_OVERRUNS_HOP`, `HIGH_OVERLAP_COST`; `WindowSource` replay |
-| `custom`     | anything else                      | generic metrics and rules                                                                                                                                                                     |
-
-Third-party packs: subclass `edgelens.packs.Pack` and call
-`el.register_pack(MyPack())`.
+Full examples for all three, plus scenario packs (`vision`, `timeseries`,
+`custom`): [docs/usage.md](docs/usage.md).
 
 ## Commands
 
-| Command                                   | Purpose                                                                                                                                                        |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `edgelens doctor`                         | Hardware + software fingerprint, which telemetry sources work, and **benchmark readiness** (clocks pinned? GPU inference? power readable?) with copyable fixes |
-| `edgelens monitor`                        | Live dashboard: CPU / GPU / RAM / temperatures / board power                                                                                                   |
-| `edgelens benchmark`                      | `--model`, `--pipeline` or `--demo`; per-stage + end-to-end latency, tail, jitter, deadline, power/energy, trace                                               |
-| `edgelens diagnose`                       | Evidence-based verdict (deadline, bottleneck, thermal, memory, pack-specific) with categorical evidence strength                                               |
-| `edgelens report`                         | Self-contained HTML report, attachable to an issue                                                                                                             |
-| `edgelens compare before.json after.json` | Before/after diff of any pipeline; PASS/REGRESSION; warns when the environment differs (`--strict-env` → exit code 2)                                          |
+| Command                                      | Purpose                                                                                                                                                                     |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `edgelens doctor`                            | Hardware + software fingerprint, which telemetry sources work, and **benchmark readiness** (clocks pinned? GPU inference? power readable?) with copyable fixes              |
+| `edgelens monitor`                           | Live dashboard: CPU / GPU / RAM / temperatures / board power                                                                                                                |
+| `edgelens benchmark`                         | `--model`, `--pipeline` or `--demo`; per-stage + end-to-end latency, tail, jitter, deadline, power/energy, trace                                                            |
+| `edgelens diagnose`                          | Evidence-based verdict (deadline, bottleneck, thermal, memory, pack-specific) with categorical evidence strength                                                            |
+| `edgelens report`                            | Self-contained HTML report, attachable to an issue                                                                                                                          |
+| `edgelens compare before.json after.json`    | Before/after diff of any pipeline; PASS/REGRESSION; warns when the environment differs (`--strict-env` → exit code 2)                                                       |
 | `edgelens validate run.json --p99-ms 10 ...` | Requirements → PASS / FAIL / INCONCLUSIVE with measured values; on FAIL the limiting stage and why. Never PASSes a requirement the run cannot measure. Exit codes 0 / 1 / 2 |
 
 Useful `benchmark` flags: `--deadline-ms`, `--period-ms`, `--pace`,
@@ -296,34 +152,7 @@ differ, with `--strict-env`); `validate` returns 0 (pass), 1 (fail),
 `--max-miss-ratio` (needs a run with `--deadline-ms`), `--min-fps`,
 `--max-power-w`, `--max-energy-mj` (need a readable power sensor).
 
-## What a result contains (`schema_version: 1`)
-
-Every run (benchmark, observer, demo) writes the same JSON document:
-
-- `pipeline` — name, pack, stages with roles, config
-- `latency` — min / mean / std / p50 / p90 / p95 / p99 / p99.9 / max / jitter / tail spread (end-to-end per iteration; response time incl. queueing in paced mode)
-- `service_latency` — the pipeline's own work per iteration (what capacity and real-time factor are computed from)
-- `stage_stats_ms` — the same statistics per stage
-- `requirements`, `deadline` — misses, miss ratio, worst overrun, longest miss burst, median slack
-- `backlog` — queueing estimate at the input period (labelled simulated; use `--pace` to measure it)
-- `pack_metrics` — e.g. the real-time factor for `timeseries`
-- `telemetry` + `telemetry_series` — mean/peak and the full timestamped samples (CPU, GPU, RAM, EMC, temperature, power), plus the sampler's own cost
-- `energy` — mean power, energy per iteration, iterations per joule, dynamic energy over idle
-- `trace` — one event per stage per iteration (`iter`, `stage`, `start_ns`, `dur_ns`, `thread`)
-- `environment` + `identity` — `environment_id` (board, JetPack, versions, **power mode, clock pinning**), `experiment_id` (pipeline, config, model hash), `run_id`
-
-Pre-v0.1.0 files (no `schema_version`) still work with `diagnose`, `report`
-and `compare`.
-
-## Evidence, not confidence
-
-Every finding reports `evidence_strength` as **weak / moderate / strong**,
-plus the raw numbers behind it, and `data_quality` (iterations, telemetry
-sample count). It is deliberately not a percentage: the internal score only
-ranks findings and is not a calibrated probability. Telemetry-based findings
-from too few samples are demoted and say why. When a deadline is met with
-large headroom, bottleneck findings are marked as "where to optimise", not
-"a problem".
+Full result schema and internals: [docs/architecture.md](docs/architecture.md).
 
 ## Why not just jtop / Nsight / trtexec?
 
@@ -349,9 +178,3 @@ repository" button).
 ## License
 
 MIT, see [LICENSE](https://github.com/Infinity-ops/edgelens/blob/main/LICENSE).
-
-## Roadmap
-
-See [ROADMAP.md](https://github.com/Infinity-ops/edgelens/blob/main/ROADMAP.md): v0.2 contract files for `validate` and Jetson AGX Orin validation, Orin-class
-platform depth (DLA, EMC, per-rail power, throttling); v0.3 streaming,
-LLM and multi-model packs; v0.4 experiments and edge/cloud.

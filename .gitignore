@@ -37,3 +37,5 @@ edgelens_validation_*
 observer.html
 *.diagnosis.json
 *.cast
+
+ROADMAP.md
