@@ -19,6 +19,22 @@
 > after pinning clocks. FPS never showed it. EdgeLens did.
 > ([measured](#real-results-on-a-jetson-nano))
 
+## See it catch a win (and verify it)
+
+```bash
+edgelens benchmark --model model.onnx --provider CPUExecutionProvider --iterations 100 --save cpu.json
+edgelens benchmark --model model.onnx --provider TensorrtExecutionProvider --iterations 300 --save trt.json
+edgelens compare cpu.json trt.json
+```
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Infinity-ops/edgelens/main/docs/assets/edgelens-compare-demo.gif" alt="EdgeLens comparing CPU vs TensorRT inference on a Jetson Nano, ending in a PASS verdict" width="100%">
+</p>
+
+`compare` doesn't just print two numbers side by side — it tells you whether
+the change is a real improvement or a regression, per metric and per stage,
+and fails CI (`--strict-env`, exit code 2) if the environment changed under you.
+
 ```bash
 pip install edgelens
 edgelens doctor                                   # is this board ready to benchmark?
@@ -30,12 +46,12 @@ Most edge monitoring tools tell you _what_ the board is doing (CPU 47%, GPU
 92%, 61 °C). That is not the engineering question. The engineering question
 is a loop, and EdgeLens is built around it:
 
-| Question | EdgeLens v0.1 | Coming |
-| --- | --- | --- |
-| **Does my system meet its requirement?** | `benchmark --deadline-ms`: misses, miss bursts, p99.9, real-time factor | v0.2: full performance contracts (latency, deadline, power, energy, quality) → `edgelens validate` PASS / FAIL |
-| **If not, why?** | `diagnose`: the limiting stage and resource, with the measured evidence behind it | v0.3: concurrent stages, queues, critical path |
-| **What should I change?** | each finding names the next experiment to run | v0.4: run the experiments for you, under your constraints |
-| **Did the change actually help?** | `compare`: before/after per stage; warns when the runs come from different environments (`--strict-env` fails instead) | — |
+| Question                                 | EdgeLens v0.1                                                                                                          | Coming                                                                                                         |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Does my system meet its requirement?** | `benchmark --deadline-ms`: misses, miss bursts, p99.9, real-time factor                                                | v0.2: full performance contracts (latency, deadline, power, energy, quality) → `edgelens validate` PASS / FAIL |
+| **If not, why?**                         | `diagnose`: the limiting stage and resource, with the measured evidence behind it                                      | v0.3: concurrent stages, queues, critical path                                                                 |
+| **What should I change?**                | each finding names the next experiment to run                                                                          | v0.4: run the experiments for you, under your constraints                                                      |
+| **Did the change actually help?**        | `compare`: before/after per stage; warns when the runs come from different environments (`--strict-env` fails instead) | —                                                                                                              |
 
 Measured fact → evidence → hypothesis → experiment → measured result.
 Every number EdgeLens reports was measured on the board; nothing is inferred
@@ -255,14 +271,14 @@ Third-party packs: subclass `edgelens.packs.Pack` and call
 
 ## Commands
 
-| Command                                   | Purpose                                                                                                                                                               |
-| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Command                                   | Purpose                                                                                                                                                        |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `edgelens doctor`                         | Hardware + software fingerprint, which telemetry sources work, and **benchmark readiness** (clocks pinned? GPU inference? power readable?) with copyable fixes |
-| `edgelens monitor`                        | Live dashboard: CPU / GPU / RAM / temperatures / board power                                                                                                          |
-| `edgelens benchmark`                      | `--model`, `--pipeline` or `--demo`; per-stage + end-to-end latency, tail, jitter, deadline, power/energy, trace                                                      |
-| `edgelens diagnose`                       | Evidence-based verdict (deadline, bottleneck, thermal, memory, pack-specific) with categorical evidence strength                                                      |
-| `edgelens report`                         | Self-contained HTML report, attachable to an issue                                                                                                                    |
-| `edgelens compare before.json after.json` | Before/after diff of any pipeline; PASS/REGRESSION; warns when the environment differs (`--strict-env` → exit code 2)                                                 |
+| `edgelens monitor`                        | Live dashboard: CPU / GPU / RAM / temperatures / board power                                                                                                   |
+| `edgelens benchmark`                      | `--model`, `--pipeline` or `--demo`; per-stage + end-to-end latency, tail, jitter, deadline, power/energy, trace                                               |
+| `edgelens diagnose`                       | Evidence-based verdict (deadline, bottleneck, thermal, memory, pack-specific) with categorical evidence strength                                               |
+| `edgelens report`                         | Self-contained HTML report, attachable to an issue                                                                                                             |
+| `edgelens compare before.json after.json` | Before/after diff of any pipeline; PASS/REGRESSION; warns when the environment differs (`--strict-env` → exit code 2)                                          |
 
 Useful `benchmark` flags: `--deadline-ms`, `--period-ms`, `--pace`,
 `--idle-baseline SECONDS` (measures idle power first, then reports the
