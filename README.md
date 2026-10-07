@@ -1,7 +1,7 @@
 # EdgeLens
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Infinity-ops/edgelens/main/docs/assets/edgelens-wordmark.png" alt="EdgeLens" width="100%">
+  <img src="https://raw.githubusercontent.com/Infinity-ops/edgelens/main/docs/assets/edgelens-wordmark.png" alt="EdgeLens" width="90%">
 </p>
 
 **Measure. Diagnose. Validate. Edge AI performance engineering for real pipelines.**
