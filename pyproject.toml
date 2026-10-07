@@ -33,6 +33,9 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
     "Topic :: Software Development :: Debuggers",
     "Topic :: System :: Hardware",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Environment :: Console",
 ]
 dependencies = [
     "typer>=0.9.0",

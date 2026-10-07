@@ -1,15 +1,20 @@
 # EdgeLens
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Infinity-ops/edgelens/main/docs/assets/edgelens-wordmark.png" alt="EdgeLens" width="420">
+</p>
+
 **Measure. Diagnose. Validate. Edge AI performance engineering for real pipelines.**
 
 [![tests](https://github.com/Infinity-ops/edgelens/actions/workflows/tests.yml/badge.svg)](https://github.com/Infinity-ops/edgelens/actions/workflows/tests.yml)
 [![PyPI](https://img.shields.io/pypi/v/edgelens.svg)](https://pypi.org/project/edgelens/)
 [![Python](https://img.shields.io/pypi/pyversions/edgelens.svg)](https://pypi.org/project/edgelens/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![EdgeLens Demo](docs/assets/edgelens-demo.gif)
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/Infinity-ops/edgelens/main/docs/assets/edgelens-demo.gif" alt="EdgeLens on a Jetson Nano: benchmark, pin clocks, benchmark again, compare" width="100%">
 </p>
+
 > Same Jetson Nano, same model, same code: **p99 latency 148 ms → 9.4 ms**
 > after pinning clocks. FPS never showed it. EdgeLens did.
 > ([measured](#real-results-on-a-jetson-nano))
