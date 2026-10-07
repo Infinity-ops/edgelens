@@ -74,6 +74,23 @@ tooling already measures — it does not re-implement it.
       wheel build + smoke test; release workflow (TestPyPI / PyPI)
 - [ ] Set the release date in CHANGELOG.md, tag v0.1.0, publish
 
+## What would show v0.1 is worth continuing
+
+v0.1 is an experiment: it tests whether "requirement → evidence → decision"
+is a problem engineers actually have. Stars are not the signal. These are:
+
+- [ ] 10 people using it on a real pipeline (not the bundled fixtures)
+- [ ] 3 hardware reports from boards other than the Nano
+- [ ] 2 outside contributors
+- [ ] 1 researcher using EdgeLens results in an experiment or paper
+- [ ] 3 external case studies, one of each:
+  1. EdgeLens identified the dominant stage in a real latency problem;
+  2. a change was made and `compare` showed the measured before → after;
+  3. a stated requirement (e.g. p99 < 10 ms, < 0.1 % misses) got a PASS or
+     FAIL with evidence.
+
+The *Case study* issue form collects these.
+
 ## Release themes
 
 | Release | Theme | One line |
@@ -90,7 +107,8 @@ tooling already measures — it does not re-implement it.
 
 - Contract YAML (latency percentiles, deadline miss ratio, power, energy,
   quality) and `edgelens validate contract.yaml` with per-requirement
-  PASS/FAIL and violation events
+  PASS/FAIL, the limiting stage with its evidence, and the recommended next
+  experiments; violation events for runtime monitors
 - Stable, documented Python API
 - Non-root power access: optional systemd/udev helper so the INA3221 files
   stay readable across reboots

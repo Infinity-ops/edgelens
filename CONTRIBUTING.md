@@ -35,6 +35,9 @@ no `X | Y` type unions, no walrus-heavy code).
   unavailable with the reason. Demo data is always labelled.
 - **Evidence, not confidence.** Diagnosis findings carry the numbers behind
   them and a categorical strength, never an uncalibrated percentage.
+- **Evidence before any AI.** Findings come from measured data and
+  transparent rules. A model may one day help navigate the evidence; it
+  never replaces it, and EdgeLens does not become a chatbot that guesses.
 - **Fixtures from real hardware.** A new rule or parser comes with a test
   using numbers/output from a real board, noted in the test.
 - **Schema changes are versioned.** Fields in result JSON only change
