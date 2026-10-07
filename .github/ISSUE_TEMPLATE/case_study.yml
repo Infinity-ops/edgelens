@@ -1,0 +1,38 @@
+name: Case study
+description: You used EdgeLens on a real pipeline. Tell us what it found (good or bad)
+labels: [case-study]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Real-world results are how EdgeLens learns what matters. Numbers from
+        `edgelens benchmark`, `diagnose` and `compare` are the most useful part.
+  - type: input
+    id: setup
+    attributes:
+      label: Board, JetPack and workload
+      placeholder: "Jetson Orin Nano, JetPack 6.1, YOLOv8n camera pipeline"
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What happened?
+      options:
+        - EdgeLens found where the time goes (dominant stage / resource)
+        - I changed something and compare showed before vs after
+        - I checked a requirement (deadline, p99, energy) and got pass / fail
+        - EdgeLens was wrong or not helpful
+    validations:
+      required: true
+  - type: textarea
+    id: story
+    attributes:
+      label: The problem, what EdgeLens reported, and what you did
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Relevant output (diagnose / compare)
+      render: text

@@ -27,11 +27,19 @@ edgelens diagnose                                 # why it is slow, with evidenc
 ```
 
 Most edge monitoring tools tell you _what_ the board is doing (CPU 47%, GPU
-92%, 61 °C). EdgeLens tells you **why your pipeline is slow, whether it meets
-its deadline, and what each result costs in energy**. It breaks latency down
-stage by stage for any pipeline (camera, sensor, signal or custom), measures
-the tail and deadline misses, reads board power, and gives an evidence-based
-diagnosis on top.
+92%, 61 °C). That is not the engineering question. The engineering question
+is a loop, and EdgeLens is built around it:
+
+| Question | EdgeLens v0.1 | Coming |
+| --- | --- | --- |
+| **Does my system meet its requirement?** | `benchmark --deadline-ms`: misses, miss bursts, p99.9, real-time factor | v0.2: full performance contracts (latency, deadline, power, energy, quality) → `edgelens validate` PASS / FAIL |
+| **If not, why?** | `diagnose`: the limiting stage and resource, with the measured evidence behind it | v0.3: concurrent stages, queues, critical path |
+| **What should I change?** | each finding names the next experiment to run | v0.4: run the experiments for you, under your constraints |
+| **Did the change actually help?** | `compare`: before/after per stage; warns when the runs come from different environments (`--strict-env` fails instead) | — |
+
+Measured fact → evidence → hypothesis → experiment → measured result.
+Every number EdgeLens reports was measured on the board; nothing is inferred
+by a model, and nothing is reported with more confidence than the data allows.
 
 ```
 $ edgelens benchmark --pipeline examples/timeseries_vibration.py --iterations 1200
