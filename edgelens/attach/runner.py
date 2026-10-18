@@ -96,6 +96,8 @@ def observe(cmd=None, pid=None, name=None, duration_s=None, socket_path=None, ma
             run.target = {"kind": "command", "command": cmd, "pid": pid}
         elif pid is not None:
             run.target = {"kind": "pid", "pid": pid}
+        if pid is not None and recorder is not None and not cmd:
+            recorder.track_pid(pid)          # the target is workload, not background
         if pid is not None:
             sampler = ProcessSampler(pid, interval_s=process_interval_s,
                                      children=children).start()

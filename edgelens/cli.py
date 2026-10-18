@@ -2,7 +2,8 @@
 edgelens.cli
 -------------
 Command-line interface: doctor, monitor, benchmark, diagnose, report, compare,
-validate; v0.2: record, watch, import-log, include, selftest, ros2.
+validate; v0.2: record, watch, import-log, include, selftest, ros2; sweep,
+periodic, soak; contract, export.
 """
 
 import json
@@ -851,13 +852,36 @@ def validate(
     max_energy_per_period_mj: float = typer.Option(None, "--max-energy-per-period-mj",
                                                    help="Max energy per inference period, idle "
                                                         "included (periodic results)."),
+    contract: str = typer.Option(None, "--contract", help="Assumption contract (.yaml / "
+                                 ".json): requirements AND the conditions they hold under. "
+                                 "A violated assumption gives INCONCLUSIVE, never PASS. "
+                                 "See docs/contracts.md."),
+    evidence_path: str = typer.Option(None, "--evidence", help="Also write a Markdown evidence "
+                                 "record (one row per requirement ID) to this file."),
 ):
     """Check a run against requirements: PASS / FAIL / INCONCLUSIVE, with evidence.
 
     Exit codes: 0 PASS, 1 FAIL, 2 INCONCLUSIVE (a requirement this run cannot
-    measure, or a --demo result)."""
+    measure, a violated contract assumption, or a --demo result)."""
     path = Path(benchmark_file)
     data = _load_result_or_exit(path)
+    flags = {k: v for k, v in dict(
+        p50_ms=p50_ms, p95_ms=p95_ms, p99_ms=p99_ms, p99_9_ms=p99_9_ms,
+        max_latency_ms=max_latency_ms, max_miss_ratio=max_miss_ratio, min_fps=min_fps,
+        max_power_w=max_power_w, max_energy_mj=max_energy_mj, max_output_error=max_output_error,
+        min_decision_agreement=min_decision_agreement, max_temp_c=max_temp_c,
+        max_latency_drift_pct=max_latency_drift_pct,
+        max_mem_growth_mb_per_h=max_mem_growth_mb_per_h,
+        max_throttled_windows=max_throttled_windows,
+        max_energy_per_period_mj=max_energy_per_period_mj).items() if v is not None}
+    if contract:
+        from .cli_evidence import validate_with_contract
+        if flags:
+            console.print("[red]Give requirements either as a --contract or as flags, not "
+                          "both (the contract is the evidence record; put "
+                          f"{', '.join(flags)} into it).[/red]")
+            raise typer.Exit(2)
+        raise typer.Exit(validate_with_contract(path, data, contract, evidence_path))
     reqs = {"p50_ms": p50_ms, "p95_ms": p95_ms, "p99_ms": p99_ms, "p99_9_ms": p99_9_ms,
             "max_latency_ms": max_latency_ms, "max_miss_ratio": max_miss_ratio,
             "min_fps": min_fps, "max_power_w": max_power_w, "max_energy_mj": max_energy_mj,
@@ -930,6 +954,11 @@ def validate(
     out = _sibling(path, "validation")
     _write_or_exit(out, json.dumps(verdict, indent=2))
     console.print(f"[green]Saved →[/green] {out}")
+    if evidence_path:
+        from .contract import evidence_markdown
+        _write_or_exit(evidence_path, evidence_markdown(dict(verdict, contract={
+            "name": "requirements given as flags"}), str(path)))
+        console.print(f"[green]Evidence →[/green] {evidence_path}")
     raise typer.Exit(validate_exit_code(verdict["verdict"]))
 
 
@@ -942,6 +971,7 @@ def version():
 # v0.2 command groups register themselves on `app` (kept in separate modules).
 from . import cli_observe  # noqa: E402,F401
 from . import cli_insights  # noqa: E402,F401
+from . import cli_evidence  # noqa: E402,F401
 
 
 if __name__ == "__main__":

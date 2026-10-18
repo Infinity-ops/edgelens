@@ -2,3 +2,4 @@ typer>=0.9.0
 rich>=13.0.0
 psutil>=5.9.0
 numpy>=1.21.0
+pyyaml>=5.3

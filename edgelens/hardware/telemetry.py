@@ -23,6 +23,7 @@ v0.1.0 design (replaces the per-sample subprocess approach):
 """
 
 import glob
+import os
 import re
 import shutil
 import statistics
@@ -294,6 +295,33 @@ def _swap():
     return _swap_cache[0]
 
 
+_gpu_devfreq = [False]          # not looked up yet
+
+
+def _gpu_freq_path():
+    """devfreq cur_freq of the integrated GPU, or None (not a Jetson)."""
+    if _gpu_devfreq[0] is False:
+        _gpu_devfreq[0] = None
+        for d in sorted(glob.glob("/sys/class/devfreq/*")):
+            name = os.path.basename(d).lower()
+            dev = os.path.realpath(d).lower()
+            if any(k in name or k in dev for k in ("gpu", "gv11b", "ga10b", "gp10b", "gm20b")):
+                _gpu_devfreq[0] = os.path.join(d, "cur_freq")
+                break
+    return _gpu_devfreq[0]
+
+
+def read_gpu_freq_mhz():
+    path = _gpu_freq_path()
+    if not path:
+        return None
+    try:
+        with open(path) as f:
+            return int(f.read().strip()) / 1e6
+    except (OSError, ValueError):
+        return None
+
+
 def snapshot(stream=None, power_reader=None):
     """One telemetry sample. Safe on any host (Jetson or not), non-blocking."""
     t0 = time.perf_counter()
@@ -322,6 +350,7 @@ def snapshot(stream=None, power_reader=None):
         "swap_used_gb": round(swap.used / 1e9, 2),
         "temps_c": read_temps(),
         "gpu_percent": gpu,
+        "gpu_freq_mhz": read_gpu_freq_mhz(),
         "emc_percent": teg.get("emc_percent") if teg else None,
         "rails_w": rails or {},
         "power_w": power_mod.total_power_w(rails) if rails else None,
@@ -361,6 +390,74 @@ class TelemetryRecorder:
         self._power_denied = self._power.denied if self._power is not None else []
         self.start_time = None
         self.start_mono_ns = None
+        # Background load: CPU time of everything EXCEPT this process (its
+        # children included) and the processes registered with track_pid()
+        # (the application under test). See background_load().
+        self._own = {}                 # pid -> [first cpu s, last cpu s]
+        self._sys0 = None
+        self._bg = None
+
+    def track_pid(self, pid):
+        """Count this process (the application being measured) as part of
+        the workload, not as background load."""
+        if pid and pid not in self._own:
+            self._own[pid] = [None, None]
+            self._touch(pid, first=True)
+
+    def _touch(self, pid, first=False):
+        try:
+            p = psutil.Process(pid)
+            t = p.cpu_times()
+            v = t.user + t.system + getattr(t, "children_user", 0.0) + \
+                getattr(t, "children_system", 0.0)
+        except (psutil.Error, OSError):
+            return
+        rec = self._own.setdefault(pid, [None, None])
+        if first or rec[0] is None:
+            rec[0] = v
+        rec[1] = v
+
+    @staticmethod
+    def _sys_busy():
+        t = psutil.cpu_times()
+        idle = t.idle + getattr(t, "iowait", 0.0)
+        total = sum(t)
+        # guest time is already inside user/nice on Linux: don't count it twice
+        total -= getattr(t, "guest", 0.0) + getattr(t, "guest_nice", 0.0)
+        return total - idle
+
+    def _bg_start(self):
+        self._own = {pid: [None, None] for pid in self._own}
+        for pid in list(self._own) + [os.getpid()]:
+            self._touch(pid, first=True)
+        self._sys0 = (self._sys_busy(), _now_ns())
+
+    def _bg_stop(self):
+        if self._sys0 is None:
+            return None
+        self._touch(os.getpid())
+        for pid in list(self._own):
+            self._touch(pid)
+        busy0, t0 = self._sys0
+        elapsed = (_now_ns() - t0) / 1e9
+        if elapsed <= 0:
+            return None
+        sys_busy = self._sys_busy() - busy0
+        own = sum((b - a) for a, b in self._own.values() if a is not None and b is not None)
+        ncpu = psutil.cpu_count(logical=True) or 1
+        other = max(0.0, sys_busy - own)
+        return {
+            "cpu_pct": round(other / (elapsed * ncpu) * 100.0, 2),     # % of the whole machine
+            "cores": round(other / elapsed, 3),
+            "workload_cores": round(own / elapsed, 3),
+            "interval_s": round(elapsed, 2),
+            "workload_pids": sorted(self._own),
+            "method": ("system CPU time minus EdgeLens and the measured application "
+                       "(psutil cpu_times; children included once they exit)"),
+        }
+
+    def background_load(self):
+        return self._bg
 
     def start(self):
         self._samples = []
@@ -378,6 +475,7 @@ class TelemetryRecorder:
             self._stream = TegrastatsStream(interval_ms=max(50, int(self.interval_s * 1000)))
             self._stream.start()
         psutil.cpu_percent(interval=None)   # reset the CPU% window to "now"
+        self._bg_start()
         self.start_time = time.time()
         self.start_mono_ns = _now_ns()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -388,6 +486,9 @@ class TelemetryRecorder:
             try:
                 if len(self._samples) < MAX_SERIES_SAMPLES:
                     self._samples.append(snapshot(self._stream, self._power))
+                if self._own and len(self._samples) % 10 == 0:
+                    for pid in list(self._own):      # last value seen if it exits
+                        self._touch(pid)
             except Exception:
                 pass
             self._stop_event.wait(self.interval_s)
@@ -403,6 +504,10 @@ class TelemetryRecorder:
             pass
         if self._stream is not None:
             self._stream.stop()
+        try:
+            self._bg = self._bg_stop()
+        except Exception:
+            self._bg = None
         return self.summarize()
 
     def series(self):
@@ -421,11 +526,14 @@ class TelemetryRecorder:
                 "t_mono_ns": mono,
                 "cpu_percent": s.get("cpu_percent"),
                 "gpu_percent": s.get("gpu_percent"),
+                "gpu_freq_mhz": s.get("gpu_freq_mhz"),
                 "mem_percent": s.get("mem_percent"),
                 "emc_percent": s.get("emc_percent"),
                 "max_temp_c": max(temps.values()) if temps else None,
                 "power_w": s.get("power_w"),
             })
+            if s.get("rails_w"):
+                out[-1]["rails_w"] = {k: round(v, 3) for k, v in s["rails_w"].items()}
         return out
 
     def summarize(self):
@@ -489,6 +597,9 @@ class TelemetryRecorder:
             "temps_c_mean": temps_mean,
             "temps_c_peak": temps_peak,
             "max_temp_c": max(temps_peak.values()) if temps_peak else 0,
+            # the board's state when the run began (assumption contracts)
+            "start_temp_c": (max((first.get("temps_c") or {}).values())
+                             if (first.get("temps_c") or {}) else None),
             "slow_thermal_zones": slow_zones(),
             # flat/legacy fields (mean-based) consumed by older readers
             "cpu_percent": mean(cpu_vals),
@@ -501,6 +612,8 @@ class TelemetryRecorder:
             reason = "permission_denied"
             fix = power_mod.permission_fix_command(self._power_denied)
         summary["power"] = power_mod.summarize_power(self._samples, reason, fix)
+        if self._bg is not None:
+            summary["background"] = self._bg
         return summary
 
 

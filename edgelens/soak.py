@@ -245,6 +245,8 @@ def window_row(i, t0_ns, t1_ns, window_result, telemetry, probe_w, mem, rss_mb):
            "max_temp_c": (telemetry or {}).get("max_temp_c") or None,
            "cpu_percent_mean": (telemetry or {}).get("cpu_percent_mean"),
            "gpu_percent_mean": (telemetry or {}).get("gpu_percent_mean"),
+           "background_cpu_pct": ((telemetry or {}).get("background") or {}).get("cpu_pct"),
+           "start_temp_c": (telemetry or {}).get("start_temp_c"),
            "rss_mb": rss_mb}
     if row["energy_j"] is not None and n:
         row["energy_per_iteration_mj"] = round(row["energy_j"] * 1000.0 / n, 3)
@@ -409,6 +411,8 @@ def _finish(acc, rows, probe_limits, *, desc, mode, source, deadline_ms, period_
     result = build_result(
         pipeline_desc=desc, stage_samples_ms=acc.stages, e2e_ms=acc.e2e, mode=mode,
         pipeline_source=source, deadline_ms=deadline_ms, period_ms=period_ms,
+        # an EdgeLens-driven soak with a period released one input per period
+        paced=bool(period_ms) and mode == "hardware",
         telemetry_summary=telemetry_last, extra=dict(extra or {}, soak=soak),
         keep_series=len(acc.e2e) <= 200_000)
     if energies and acc.total:
@@ -431,8 +435,21 @@ def _finish(acc, rows, probe_limits, *, desc, mode, source, deadline_ms, period_
                                   met=sum(misses) == 0,
                                   note="counted over every window (.jsonl); worst/burst "
                                        "values cover the kept samples")
-    result.setdefault("telemetry", {})["max_temp_c"] = soak.get("max_temp_c") or \
-        (result.get("telemetry") or {}).get("max_temp_c")
+    tel = result.setdefault("telemetry", {})
+    tel["max_temp_c"] = soak.get("max_temp_c") or tel.get("max_temp_c")
+    # Run-level conditions for assumption contracts: the board at the start
+    # of the first window, background load over every window.
+    tel["start_temp_c"] = rows[0].get("start_temp_c") if rows else None
+    bg = [(r["background_cpu_pct"], r["t_end_s"] - r["t_start_s"]) for r in rows
+          if r.get("background_cpu_pct") is not None]
+    if bg:
+        wsum = sum(w for _, w in bg) or 1.0
+        tel["background"] = {"cpu_pct": round(sum(v * w for v, w in bg) / wsum, 2),
+                             "max_window_cpu_pct": max(v for v, _ in bg),
+                             "windows": len(bg),
+                             "method": "time-weighted mean of the soak windows"}
+    else:
+        tel.pop("background", None)
     attach_identity(result, model_path=model_path)
     return result
 
@@ -552,6 +569,9 @@ def run_soak_observed(duration_s, window_s=DEFAULT_WINDOW_S, cmd=None, pid=None,
     try:
         while (now_ns() - t_origin) / 1e9 < duration_s:
             rec = TelemetryRecorder(interval_s=telemetry_interval_s)
+            target = child.pid if child is not None else pid
+            if target:
+                rec.track_pid(target)            # the app is workload, not background
             rec.start()
             t0 = now_ns()
             end = time.monotonic() + min(window_s, duration_s - (t0 - t_origin) / 1e9)

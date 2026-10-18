@@ -1,0 +1,32 @@
+# EdgeLens assumption contract for the DEM2 anomaly pipeline.
+#   check it:        edgelens contract check perf/dem2.contract.yaml
+#   run + validate:  edgelens contract run perf/dem2.contract.yaml --pipeline pipeline.py
+#
+# The requirement IDs below are EXAMPLES: replace them with the IDs from your
+# requirements document, so the evidence record maps 1:1 onto it.
+contract: dem2-anomaly-detection
+version: "1.0"
+description: DEM2 predictive maintenance, one inference per second on the AGX Orin Industrial
+requirements_doc: EdgeAI-Trust D1.1 (example IDs)
+
+# Less evidence than this -> INCONCLUSIVE. 300 inputs at 1 Hz = 5 minutes per CI run.
+min_duration: 5m
+min_iterations: 300
+
+# The conditions the guarantees are claimed under. Any of them violated, or
+# not verifiable from the run -> INCONCLUSIVE (exit 2), never PASS.
+assumes:
+  board: {value: Orin, id: DEM2-ENV-01}
+  power_mode: {value: MAXN, id: DEM2-ENV-02}
+  clocks_pinned: {value: true, id: DEM2-ENV-03, note: the workflow runs sudo jetson_clocks}
+  input_period_ms: {value: 1000, tolerance_pct: 5, id: DEM2-ENV-04}
+  max_start_temp_c: {value: 60, id: DEM2-ENV-05}
+  max_background_cpu_pct: {value: 15, id: DEM2-ENV-06}
+
+# What the pipeline must do.
+guarantees:
+  p99_ms:         {limit: 3000, id: DEM2-PERF-01}
+  max_miss_ratio: {limit: 0, deadline_ms: 3000, id: DEM2-PERF-02}
+  max_temp_c:     {limit: 85, id: DEM2-THERM-01}
+  # With a readable power sensor (AGX Orin: yes; Nano: chmod, see README):
+  # max_power_w:  {limit: 30, id: DEM2-PWR-01}

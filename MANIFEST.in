@@ -9,5 +9,6 @@ include requirements.txt
 recursive-include tests *.py *.onnx *.json
 recursive-include examples *.py
 recursive-include scripts *.sh
+recursive-include examples *.yaml *.yml *.md *.sh
 prune docs
 global-exclude __pycache__ *.py[cod] *.so .DS_Store
