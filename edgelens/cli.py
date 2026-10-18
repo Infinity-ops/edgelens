@@ -1,7 +1,8 @@
 """
 edgelens.cli
 -------------
-Command-line interface: doctor, monitor, benchmark, diagnose, report, compare.
+Command-line interface: doctor, monitor, benchmark, diagnose, report, compare,
+validate; v0.2: record, watch, import-log, include, selftest, ros2.
 """
 
 import json
@@ -137,12 +138,28 @@ def _load_result_or_exit(path):
         console.print(f"[red]Cannot read {path} as an EdgeLens result: "
                       f"{type(e).__name__}: {e}[/red]")
         raise typer.Exit(1)
-    if not isinstance(data, dict) or "stage_avg_ms" not in data:
-        console.print(f"[red]{path} is JSON but not an EdgeLens benchmark/trace result "
-                      f"(no 'stage_avg_ms'). Pass the file written by `edgelens benchmark` "
-                      f"or `edgelens.trace(..., save=...)`.[/red]")
+    from .core.schema import problems
+    issues = problems(data)
+    if issues:
+        console.print(f"[red]{path} can't be used as an EdgeLens result: {issues[0]}. Pass "
+                      f"a file written by `edgelens benchmark`, `record`, `watch` or "
+                      f"`edgelens.trace(..., save=...)`.[/red]")
         raise typer.Exit(1)
     return data
+
+
+def _print_integrity_issues(issues):
+    """Problems with the measurement itself, shown before anyone trusts it."""
+    for i in issues or []:
+        style = {"blocks_pass": "yellow", "warn": "yellow"}.get(i["severity"], "dim")
+        console.print(f"[{style}]Measurement: {i['code']} — {i['detail']}[/{style}]")
+
+
+def _sibling(path, kind):
+    """run.json -> run.<kind>.json; base.r01.json -> base.r01.<kind>.json
+    (repeated runs must not overwrite each other's verdicts)."""
+    name = path.name[:-5] if path.name.endswith(".json") else path.name
+    return path.with_name(f"{name}.{kind}.json")
 
 
 def _ms(v):
@@ -413,6 +430,11 @@ def benchmark(
     idle_baseline: float = typer.Option(0.0, "--idle-baseline", help="Seconds of idle power "
                                         "measurement before the run, to report dynamic "
                                         "(workload-only) energy. Needs INA3221 (Jetson)."),
+    repeat: int = typer.Option(1, "--repeat", min=1, help="Independent repeated runs, saved "
+                               "as NAME.r01.json ... For a statistical `compare` verdict "
+                               "use 3 or more (5 recommended)."),
+    cooldown: float = typer.Option(0.0, "--cooldown", help="Seconds to wait between "
+                                   "repeats (lets temperature settle)."),
 ):
     """Run a benchmark; measure per-stage latency, tail, deadlines, power and energy."""
     is_jetson = detector.is_jetson()
@@ -431,18 +453,25 @@ def benchmark(
         console.print(f"[red]Cannot create output folder for {save}: {e}[/red]")
         raise typer.Exit(1)
 
-    with console.status("Running benchmark..."):
-        try:
-            result = run_benchmark(
-                iterations=iterations, demo=demo, demo_scenario=scenario,
-                model_path=model, provider=provider, pipeline_path=pipeline,
-                input_shapes=parse_input_shapes(input_shape),
-                deadline_ms=deadline_ms, period_ms=period_ms, pace=pace,
-                idle_baseline_s=idle_baseline or None,
-            )
-        except RuntimeError as e:
-            console.print(f"[red]{e}[/red]")
-            raise typer.Exit(1)
+    def _one_run(label="Running benchmark..."):
+        with console.status(label):
+            try:
+                return run_benchmark(
+                    iterations=iterations, demo=demo, demo_scenario=scenario,
+                    model_path=model, provider=provider, pipeline_path=pipeline,
+                    input_shapes=parse_input_shapes(input_shape),
+                    deadline_ms=deadline_ms, period_ms=period_ms, pace=pace,
+                    idle_baseline_s=idle_baseline or None,
+                )
+            except RuntimeError as e:
+                console.print(f"[red]{e}[/red]")
+                raise typer.Exit(1)
+
+    if repeat > 1:
+        _run_repeats(_one_run, repeat, cooldown, save)
+        return
+
+    result = _one_run()
 
     if result["mode"] == "demo":
         _demo_banner()
@@ -454,6 +483,51 @@ def benchmark(
 
     if result["mode"] == "demo":
         _demo_banner()
+
+
+def repeat_paths(save, n):
+    p = Path(save)
+    stem = p.name[:-len(p.suffix)] if p.suffix else p.name
+    return [p.with_name(f"{stem}.r{i:02d}{p.suffix or '.json'}") for i in range(1, n + 1)]
+
+
+def _run_repeats(one_run, n, cooldown, save):
+    """N independent runs, one file each, plus the run-to-run spread."""
+    from .compare.stats import environments
+    paths = repeat_paths(save, n)
+    runs = []
+    table = Table(title=f"EdgeLens Benchmark — {n} repeated runs")
+    for col in ("Run", "Mean", "p50", "p99", "Max", "Misses", "Energy/it", "File"):
+        table.add_column(col)
+    for i, path in enumerate(paths, 1):
+        if i > 1 and cooldown:
+            time.sleep(cooldown)
+        r = one_run(f"Run {i}/{n}...")
+        runs.append(r)
+        _write_or_exit(path, json.dumps(r, indent=2))
+        lat, dl, en = r.get("latency") or {}, r.get("deadline"), r.get("energy") or {}
+        table.add_row(str(i), _ms(lat.get("mean")), _ms(lat.get("p50")), _ms(lat.get("p99")),
+                      _ms(lat.get("max")), f"{dl['misses']}/{dl['iterations']}" if dl else "-",
+                      f"{en['energy_per_iteration_j'] * 1000:.2f} mJ" if en.get("available")
+                      else "-", str(path))
+    console.print(table)
+    if runs and runs[0]["mode"] == "demo":
+        _demo_banner()
+    import numpy as _np
+    for key in ("p99", "mean"):
+        vals = [(x.get("latency") or {}).get(key) for x in runs]
+        vals = [v for v in vals if v is not None]
+        if len(vals) >= 2 and _np.mean(vals) > 0:
+            cv = 100 * _np.std(vals, ddof=1) / _np.mean(vals)
+            console.print(f"Run-to-run spread of {key}: {min(vals):.3f}–{max(vals):.3f} ms "
+                          f"(CV {cv:.1f}%)")
+    envs = environments(runs)
+    if len(envs) > 1:
+        console.print(f"[yellow]The environment changed between repeats ({', '.join(envs)}): "
+                      f"power mode or clocks moved during the series.[/yellow]")
+    first = str(paths[0]).replace(".r01", ".r*")
+    console.print(f"[green]Saved {n} runs →[/green] {first}\n[dim]Compare with: edgelens "
+                  f"compare '{first}' 'OTHER.r*.json'[/dim]")
 
 
 @app.command()
@@ -483,8 +557,9 @@ def diagnose(
     for f in verdict["secondary"]:
         console.print(f"  also considered: [bold]{f['type']}[/bold] "
                        f"({f['evidence_strength']} evidence) — {f['detail']}")
+    _print_integrity_issues(verdict.get("measurement_integrity"))
 
-    out = path.with_suffix("").with_suffix(".diagnosis.json")
+    out = _sibling(path, "diagnosis")
     _write_or_exit(out, json.dumps(verdict, indent=2))
     console.print(f"[green]Saved →[/green] {out}")
 
@@ -521,15 +596,51 @@ def report(
         console.print("[dim]The HTML report itself is also watermarked as simulated.[/dim]")
 
 
+_DERIVED = (".diagnosis.json", ".validation.json", ".selftest.json", ".fingerprint.json")
+
+
+def _expand(pattern):
+    """Glob for result files; skips files EdgeLens derived from results
+    (diagnose / validate output next to base.r01.json)."""
+    import glob as _glob
+    if any(ch in pattern for ch in "*?["):
+        return sorted(f for f in _glob.glob(pattern) if not f.endswith(_DERIVED))
+    return [pattern]
+
+
 @app.command()
 def compare(
-    before_file: str = typer.Argument(..., help="Path to the 'before' benchmark JSON file."),
-    after_file: str = typer.Argument(..., help="Path to the 'after' benchmark JSON file."),
+    runs: List[str] = typer.Argument(..., help="BEFORE AFTER: two result files, or two "
+                                     "QUOTED glob patterns of repeated runs, e.g. "
+                                     "'base.r*.json' 'pinned.r*.json'."),
     strict_env: bool = typer.Option(False, "--strict-env", help="Exit with code 2 when the "
                                     "two runs come from different environments (power "
                                     "mode, clocks, board, JetPack, versions)."),
+    metric: str = typer.Option(None, "--metric", help="Primary metric for the statistical "
+                               "verdict: p99 (default when every run has >= 100 "
+                               "iterations), p50, mean, max, miss_ratio, energy_mj, fps."),
+    min_effect: float = typer.Option(2.0, "--min-effect", help="Smallest change (%) of the "
+                                     "primary metric treated as a regression (exit 1)."),
 ):
-    """Compare two benchmark runs (before/after) and flag regressions."""
+    """Compare before/after. Two files: the v0.1 comparison plus within-run
+    noise. Two groups of repeated runs (benchmark --repeat N): a statistical
+    verdict IMPROVED / REGRESSED / NO DETECTABLE CHANGE."""
+    if len(runs) != 2:
+        console.print(f"[red]compare takes exactly two arguments (BEFORE AFTER); got "
+                      f"{len(runs)}. If you passed a glob, QUOTE it so the shell doesn't "
+                      f"expand it: edgelens compare 'base.r*.json' 'new.r*.json'[/red]")
+        raise typer.Exit(2)
+    before_files, after_files = _expand(runs[0]), _expand(runs[1])
+    for pat, files in ((runs[0], before_files), (runs[1], after_files)):
+        if not files:
+            console.print(f"[red]No files match {pat}[/red]")
+            raise typer.Exit(1)
+    if len(before_files) > 1 or len(after_files) > 1:
+        _compare_groups([_load_result_or_exit(f) for f in before_files],
+                        [_load_result_or_exit(f) for f in after_files],
+                        strict_env, metric, min_effect)
+        return
+    before_file, after_file = before_files[0], after_files[0]
     before = _load_result_or_exit(before_file)
     after = _load_result_or_exit(after_file)
 
@@ -581,6 +692,17 @@ def compare(
         stage_table.add_row(stage, f"{d['before_ms']:.3f}", f"{d['after_ms']:.3f}", change)
     console.print(stage_table)
 
+    from .compare.stats import within_run_ci
+    cis = [within_run_ci(r.get("latency_series_ms"), "p99") for r in (before, after)]
+    if all(cis):
+        console.print(f"[dim]Within-run 95% interval of p99 (block bootstrap): before "
+                      f"{cis[0][0]:.3f}–{cis[0][1]:.3f} ms, after {cis[1][0]:.3f}–"
+                      f"{cis[1][1]:.3f} ms. This is one run's sampling noise only; "
+                      f"run-to-run noise is usually larger. For a statistical verdict, "
+                      f"benchmark both sides with --repeat 5.[/dim]")
+    else:
+        console.print("[dim]Single runs: for a statistical verdict, benchmark both sides "
+                      "with --repeat 5 and compare the two groups.[/dim]")
     if result["verdict"] == "REGRESSION":
         console.print(Panel(
             "\n".join(result["reasons"]),
@@ -594,6 +716,75 @@ def compare(
         raise typer.Exit(2)
     if result["verdict"] == "REGRESSION":
         raise typer.Exit(1)
+
+
+def _compare_groups(before, after, strict_env, metric, min_effect):
+    from .compare import stats as cstats
+    from .compare.engine import environment_diff
+    env_b, env_a = cstats.environments(before), cstats.environments(after)
+    for label, envs in (("before", env_b), ("after", env_a)):
+        if len(envs) > 1:
+            console.print(f"[yellow]The {label} runs come from {len(envs)} different "
+                          f"environments ({', '.join(envs)}).[/yellow]")
+    diffs = environment_diff(before[0], after[0]) or []
+    if diffs:
+        lines = "\n".join(f"  {d['label']}: {d['before']} -> {d['after']}" for d in diffs)
+        console.print(Panel("The two groups were taken in DIFFERENT environments; a change "
+                            "below may come from the environment, not your change:\n" + lines,
+                            title="⚠️  Environment mismatch", style="yellow",
+                            border_style="yellow"))
+    try:
+        res = cstats.compare_groups(before, after, primary=metric, min_effect_pct=min_effect)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(2)
+    table = Table(title=f"EdgeLens Compare — {res['n_before']} vs {res['n_after']} runs")
+    for col in ("Metric", "Before (mean of runs)", "After", "Change [95% CI]",
+                "Smallest detectable", "Verdict"):
+        table.add_column(col)
+    style = {cstats.IMPROVED: "green", cstats.REGRESSED: "red", cstats.NO_CHANGE: "white",
+             cstats.INSUFFICIENT: "yellow"}
+    for m, row in res["metrics"].items():
+        if row["verdict"] == cstats.INSUFFICIENT:
+            table.add_row(row["label"], "-", "-", "-", "-",
+                          f"[yellow]{row['verdict']}[/yellow]")
+            continue
+        unit = row["unit"]
+        ci = row["ci95_pct"]
+        change = (f"{row['change_pct']:+.2f}% [{ci[0]:+.2f}, {ci[1]:+.2f}]"
+                  if row["change_pct"] is not None else f"{row['change']:+.4g}")
+        bold = "bold " if m == res["primary_metric"] else ""
+        table.add_row(f"{bold and '[bold]'}{row['label']}{bold and '[/bold]'}",
+                      f"{row['before_mean']:.4g} {unit} (CV {row['before_cv_pct']}%)",
+                      f"{row['after_mean']:.4g} {unit} (CV {row['after_cv_pct']}%)", change,
+                      f"±{row['min_detectable_change_pct']}%"
+                      if row["min_detectable_change_pct"] is not None else "-",
+                      f"[{style[row['verdict']]}]{row['verdict']}[/{style[row['verdict']]}]")
+    console.print(table)
+    prim = res["metrics"].get(res["primary_metric"]) or {}
+    v = res["verdict"]
+    if v == cstats.INSUFFICIENT:
+        body = prim.get("reason") or "Not enough repeated runs."
+    elif v == cstats.NO_CHANGE:
+        body = (f"No detectable change in {prim['label']}. With {prim['n_before']} + "
+                f"{prim['n_after']} runs, a change smaller than about "
+                f"±{prim['min_detectable_change_pct']}% could have been missed; more "
+                f"repeats narrow that.")
+    else:
+        body = (f"{prim['label']}: {prim['before_mean']:.4g} → {prim['after_mean']:.4g} "
+                f"{prim['unit']} ({prim['change_pct']:+.2f}%, 95% CI "
+                f"{prim['ci95_pct'][0]:+.2f}% to {prim['ci95_pct'][1]:+.2f}%).")
+    body += "".join("\n" + n for n in res["notes"])
+    title = {cstats.IMPROVED: "✅ IMPROVED", cstats.REGRESSED: "❌ REGRESSED",
+             cstats.NO_CHANGE: "NO DETECTABLE CHANGE",
+             cstats.INSUFFICIENT: "⚠️  INSUFFICIENT REPEATS"}[v]
+    console.print(Panel(body, title=title, border_style=style[v]))
+    if strict_env and diffs:
+        raise typer.Exit(2)
+    if res["regression"]:
+        raise typer.Exit(1)
+    if v == cstats.INSUFFICIENT:
+        raise typer.Exit(2)
 
 
 @app.command()
@@ -677,13 +868,15 @@ def validate(
     else:
         console.print(Panel("\n".join(verdict["notes"]),
                             title="⚠️  INCONCLUSIVE", style="yellow", border_style="yellow"))
+    _print_integrity_issues([i for i in verdict.get("integrity") or []
+                             if i["severity"] != "info"])
 
     run = verdict["run"]
     console.print(f"[dim]{run['iterations']} iterations · {run.get('board') or 'unknown board'}"
                   f"{' · ' + run['power_mode'] if run.get('power_mode') else ''} · "
                   f"environment_id {run.get('environment_id')} · run_id {run.get('run_id')}[/dim]")
 
-    out = path.with_suffix("").with_suffix(".validation.json")
+    out = _sibling(path, "validation")
     _write_or_exit(out, json.dumps(verdict, indent=2))
     console.print(f"[green]Saved →[/green] {out}")
     raise typer.Exit(validate_exit_code(verdict["verdict"]))
@@ -695,5 +888,12 @@ def version():
     console.print(f"EdgeLens v{__version__}")
 
 
+# v0.2 command groups register themselves on `app` (kept in separate modules).
+from . import cli_observe  # noqa: E402,F401
+
+
 if __name__ == "__main__":
-    app()
+    # `python -m edgelens.cli` runs this file as __main__, a second copy of the
+    # module; the v0.2 commands registered on the importable copy's app.
+    from edgelens.cli import app as _registered_app
+    _registered_app()
