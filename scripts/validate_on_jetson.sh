@@ -16,8 +16,39 @@ OUT="edgelens_validation_${BOARD:-unknown}_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUT"
 QUICK="${EDGELENS_VALIDATE_QUICK:-0}"
 REPEATS=5; ITER=2000; [ "$QUICK" = "1" ] && { REPEATS=3; ITER=300; }
+STEP_TIMEOUT="${EDGELENS_STEP_TIMEOUT:-900}"   # no single step may run longer (s)
+export PYTHONFAULTHANDLER=1                     # a crash prints WHERE it happened
 log() { echo "== $*" | tee -a "$OUT/steps.log"; }
-run() { log "$*"; "$@" >>"$OUT/steps.log" 2>&1; local rc=$?; echo "   exit=$rc" | tee -a "$OUT/steps.log"; return $rc; }
+crashed() {   # stop the whole run on a crash: everything after it would be noise
+  echo "!! '$1' was killed by signal $(( $2 - 128 )) ($(kill -l $(( $2 - 128 )) 2>/dev/null))." | tee -a "$OUT/steps.log"
+  echo "!! The Python environment is broken; stopping instead of running every step into" | tee -a "$OUT/steps.log"
+  echo "!! the same crash. The traceback is at the end of $OUT/steps.log. Run 'edgelens doctor'." | tee -a "$OUT/steps.log"
+  echo "STOP  crashed in: $1 (signal $(( $2 - 128 )))" >>"$OUT/SUMMARY.txt"
+  cat "$OUT/SUMMARY.txt"; tar czf "$OUT.tar.gz" "$OUT"; exit 3
+}
+run() {
+  log "$*"
+  local t0=$SECONDS timed=0
+  if [ "$(type -t "$1")" = function ]; then   # shell helpers (py): timeout can't run them
+    "$@" >>"$OUT/steps.log" 2>&1
+  else
+    timed=1
+    timeout --kill-after=15 "$STEP_TIMEOUT" "$@" >>"$OUT/steps.log" 2>&1
+  fi
+  local rc=$? took=$(( SECONDS - t0 ))
+  echo "   exit=$rc (${took}s)" | tee -a "$OUT/steps.log"
+  # 124 = timeout; 137 (SIGKILL) is OUR kill only if the step really ran out of
+  # time — a SIGKILL earlier is the kernel's out-of-memory killer: a crash.
+  if [ "$timed" = 1 ] && { [ "$rc" = 124 ] || { [ "$rc" = 137 ] && [ "$took" -ge "$STEP_TIMEOUT" ]; }; }; then
+    echo "   TIMEOUT after ${STEP_TIMEOUT}s" | tee -a "$OUT/steps.log"; return $rc
+  fi
+  if [ "$rc" = 137 ]; then
+    echo "   KILLED (SIGKILL) after ${took}s: probably out of memory — see 'dmesg | grep -i oom'" | tee -a "$OUT/steps.log"
+  fi
+  if [ "$rc" = 127 ]; then echo "   COMMAND NOT FOUND: $1" | tee -a "$OUT/steps.log"; fi
+  if [ "$rc" -gt 128 ]; then crashed "$*" "$rc"; fi
+  return $rc
+}
 gate() {  # gate "<feature>" "<done-when>" <command...>
   local name="$1" what="$2"; shift 2
   if run "$@"; then echo "PASS  $name — $what" >>"$OUT/SUMMARY.txt"
@@ -30,7 +61,7 @@ py() { python3 - "$@"; }
 expect() {
   local allowed="$1"; shift
   log "$* (allowed exit: $allowed)"
-  local tmp; tmp="$(mktemp)"; "$@" >"$tmp" 2>&1; local rc=$?
+  local tmp; tmp="$(mktemp)"; timeout --kill-after=15 "$STEP_TIMEOUT" "$@" >"$tmp" 2>&1; local rc=$?
   cat "$tmp" >>"$OUT/steps.log"; echo "   exit=$rc" | tee -a "$OUT/steps.log"
   if grep -q "Traceback (most recent call last)" "$tmp"; then rm -f "$tmp"; return 1; fi
   rm -f "$tmp"
@@ -60,6 +91,26 @@ log "raw platform sources (what the parsers are written against)"
 } >"$OUT/platform_raw.txt" 2>&1
 
 : >"$OUT/SUMMARY.txt"
+
+# ------------------------------------------------------------------ preflight
+log "preflight: is this Python environment sound?"
+if ! timeout 300 python3 - >>"$OUT/steps.log" 2>&1 <<'EOF'
+import sys
+from edgelens.benchmark.onnx_pipeline import cuda_probe, cuda_probe_kind, ort_install_problems
+problems = ort_install_problems()
+for p in problems:
+    print("PROBLEM:", p["problem"]); print("FIX:    ", p["fix"])
+kind = cuda_probe_kind()
+print("onnxruntime CUDA probe:", kind, cuda_probe()[1] or "")
+sys.exit(1 if problems or kind in ("crash", "hang") else 0)
+EOF
+then
+  echo "!! Preflight failed: the onnxruntime installation is broken (details and the fix:" | tee -a "$OUT/SUMMARY.txt"
+  echo "!! tail $OUT/steps.log, or run 'edgelens doctor'). Fix it, then rerun this script." | tee -a "$OUT/SUMMARY.txt"
+  tail -6 "$OUT/steps.log"
+  exit 2
+fi
+echo "PASS  preflight — one onnxruntime install, CUDA provider loads or is absent cleanly" >>"$OUT/SUMMARY.txt"
 
 # ------------------------------------------------------------------ v0.1 paths
 gate "unit tests" "all pass on the board" python3 -m pytest -q
@@ -192,6 +243,67 @@ if python3 -c "import rosbags" 2>/dev/null; then
   [ -n "${DEM2_BAG:-}" ] && run python3 examples/rosbag_to_windows.py "$DEM2_BAG" --out "$OUT/dem2_real.npy"
 else
   skip "S4 bag" 'pip install "edgelens[rosbag]"'
+fi
+
+# ------------------------------------------------------------------ Layer 2: I3 backend sweep
+LSTM=tests/fixtures/lstm_anomaly.onnx
+gate "I3 sweep runs" "every available backend timed and compared with CPU" \
+  edgelens sweep --model "$LSTM" --backends cpu,cuda,tensorrt,tensorrt-fp16,dla \
+  --iterations 300 --eval-samples 100 --export-inputs "$OUT/sweep_inputs.npz" --save "$OUT/sweep.json"
+py "$OUT/sweep.json" <<'EOF' >>"$OUT/steps.log" 2>&1 && echo "PASS  I3 FP16 drift — TensorRT FP16 output drift quantified vs CPU" >>"$OUT/SUMMARY.txt" || echo "SKIP  I3 FP16 drift — no TensorRT FP16 row (see sweep.json)" >>"$OUT/SUMMARY.txt"
+import json, sys
+s = json.load(open(sys.argv[1]))
+rows = {r["backend"]: r for r in s["backends"]}
+for r in s["backends"]:
+    print(r["backend"], r.get("status"), r.get("verdict"), r.get("max_abs_error"),
+          r.get("decision_agreement"), r.get("p50_ms"), r.get("reason", ""))
+fp16 = rows.get("tensorrt-fp16") or {}
+sys.exit(0 if fp16.get("status") == "ok" and fp16.get("max_abs_error") is not None else 1)
+EOF
+if [ -f "$OUT/sweep.tensorrt-fp16.json" ]; then
+  gate "I3 FP16 requirements" "TensorRT FP16 result meets: decisions >= 99% equal, max |error| <= 0.05" \
+    edgelens validate "$OUT/sweep.tensorrt-fp16.json" --min-decision-agreement 0.99 --max-output-error 0.05
+fi
+
+# ------------------------------------------------------------------ Layer 2: I1 periodic inference
+if [ "$QUICK" = "1" ]; then PI=10; else PI=30; fi
+run edgelens periodic --model "$LSTM" --provider CPUExecutionProvider --period-ms 10 --period-ms 100 --period-ms 1000 \
+  --iterations "$PI" --save "$OUT/periodic_cpu.json"
+# best provider that actually LOADS here (TensorRT > CUDA > CPU), named in the summary
+TRTP=$(python3 -c "from edgelens.benchmark.onnx_pipeline import usable_providers as u; p=u(); print(next((x for x in ('TensorrtExecutionProvider','CUDAExecutionProvider') if x in p), 'CPUExecutionProvider'))")
+log "periodic provider: $TRTP"
+gate "I1 periodic 1 Hz ($TRTP)" "latency + energy per period at 1 Hz, duty-cycle check" \
+  edgelens periodic --model "$LSTM" --provider "$TRTP" --period-ms 1000 --iterations "$PI" --save "$OUT/periodic_unpinned.json"
+if [ "${EDGELENS_VALIDATE_SUDO:-0}" = "1" ]; then
+  sudo jetson_clocks --store "$OUT/clocks_periodic.conf"
+  sudo jetson_clocks
+  run edgelens periodic --model "$LSTM" --provider "$TRTP" --period-ms 1000 --iterations "$PI" --save "$OUT/periodic_pinned.json"
+  sudo jetson_clocks --restore "$OUT/clocks_periodic.conf"
+  run edgelens compare "$OUT/periodic_unpinned.json" "$OUT/periodic_pinned.json"
+  grep -q "Trade-off" "$OUT/steps.log" && echo "PASS  I1 trade-off — pinned vs unpinned at 1 Hz: latency AND energy per period" >>"$OUT/SUMMARY.txt" \
+    || echo "FAIL  I1 trade-off — no trade-off line (see steps.log)" >>"$OUT/SUMMARY.txt"
+else
+  skip "I1 trade-off" "set EDGELENS_VALIDATE_SUDO=1 for the pinned/unpinned pair"
+fi
+
+# ------------------------------------------------------------------ Layer 2: I2 soak + memory
+if [ "$QUICK" = "1" ]; then LEAK_D=60s; LEAK_W=6; SOAK_D=2m; SOAK_W=15; else LEAK_D=3m; LEAK_W=15; SOAK_D=30m; SOAK_W=60; fi
+run edgelens soak --duration "$LEAK_D" --window "$LEAK_W" --pipeline examples/soak_leak_demo.py --period-ms 50 --save "$OUT/soak_leak.json"
+py "$OUT/soak_leak.json" <<'EOF' >>"$OUT/steps.log" 2>&1 && echo "PASS  I2 leak — deliberate leak detected by soak" >>"$OUT/SUMMARY.txt" || echo "FAIL  I2 leak — not detected (see steps.log)" >>"$OUT/SUMMARY.txt"
+import json, sys
+m = json.load(open(sys.argv[1]))["soak"]["memory"]
+print(m)
+sys.exit(0 if m["leak_suspected"] else 1)
+EOF
+if [ -f "$OUT/dem2_merged.npy" ]; then
+  SOAK_T=$(( $(python3 -c "from edgelens.soak import parse_duration as p; print(int(p('$SOAK_D')))") + 300 ))
+  EDGELENS_STEP_TIMEOUT=$SOAK_T DEM2_MERGED="$OUT/dem2_merged.npy" STEP_TIMEOUT=$SOAK_T \
+    gate "I2 soak $SOAK_D" "DEM2 pipeline at 1 Hz: drift, throttling, memory, JSONL streamed" \
+    edgelens soak --duration "$SOAK_D" --window "$SOAK_W" --pipeline examples/dem2_bag_replay.py --period-ms 1000 --deadline-ms 3000 --save "$OUT/soak_dem2.json"
+  gate "I2 soak requirements" "p99 <= 3 s, no misses, drift <= 10%, memory growth <= 20 MB/h, no throttled window" \
+    edgelens validate "$OUT/soak_dem2.json" --p99-ms 3000 --max-miss-ratio 0 --max-latency-drift-pct 10 --max-mem-growth-mb-per-h 20 --max-throttled-windows 0
+else
+  skip "I2 soak DEM2" "needs the S4 bag merge (pip install edgelens[rosbag])"
 fi
 
 # ------------------------------------------------------------------ S3 ROS 2

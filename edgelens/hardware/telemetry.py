@@ -81,33 +81,98 @@ def read_gpu_percent_sysfs():
         return None
 
 
+SLOW_ZONE_MS = 1.0          # a zone read slower than this is "slow" (firmware / I2C)
+SLOW_ZONE_EVERY = 20        # read slow zones only every Nth sample
+
+
+def _read_zone(path):
+    with open(path) as f:
+        return int(f.read().strip()) / 1000.0
+
+
 def _zones():
+    """[(name, path, cost_ms)] — each zone's read cost measured once.
+
+    Some thermal zones are read through firmware or I2C and take
+    milliseconds (laptop Wi-Fi chips, a Jetson PMIC): read every sample, they
+    made the sampler cost 7-15 ms of CPU per sample on real machines."""
     global _thermal_zones
     if _thermal_zones is None:
         zones = []
         for zone in sorted(glob.glob("/sys/class/thermal/thermal_zone*")):
             try:
                 with open(f"{zone}/type") as f:
-                    zones.append((f.read().strip(), f"{zone}/temp"))
+                    name = f.read().strip()
             except Exception:
                 continue
+            path = f"{zone}/temp"
+            costs = []
+            for _ in range(2):
+                c0 = time.perf_counter()
+                try:
+                    _read_zone(path)
+                except Exception:
+                    pass
+                costs.append((time.perf_counter() - c0) * 1000.0)
+            zones.append((name, path, min(costs)))
         _thermal_zones = zones
     return _thermal_zones
 
 
-def read_temps():
+def slow_zones():
+    return [(n, round(c, 3)) for n, _, c in _zones() if c > SLOW_ZONE_MS]
+
+
+_temp_cache = {}
+_temp_calls = [0]
+
+
+def read_temps(include_slow=None):
+    """Temperatures of all plausible zones. Slow zones are re-read only every
+    SLOW_ZONE_EVERY calls (their last value is reused in between)."""
+    _temp_calls[0] += 1
+    if include_slow is None:
+        include_slow = _temp_calls[0] % SLOW_ZONE_EVERY == 1
     temps = {}
-    for name, path in _zones():
+    for name, path, cost in _zones():
+        if cost > SLOW_ZONE_MS and not include_slow:
+            if name in _temp_cache:
+                temps[name] = _temp_cache[name]
+            continue
         try:
-            with open(path) as f:
-                val = int(f.read().strip()) / 1000.0
+            val = _read_zone(path)
         except Exception:
             continue
         # Disabled/virtual zones report sentinel values (e.g. -40 C or 100+ C
         # on the Nano's PMIC zone); keep only physically plausible readings.
         if -30.0 < val < 130.0:
             temps[name] = val
+            _temp_cache[name] = val
     return temps
+
+
+def profile_sampler(n=10):
+    """CPU ms per call of each sampler part (for `edgelens selftest`)."""
+    pr = power_mod.PowerReader()
+    parts = {
+        "cpu_percent": lambda: psutil.cpu_percent(interval=None),
+        "memory": psutil.virtual_memory,
+        "swap": psutil.swap_memory,
+        "thermal (fast zones)": lambda: read_temps(include_slow=False),
+        "thermal (all zones)": lambda: read_temps(include_slow=True),
+        "gpu load": read_gpu_percent_sysfs,
+        "power sensors": pr.read,
+    }
+    out = {}
+    for name, fn in parts.items():
+        c0 = time.thread_time()
+        for _ in range(n):
+            try:
+                fn()
+            except Exception:
+                pass
+        out[name] = round((time.thread_time() - c0) / n * 1000.0, 3)
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -217,12 +282,24 @@ def read_gpu_percent_tegrastats():
 # --------------------------------------------------------------------------
 # sampling
 
+_swap_cache = [None, 0]
+
+
+def _swap():
+    """Swap changes slowly and psutil reads several /proc files for it:
+    refresh every 10th sample."""
+    _swap_cache[1] += 1
+    if _swap_cache[0] is None or _swap_cache[1] % 10 == 0:
+        _swap_cache[0] = psutil.swap_memory()
+    return _swap_cache[0]
+
+
 def snapshot(stream=None, power_reader=None):
     """One telemetry sample. Safe on any host (Jetson or not), non-blocking."""
     t0 = time.perf_counter()
     c0 = time.thread_time()
     mem = psutil.virtual_memory()
-    swap = psutil.swap_memory()
+    swap = _swap()
     teg = stream.latest() if stream is not None else None
 
     gpu = read_gpu_percent_sysfs()
@@ -412,6 +489,7 @@ class TelemetryRecorder:
             "temps_c_mean": temps_mean,
             "temps_c_peak": temps_peak,
             "max_temp_c": max(temps_peak.values()) if temps_peak else 0,
+            "slow_thermal_zones": slow_zones(),
             # flat/legacy fields (mean-based) consumed by older readers
             "cpu_percent": mean(cpu_vals),
             "gpu_percent": mean(gpu_vals),

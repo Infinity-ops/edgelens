@@ -20,7 +20,9 @@ import threading
 from ..core.clock import now_ns
 from . import protocol
 
-DEFAULT_MAX_SPANS = 5_000_000          # ~0.5 GB worst case; then counted, not stored
+DEFAULT_MAX_SPANS = 1_000_000          # ~100 MB worst case; then counted, not stored.
+                                       # Longer runs: `edgelens soak` (windows, constant memory)
+RAW_PARSE_AT = 50_000                  # unparsed datagrams before the receiver parses itself
 
 
 class CollectorError(RuntimeError):
@@ -98,18 +100,23 @@ class MarkerCollector:
         spans, stats = c.stop()
     """
 
-    def __init__(self, path=None, rcvbuf_bytes=8 << 20, max_spans=DEFAULT_MAX_SPANS):
+    def __init__(self, path=None, rcvbuf_bytes=8 << 20, max_spans=DEFAULT_MAX_SPANS,
+                 keep_spans=True):
         self.path = protocol.socket_path(path)
         self.rcvbuf_bytes = rcvbuf_bytes
         self.max_spans = max_spans
+        self.keep_spans = keep_spans      # False: drain() hands spans out, nothing kept
         self._sock = None
         self._thread = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
+        self._raw = []                    # datagrams received, not parsed yet
+        self._seen_pids = set()
         self.spans = []
         self.senders = {}
         self.malformed = 0
         self.not_stored = 0
+        self.datagrams = 0
         self.started_mono_ns = None
         self.stopped_mono_ns = None
         self.rcvbuf_effective = None
@@ -145,11 +152,19 @@ class MarkerCollector:
         return self
 
     def add_listener(self, fn):
-        """fn(span_dict) is called on the receiver thread for every span."""
+        """fn({"pid": pid}) is called on the receiver thread the first time a
+        process sends anything (e.g. to check its ancestry while it is alive)."""
         self._listeners.append(fn)
 
     def _run(self):
+        # Hot loop: receive and keep raw bytes only. Parsing happens later
+        # (drain / stop), so the collector keeps up with fast senders even on
+        # a slow CPU (Jetson Nano: parsing on arrival capped it far below
+        # what a C application can send).
         sock = self._sock
+        raw = self._raw
+        listeners = self._listeners
+        seen = self._seen_pids
         while not self._stop.is_set():
             try:
                 data = sock.recv(65536)
@@ -157,7 +172,13 @@ class MarkerCollector:
                 continue
             except OSError:
                 break
-            self._handle(data)
+            raw.append(data)
+            if listeners:
+                self._notify(data, seen)
+            if len(raw) > RAW_PARSE_AT:
+                # Nobody drains (a long run without drain()): parse here so the
+                # raw backlog stays bounded. Costs receive speed only in this case.
+                self._parse_pending()
         # drain what is already queued so a fast stop loses nothing
         sock.setblocking(False)
         while True:
@@ -165,43 +186,74 @@ class MarkerCollector:
                 data = sock.recv(65536)
             except (BlockingIOError, OSError):
                 break
-            self._handle(data)
+            raw.append(data)
+            if listeners:
+                self._notify(data, seen)
 
-    def _handle(self, data):
-        # A datagram holds one span, or several newline-separated ones when
-        # the sender batched an overflow.
-        if b"\n" in data.rstrip(b"\n"):
-            for line in data.split(b"\n"):
-                if line.strip():
-                    self._handle_one(line, batched=True)
+    def _notify(self, data, seen):
+        parts = data.split(b" ", 5)
+        if len(parts) < 5:
             return
-        self._handle_one(data)
+        try:
+            pid = int(parts[4])
+        except ValueError:
+            return
+        if pid in seen:
+            return
+        seen.add(pid)
+        for fn in self._listeners:
+            try:
+                fn({"pid": pid})
+            except Exception:
+                pass
 
-    def _handle_one(self, data, batched=False):
+    def _parse_pending(self):
+        """Parse everything received so far. Returns the new spans."""
+        with self._lock:
+            # The receiver thread appends concurrently: take exactly the first n
+            # items and delete exactly those (appends land after them).
+            n = len(self._raw)
+            batch = self._raw[:n]
+            del self._raw[:n]
+            new = []
+            for data in batch:
+                self.datagrams += 1
+                if b"\n" in data.rstrip(b"\n"):
+                    for line in data.split(b"\n"):
+                        if line.strip():
+                            self._handle_one(line, new, batched=True)
+                else:
+                    self._handle_one(data, new)
+            return new
+
+    def _handle_one(self, data, new, batched=False):
         msg = protocol.parse(data)
         if msg is None:
             self.malformed += 1
             return
         key = (msg["src"], msg["pid"])
-        with self._lock:
-            snd = self.senders.get(key)
-            if snd is None:
-                snd = self.senders[key] = _Sender(msg["src"], msg["pid"])
-            if msg["kind"] == "F":
-                snd.final_seq = msg["seq"]
-                return
-            snd.see(msg["seq"])
-            if batched:
-                snd.batched = True
-            if len(self.spans) < self.max_spans:
-                self.spans.append(msg)
-            else:
-                self.not_stored += 1
-        for fn in self._listeners:
-            try:
-                fn(msg)
-            except Exception:
-                pass
+        snd = self.senders.get(key)
+        if snd is None:
+            snd = self.senders[key] = _Sender(msg["src"], msg["pid"])
+        if msg["kind"] == "F":
+            snd.final_seq = msg["seq"]
+            return
+        snd.see(msg["seq"])
+        if batched:
+            snd.batched = True
+        if not self.keep_spans:
+            new.append(msg)
+        elif len(self.spans) < self.max_spans:
+            self.spans.append(msg)
+            new.append(msg)
+        else:
+            self.not_stored += 1
+
+    def drain(self):
+        """Spans received since the last drain (parsed now). With
+        keep_spans=False this is the only place spans go: long runs stream
+        them out instead of holding them in memory."""
+        return self._parse_pending()
 
     def stop(self):
         self._stop.set()
@@ -215,11 +267,13 @@ class MarkerCollector:
             os.unlink(self.path)
         except OSError:
             pass
+        self._parse_pending()
         return self.spans, self.stats()
 
     # ---- results ----
 
     def stats(self):
+        self._parse_pending()
         with self._lock:
             senders = [s.describe() for s in self.senders.values()]
         received = sum(s["received"] for s in senders)
@@ -233,6 +287,7 @@ class MarkerCollector:
             "duplicate_seq": sum(s["duplicate_seq"] for s in senders),
             "malformed": self.malformed,
             "not_stored": self.not_stored,
+            "datagrams": self.datagrams,
             "senders": senders,
             "rcvbuf_bytes": self.rcvbuf_effective,
             "started_mono_ns": self.started_mono_ns,

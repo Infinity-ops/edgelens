@@ -79,36 +79,152 @@ def available_providers():
     return ort.get_available_providers()
 
 
-def cuda_probe():
-    """(usable, reason): can this process actually use the CUDA provider?
+# The probe runs in a CHILD process. Loading the CUDA provider can crash the
+# whole interpreter (SIGBUS / SIGSEGV) when onnxruntime is broken — found on
+# a real Jetson Nano where `pip install onnxruntime` had been laid over the
+# Jetson onnxruntime-gpu wheel, mixing two builds in one package folder. A
+# crash in the child is a diagnosis; in this process it would take every
+# EdgeLens command down. Cached on disk per onnxruntime install.
+_PROBE_CODE = r"""
+import numpy as np, onnxruntime as ort
+ort.set_default_logger_severity(4)
+p = ort.get_available_providers()
+print("LISTED " + ",".join(p), flush=True)
+if "CUDAExecutionProvider" in p:
+    ort.OrtValue.ortvalue_from_numpy(np.zeros(1, dtype=np.float32), "cuda", 0)
+    print("CUDA_OK", flush=True)
+"""
+PROBE_TIMEOUT_S = 180
 
-    get_available_providers() lists compiled-in providers only. Found on a
-    real laptop: onnxruntime-gpu listed Tensorrt+CUDA, but libcublasLt was not
-    installed; sessions silently fell back to CPU and the first device copy
-    crashed. Allocating one CUDA tensor loads the provider library, which is
-    the cheapest real check. Cached per process.
-    """
+
+def _probe_cache_path():
+    import os
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "edgelens", "ort_cuda_probe.json")
+
+
+def _install_key():
+    """Identifies this onnxruntime install: versions of every onnxruntime
+    distribution plus the mtime of its native library folder."""
+    import os
+    key = {"ort_file": getattr(ort, "__file__", None), "dists": ort_distributions(),
+           # the environment decides which CUDA libraries / devices load
+           "ld_library_path": os.environ.get("LD_LIBRARY_PATH"),
+           "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES")}
+    try:
+        capi = os.path.join(os.path.dirname(ort.__file__), "capi")
+        key["capi_mtime"] = max(os.path.getmtime(os.path.join(capi, f))
+                                for f in os.listdir(capi))
+    except (OSError, ValueError, TypeError):
+        key["capi_mtime"] = None
+    return key
+
+
+def _run_isolated_probe():
+    import signal as _signal
+    import subprocess
+    import sys
+    try:
+        out = subprocess.run([sys.executable, "-c", _PROBE_CODE], stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, universal_newlines=True,
+                             timeout=PROBE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return (False, f"loading the CUDA provider hung for more than {PROBE_TIMEOUT_S} s "
+                       f"(broken CUDA/onnxruntime install?)", "hang")
+    if out.returncode < 0:
+        try:
+            sig = _signal.Signals(-out.returncode).name
+        except ValueError:
+            sig = f"signal {-out.returncode}"
+        return (False, f"loading the CUDA provider CRASHES Python ({sig}). onnxruntime is "
+                       f"broken — usually two onnxruntime packages installed over each other; "
+                       f"run `edgelens doctor` for the fix", "crash")
+    if "CUDA_OK" in out.stdout:
+        return (True, None, "ok")
+    lines = (out.stderr or "").strip().splitlines()
+    msg = lines[-1] if lines else "unknown error"
+    if "not available" in msg or "cannot open shared object" in msg:
+        msg = "the CUDA/cuDNN libraries this onnxruntime-gpu build needs could not be loaded"
+    return (False, msg[:200], "error")
+
+
+def cuda_probe():
+    """(usable, reason): can this machine actually use the CUDA provider?
+
+    get_available_providers() lists compiled-in providers only (found on a
+    real laptop: onnxruntime-gpu listed CUDA without libcublasLt installed).
+    Allocating one CUDA tensor loads the provider library — done in a child
+    process, see above. Cached per process and on disk per install."""
     global _cuda_probe_result
-    if _cuda_probe_result is None:
-        if ort is None or "CUDAExecutionProvider" not in available_providers():
-            _cuda_probe_result = (False, "CUDAExecutionProvider is not in this onnxruntime build")
-        else:
-            ort.set_default_logger_severity(4)      # our message replaces ORT's log spam
-            try:
-                ort.OrtValue.ortvalue_from_numpy(np.zeros(1, dtype=np.float32), "cuda", 0)
-                _cuda_probe_result = (True, None)
-            except Exception as e:
-                msg = str(e)
-                if "not available" in msg or "cannot open shared object" in msg:
-                    # ORT's own text is a source path + C++ signature; say it plainly.
-                    reason = "the CUDA/cuDNN libraries this onnxruntime-gpu build needs could not be loaded"
-                else:
-                    lines = msg.strip().splitlines()
-                    reason = (lines[-1] if lines else type(e).__name__)[:200]
-                _cuda_probe_result = (False, reason)
-            finally:
-                ort.set_default_logger_severity(3)
-    return _cuda_probe_result
+    if _cuda_probe_result is not None:
+        return _cuda_probe_result[:2]
+    if ort is None or "CUDAExecutionProvider" not in available_providers():
+        _cuda_probe_result = (False, "CUDAExecutionProvider is not in this onnxruntime build",
+                              "absent")
+        return _cuda_probe_result[:2]
+    import json
+    import os
+    key = _install_key()
+    path = _probe_cache_path()
+    try:
+        with open(path) as f:
+            cached = json.load(f)
+        if cached.get("key") == key:
+            _cuda_probe_result = tuple(cached["result"])
+            return _cuda_probe_result[:2]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    _cuda_probe_result = _run_isolated_probe()
+    # Cache only definite answers about the install itself: "ok" and "crash".
+    # An error (missing library) or a hang may be fixed by the environment
+    # without touching onnxruntime: re-probe next time.
+    if _cuda_probe_result[2] in ("ok", "crash"):
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                json.dump({"key": key, "result": list(_cuda_probe_result)}, f)
+        except OSError:
+            pass
+    return _cuda_probe_result[:2]
+
+
+def cuda_probe_kind():
+    """'ok' | 'absent' | 'error' | 'crash' | 'hang' (after cuda_probe())."""
+    cuda_probe()
+    return _cuda_probe_result[2]
+
+
+def ort_distributions():
+    """Installed distributions that provide the `onnxruntime` package."""
+    try:
+        from importlib import metadata
+    except ImportError:                     # pragma: no cover
+        return {}
+    found = {}
+    for dist in metadata.distributions():
+        name = (dist.metadata.get("Name") or "").lower()
+        if name == "onnxruntime" or name.startswith("onnxruntime-") or name.startswith("onnxruntime_"):
+            if name not in ("onnxruntime-extensions", "onnxruntime-tools"):
+                found[name] = dist.version
+    return found
+
+
+def ort_install_problems():
+    """Human-readable problems with the onnxruntime installation itself."""
+    dists = ort_distributions()
+    problems = []
+    if len(dists) > 1:
+        names = ", ".join(f"{k} {v}" for k, v in sorted(dists.items()))
+        gpu = [k for k in dists if k != "onnxruntime"]
+        keep = gpu[0] if gpu else "onnxruntime"
+        problems.append({
+            "problem": f"{len(dists)} onnxruntime packages are installed over each other "
+                       f"({names}). They share one `onnxruntime` folder, so the files are a "
+                       f"mix of two builds — this crashes or silently misbehaves.",
+            "fix": f"pip uninstall -y {' '.join(sorted(dists))} && reinstall ONE of them "
+                   f"(on Jetson: the {keep} wheel for your JetPack, e.g. from the Jetson "
+                   f"Zoo). Never install edgelens with the [onnx] extra on a Jetson."})
+    return problems
 
 
 def unloadable_providers():
@@ -141,16 +257,18 @@ def pick_provider(prefer=None):
     return usable[0]
 
 
-def _session_with(model_path, provider):
+def _session_with(model_path, provider, options=None):
     """(session, fallback_message). onnxruntime does not fail when a provider
     can't be enabled: it silently falls back to CPU (and prints an 'EP Error'
     banner). Return the session plus what it printed, so the caller can
-    check which provider is really active."""
+    check which provider is really active. `options`: provider options, e.g.
+    {"trt_fp16_enable": True} for TensorRT FP16."""
     import contextlib
     import io
     captured = io.StringIO()
+    providers = [(provider, dict(options))] if options else [provider]
     with contextlib.redirect_stdout(captured):
-        session = ort.InferenceSession(model_path, providers=[provider])
+        session = ort.InferenceSession(model_path, providers=providers)
     return session, captured.getvalue().strip()
 
 
@@ -257,7 +375,8 @@ class OnnxStagePipeline:
 
     GPU_PROVIDERS = ("CUDAExecutionProvider", "TensorrtExecutionProvider")
 
-    def __init__(self, model_path, provider=None, input_shape=None, input_shapes=None):
+    def __init__(self, model_path, provider=None, input_shape=None, input_shapes=None,
+                 provider_options=None):
         if ort is None:
             raise RuntimeError(
                 "onnxruntime is not installed. Install it with:\n"
@@ -302,7 +421,9 @@ class OnnxStagePipeline:
         self.session = None
         for cand in candidates:
             try:
-                session, banner = _session_with(model_path, cand)
+                opts = provider_options if (provider_options and cand == provider) else None
+                session, banner = (_session_with(model_path, cand, opts) if opts
+                                   else _session_with(model_path, cand))
             except Exception as e:
                 raise RuntimeError(f"onnxruntime could not load '{model_path}': {e}") from e
             active = session.get_providers()

@@ -165,6 +165,7 @@ static inline void el__init(void) {
 static char el__pend[EDGELENS_PENDING_BYTES];
 static size_t el__pend_len = 0;
 static uint64_t el__pend_spans = 0;
+static uint64_t el__flush_after = 0;   /* back-off deadline after "queue full" */
 static int el__lock_flag = 0;
 
 /* Short critical sections only (one non-blocking sendto). Spins briefly,
@@ -197,6 +198,7 @@ static void el__reset_child_state(void) {
     el__sent = el__dropped = el__retry_at = 0;
     el__pend_len = 0;                  /* the parent's pending spans are the parent's */
     el__pend_spans = 0;
+    el__flush_after = 0;
     el__tid_cache = 0;
     __atomic_store_n(&el__lock_flag, 0, __ATOMIC_RELEASE);
 }
@@ -227,15 +229,44 @@ static inline void el__fork_check(void) {
 }
 
 /* Caller holds the lock. Returns 0 when nothing is pending afterwards. */
+#ifndef EDGELENS_CHUNK_BYTES
+#define EDGELENS_CHUNK_BYTES 4096      /* one overflow datagram: cheap to allocate */
+#endif
+#ifndef EDGELENS_BACKOFF_NS
+#define EDGELENS_BACKOFF_NS 200000ull  /* after "queue full": no syscall for 200 us */
+#endif
+static inline int el__is_full(int err) {
+    return err == EAGAIN || err == EWOULDBLOCK || err == EINTR || err == ENOBUFS;
+}
+
+/* Caller holds the lock. Sends the pending batch in chunks of at most
+ * EDGELENS_CHUNK_BYTES, cut at line ends, until done or the queue is full
+ * (the kernel copies a whole datagram before it checks the queue, so
+ * retrying one huge batch per span would cost a 32 KB copy every time).
+ * Returns 0 when nothing is pending afterwards. */
 static inline int el__flush_pending_locked(void) {
-    if (!el__pend_len) return 0;
-    int err = el__send_raw(el__pend, el__pend_len);
-    if (err == 0) {
-        __atomic_fetch_add(&el__sent, el__pend_spans, __ATOMIC_RELAXED);
-        el__pend_len = 0;
-        el__pend_spans = 0;
+    size_t off = 0;
+    int err = 0;
+    while (off < el__pend_len) {
+        size_t len = el__pend_len - off;
+        if (len > EDGELENS_CHUNK_BYTES) {
+            len = EDGELENS_CHUNK_BYTES;
+            while (len > 0 && el__pend[off + len - 1] != '\n') len--;
+            if (len == 0) len = EDGELENS_CHUNK_BYTES;          /* cannot happen: lines < 320 B */
+        }
+        err = el__send_raw(el__pend + off, len);
+        if (err) break;
+        uint64_t lines = 0;
+        for (size_t i = off; i < off + len; i++) lines += el__pend[i] == '\n';
+        __atomic_fetch_add(&el__sent, lines, __ATOMIC_RELAXED);
+        el__pend_spans -= lines;
+        off += len;
     }
-    return err;
+    if (off) {
+        memmove(el__pend, el__pend + off, el__pend_len - off);
+        el__pend_len -= off;
+    }
+    return el__pend_len ? (err ? err : EAGAIN) : 0;
 }
 
 /* Send one finished span. flags: "-" or e.g. "g" (end taken after GPU sync). */
@@ -260,12 +291,17 @@ static inline int el_record(const char *name, uint64_t start_ns, uint64_t end_ns
 
     int ok = 0, err = 0;
     el__lock();
-    if (el__pend_len) err = el__flush_pending_locked();
+    /* While backing off after "queue full", skip the syscall entirely. */
+    int backoff = el__pend_len && end_ns < el__flush_after;
+    if (el__pend_len && !backoff) err = el__flush_pending_locked();
     if (!el__pend_len) {
         err = el__send_raw(buf, (size_t)n);
         if (err == 0) { __atomic_fetch_add(&el__sent, 1, __ATOMIC_RELAXED); ok = 1; }
+    } else if (backoff) {
+        err = EAGAIN;
     }
-    if (!ok && (err == EAGAIN || err == EWOULDBLOCK || err == EINTR || err == ENOBUFS)) {
+    if (!ok && el__is_full(err)) {
+        if (!backoff) el__flush_after = end_ns + EDGELENS_BACKOFF_NS;
         if (el__pend_len + (size_t)n <= sizeof(el__pend)) {      /* batch it */
             memcpy(el__pend + el__pend_len, buf, (size_t)n);
             el__pend_len += (size_t)n;
@@ -279,7 +315,7 @@ static inline int el_record(const char *name, uint64_t start_ns, uint64_t end_ns
         return 1;
     }
     __atomic_fetch_add(&el__dropped, 1, __ATOMIC_RELAXED);
-    if (err != EAGAIN && err != EWOULDBLOCK && err != EINTR && err != ENOBUFS)
+    if (!el__is_full(err))
         __atomic_store_n(&el__retry_at, el_now_ns() + 1000000000ull, __ATOMIC_RELAXED);
     return 0;
 }

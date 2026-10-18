@@ -7,24 +7,30 @@ EdgeLens itself on that board.
   clock                 one clock (CLOCK_MONOTONIC), resolution, read cost
   harness_accuracy      a reference workload of KNOWN duration, measured by
                         the harness: reported - true = EdgeLens's own error
-  python_marker_cost    cost of one Python marker span (edgelens.mark)
-  c_marker_cost         cost of one C marker span (edgelens_mark.h), if a
-                        C compiler is available
-  marker_delivery       spans at a realistic rate: none may be lost; a burst:
-                        every span must be received or counted as lost
+  scheduling_jitter     how late the reference finishes in the worst 1%:
+                        other load on the board (desktop GUI, services)
+  python_marker_cost    cost of one Python span beyond the kernel's sendto()
+  c_marker_cost         the same for a C span (edgelens_mark.h)
+  marker_delivery       4000 spans/s sustained (10x a 30 FPS, 10-stage
+                        pipeline): none may be lost
+  marker_accounting     a burst as fast as the CPU can: every span received
+                        or counted as lost; the collector's capacity
   dgram_queue           the kernel's UNIX datagram queue limit
-  sampler_cpu           CPU the telemetry sampler takes (% of one core)
+  sampler_cpu           CPU the telemetry sampler takes, with a breakdown
   telemetry_disturbance the reference workload with telemetry on vs off
   chrony                clock sync state (needed only across machines)
 
 What the reference workload proves: it busy-waits for D ms on the same
 clock EdgeLens reads, so the difference between reported and true duration
-is the harness's own overhead and jitter (scheduling, Python, bookkeeping) —
-not the accuracy of the hardware clock itself, which no software can check
-against itself.
+is the harness's own overhead (scheduling, Python, bookkeeping) — not the
+accuracy of the hardware clock itself, which no software can check against
+itself.
 
-Limits are initial, deliberately generous values; they are tightened from
-measured Nano / AGX Orin rows in docs/jetson.md.
+Marker costs are judged as overhead BEYOND the kernel's sendto(), measured
+on the same machine: the kernel's cost is the platform's, not EdgeLens's.
+
+Limits are initial values set from a laptop and a Jetson Nano; they are
+tightened from measured rows in docs/jetson.md.
 """
 
 import os
@@ -45,11 +51,14 @@ LIMITS = {
     "clock_read_ns": 2_000,                # Python read of CLOCK_MONOTONIC
     "harness_error_us": 50.0,              # |median reported - true| per stage
     "harness_error_pct": 2.0,              # ... or this % of the duration, if larger
-    "python_marker_us": 30.0,              # one Python span, collector listening
-    "c_marker_us": 5.0,                    # one C span
+    "jitter_p99_us": 1000.0,               # p99 lateness of the reference workload
+    "python_marker_overhead_us": 25.0,     # one Python span beyond sendto()
+    "c_marker_overhead_us": 5.0,           # one C span beyond sendto()
+    "marker_rate_per_s": 4000,             # sustained rate that must lose nothing
     "sampler_cpu_pct_of_core": 2.0,
     "telemetry_shift_pct": 3.0,            # mean latency shift caused by telemetry
     "min_dgram_qlen": 64,
+    "chrony_bound_ms": 1000.0,             # a bound above this means "not really synced"
 }
 
 
@@ -91,20 +100,30 @@ def _reference_run(duration_ms, iterations, telemetry):
 
 
 def check_harness(durations_ms, iterations):
-    rows = []
+    rows, worst_tail = [], 0.0
     for d in durations_ms:
         r = _reference_run(d, iterations, telemetry=False)
         st = r["stage_stats_ms"]["reference"]
         e2e = r["latency"]
         err_us = (st["p50"] - d) * 1000.0
         tail_us = ((st.get("p99") or st["max"]) - d) * 1000.0
+        worst_tail = max(worst_tail, tail_us)
         e2e_extra_us = (e2e["p50"] - st["p50"]) * 1000.0
         limit = max(LIMITS["harness_error_us"], LIMITS["harness_error_pct"] / 100 * d * 1000)
         status = PASS if abs(err_us) <= limit else FAIL
         rows.append(_row("harness_accuracy", status, round(err_us, 2), "us", round(limit, 1),
-                         f"{d} ms reference: median error {err_us:+.2f} us, p99 error "
-                         f"{tail_us:+.1f} us (preemption shows here), per-iteration "
+                         f"{d} ms reference: median error {err_us:+.2f} us, per-iteration "
                          f"bookkeeping {e2e_extra_us:.2f} us"))
+    ok = worst_tail <= LIMITS["jitter_p99_us"]
+    rows.append(_row(
+        "scheduling_jitter", PASS if ok else WARN, round(worst_tail, 1), "us",
+        LIMITS["jitter_p99_us"],
+        "how late the reference workload finishes in its worst 1% of runs: the CPU was "
+        "taken away by other work. Every p99 measured on this board carries this much "
+        "noise from the system itself.",
+        fix=None if ok else "Stop other load while benchmarking. On a Jetson with a desktop: "
+                            "`sudo systemctl isolate multi-user.target` (back: "
+                            "`sudo systemctl isolate graphical.target`), and close browsers."))
     return rows
 
 
@@ -112,32 +131,42 @@ PY_BENCH = r"""
 import socket, sys, time
 from edgelens import mark
 from edgelens.markers import protocol
-path, n = sys.argv[1], int(sys.argv[2])
+path, n, period_us = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
 mark.configure(path)
 raw = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
 raw.setblocking(False)
 msg = protocol.format_span("raw", 0, 0, 0, 0, 1, "-", "selftest")
-def median_ns(fn, count):
+
+def median_ns(fn, count, period_s):
     t = []
+    nxt = time.perf_counter()
     for i in range(count):
         a = time.perf_counter_ns(); fn(); t.append(time.perf_counter_ns() - a)
-        if i % 8 == 7:
-            time.sleep(0.0002)
+        nxt += period_s
+        while time.perf_counter() < nxt:      # pace: a realistic rate, not a burst
+            pass
     t.sort()
     return t[len(t) // 2]
+
 def one_span():
     with mark.span("selftest"):
         pass
+
 def one_raw():
     try:
         raw.sendto(msg, path)
     except BlockingIOError:
         pass
-span_ns = median_ns(one_span, n)
-raw_ns = median_ns(one_raw, min(n, 2000))
+
+span_ns = median_ns(one_span, n, period_us / 1e6)
+raw_ns = median_ns(one_raw, min(n, 2000), period_us / 1e6)
 mark.flush()
 print(span_ns, raw_ns)
 """
+
+
+def _period_us():
+    return 1e6 / LIMITS["marker_rate_per_s"]
 
 
 def check_python_markers(n):
@@ -153,29 +182,31 @@ def check_python_markers(n):
             f.write(PY_BENCH)
         c = MarkerCollector(path).start()
         try:
-            out = subprocess.run([sys.executable, script, path, str(n)],
+            out = subprocess.run([sys.executable, script, path, str(n), str(_period_us())],
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                  universal_newlines=True, timeout=300)
         finally:
             time.sleep(0.3)
             _, st = c.stop()
         if out.returncode != 0 or len(out.stdout.split()) < 2:
-            return [_row("python_marker_cost", FAIL, None, "us", LIMITS["python_marker_us"],
+            return [_row("python_marker_cost", FAIL, None, "us",
+                         LIMITS["python_marker_overhead_us"],
                          "benchmark process failed: " + out.stderr.strip()[-300:])]
         span_ns, raw_ns = (float(x) for x in out.stdout.split())
         cost_us, raw_us = span_ns / 1000.0, raw_ns / 1000.0
-        rows.append(_row("python_marker_cost", PASS if cost_us <= LIMITS["python_marker_us"]
-                         else WARN, round(cost_us, 2), "us", LIMITS["python_marker_us"],
-                         f"median cost of one `with mark.span(...)` in a separate process; "
-                         f"of which the kernel's sendto() alone is {raw_us:.2f} us on this "
-                         f"machine"))
-        # the raw datagrams are a separate sender ('raw'); judge only the marker sender
+        over = max(0.0, cost_us - raw_us)
+        rows.append(_row("python_marker_cost",
+                         PASS if over <= LIMITS["python_marker_overhead_us"] else WARN,
+                         round(over, 2), "us beyond sendto", LIMITS["python_marker_overhead_us"],
+                         f"one `with mark.span(...)` costs {cost_us:.2f} us in total; the "
+                         f"kernel's sendto() alone is {raw_us:.2f} us on this machine"))
         senders = [x for x in st["senders"] if x["src"] != "raw"]
         received = sum(x["received"] for x in senders)
         lost = sum(x["lost"] for x in senders)
         rows.append(_row("marker_delivery", PASS if lost == 0 and received == n else FAIL,
-                         lost, "lost", 0, f"Python, {n} spans at a realistic rate: received "
-                         f"{received}, lost {lost}"))
+                         lost, "lost", 0, f"Python, {n} spans at "
+                         f"{LIMITS['marker_rate_per_s']} spans/s: received {received}, "
+                         f"lost {lost}"))
     finally:
         shutil.rmtree(d, ignore_errors=True)
     return rows
@@ -187,28 +218,32 @@ C_BENCH = r"""
 #include <stdlib.h>
 #include <time.h>
 int main(int argc, char **argv) {
-    long n = atol(argv[1]); long pause_every = atol(argv[2]);
-    uint64_t total = 0;
+    long n = atol(argv[1]); uint64_t period_ns = (uint64_t)atoll(argv[2]);
+    uint64_t total = 0, next = el_now_ns(), t_begin = el_now_ns();
     for (long i = 0; i < n; i++) {
         uint64_t t0 = el_now_ns();
         el_span_t s = el_begin("selftest"); el_end(s);
         total += el_now_ns() - t0;
-        if (pause_every && i % pause_every == pause_every - 1) {
-            struct timespec ts = {0, 200000}; nanosleep(&ts, 0);
+        if (period_ns) {                          /* pace: a realistic rate */
+            next += period_ns;
+            while (el_now_ns() < next) {}
         }
     }
+    uint64_t t_end = el_now_ns();
     uint64_t sent, dropped; el_stats(&sent, &dropped);
-    /* baseline: the kernel's sendto() alone, same message size */
+    /* baseline: the kernel's sendto() alone, same rate */
     char msg[] = "EL1 X 0 0 0 0 0 1 - raw-baseline-not-a-span";
     uint64_t raw = 0; long m = n < 2000 ? n : 2000;
+    next = el_now_ns();
     for (long i = 0; i < m; i++) {
         uint64_t t0 = el_now_ns();
         sendto(el__fd, msg, 5, MSG_DONTWAIT, (const struct sockaddr *)&el__addr, el__addrlen);
         raw += el_now_ns() - t0;
-        if (i % 8 == 7) { struct timespec ts = {0, 200000}; nanosleep(&ts, 0); }
+        next += period_ns ? period_ns : 250000;
+        while (el_now_ns() < next) {}
     }
-    printf("%.1f %llu %llu %.1f\n", (double)total / n, (unsigned long long)sent,
-           (unsigned long long)dropped, (double)raw / m);
+    printf("%.1f %llu %llu %.1f %.3f\n", (double)total / n, (unsigned long long)sent,
+           (unsigned long long)dropped, (double)raw / m, (double)(t_end - t_begin) / 1e9);
     return 0;
 }
 """
@@ -219,7 +254,7 @@ def check_c_markers(n):
     from .markers.collector import MarkerCollector
     cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
     if not cc:
-        return [_row("c_marker_cost", SKIP, None, "us", LIMITS["c_marker_us"],
+        return [_row("c_marker_cost", SKIP, None, "us", LIMITS["c_marker_overhead_us"],
                      "no C compiler found (install gcc to check the C header)")]
     d = tempfile.mkdtemp(prefix="edgelens-selftest-")
     rows = []
@@ -232,48 +267,60 @@ def check_c_markers(n):
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                            universal_newlines=True)
         if r.returncode != 0:
-            return [_row("c_marker_cost", FAIL, None, "us", LIMITS["c_marker_us"],
+            return [_row("c_marker_cost", FAIL, None, "us", LIMITS["c_marker_overhead_us"],
                          "edgelens_mark.h failed to compile: " + r.stderr.strip()[:300])]
         path = os.path.join(d, "s.sock")
         env = dict(os.environ, EDGELENS_SOCKET=path)
-        for label, pause in (("realistic rate", 8), ("burst", 0)):
+        period_ns = int(_period_us() * 1000)
+        for label, pace in (("sustained", period_ns), ("burst", 0)):
             c = MarkerCollector(path).start()
             try:
-                proc = subprocess.run([exe, str(n), str(pause)], env=env,
+                proc = subprocess.run([exe, str(n), str(pace)], env=env,
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                      universal_newlines=True, timeout=120)
+                                      universal_newlines=True, timeout=300)
             except subprocess.TimeoutExpired:
                 proc = None
             finally:
-                time.sleep(0.3)
-                _, st = c.stop()
+                time.sleep(0.5)
+                spans, st = c.stop()
             out = proc.stdout.split() if proc is not None and proc.returncode == 0 else []
-            if len(out) < 4:
+            if len(out) < 5:
                 why = "timed out" if proc is None else \
                     f"exit {proc.returncode}: {(proc.stderr or '').strip()[-200:]}"
-                rows.append(_row("c_marker_cost", FAIL, None, "us", LIMITS["c_marker_us"],
+                rows.append(_row("c_marker_cost", FAIL, None, "us",
+                                 LIMITS["c_marker_overhead_us"],
                                  f"C benchmark ({label}) failed: {why}"))
                 break
-            cost_ns = float(out[0])
-            if label == "realistic rate":
-                cost_us = cost_ns / 1000.0
-                raw_us = float(out[3]) / 1000.0
-                rows.append(_row("c_marker_cost", PASS if cost_us <= LIMITS["c_marker_us"]
-                                 else WARN, round(cost_us, 3), "us", LIMITS["c_marker_us"],
-                                 f"mean cost of one C span (el_begin + el_end); of which the "
-                                 f"kernel's sendto() alone is {raw_us:.2f} us on this machine"))
+            cost_us = float(out[0]) / 1000.0
+            raw_us = float(out[3]) / 1000.0
+            if label == "sustained":
+                over = max(0.0, cost_us - raw_us)
+                rows.append(_row("c_marker_cost",
+                                 PASS if over <= LIMITS["c_marker_overhead_us"] else WARN,
+                                 round(over, 3), "us beyond sendto",
+                                 LIMITS["c_marker_overhead_us"],
+                                 f"one C span (el_begin + el_end) costs {cost_us:.3f} us in "
+                                 f"total; the kernel's sendto() alone is {raw_us:.2f} us"))
                 rows.append(_row("marker_delivery", PASS if st["lost"] == 0 else FAIL,
                                  st["lost"], "lost", 0,
-                                 f"C, {n} spans at a realistic rate: received "
-                                 f"{st['received']}, lost {st['lost']}"))
+                                 f"C, {n} spans at {LIMITS['marker_rate_per_s']} spans/s: "
+                                 f"received {st['received']}, lost {st['lost']}"))
             else:
                 exact = st["received"] + st["lost"] == n
-                rows.append(_row("marker_accounting", PASS if exact else FAIL,
-                                 st["lost"], "lost", None,
-                                 f"C burst of {n} spans as fast as possible: received "
-                                 f"{st['received']} + counted lost {st['lost']} "
-                                 f"{'=' if exact else '!='} {n} produced"
-                                 f"{'' if exact else ' — spans went missing uncounted'}"))
+                send_s = float(out[4]) or 1e-9
+                if spans:
+                    t0 = min(sp["end_ns"] for sp in spans)
+                    t1 = max(sp["end_ns"] for sp in spans)
+                    window = max((t1 - t0) / 1e9, send_s)
+                else:
+                    window = send_s
+                rows.append(_row(
+                    "marker_accounting", PASS if exact else FAIL, st["lost"], "lost", None,
+                    f"C burst of {n} spans in {send_s * 1000:.1f} ms ({n / send_s:,.0f} "
+                    f"spans/s offered): received {st['received']} + counted lost "
+                    f"{st['lost']} {'=' if exact else '!='} {n} produced"
+                    f"{'' if exact else ' — spans went missing uncounted'}. Collector took "
+                    f"in about {st['received'] / window:,.0f} spans/s."))
     finally:
         shutil.rmtree(d, ignore_errors=True)
     return rows
@@ -295,17 +342,27 @@ def check_dgram_queue():
 
 
 def check_sampler(seconds):
-    from .hardware.telemetry import TelemetryRecorder
-    rec = TelemetryRecorder(interval_s=0.1)
+    from .hardware import telemetry as tel
+    rec = tel.TelemetryRecorder(interval_s=0.1)
     rec.start()
     time.sleep(seconds)
     s = rec.stop()
     cpu_ms = s.get("sampler_cpu_ms_mean") or 0.0
     pct = cpu_ms / 100.0 * 100.0              # ms CPU per 100 ms interval -> % of a core
-    return [_row("sampler_cpu", PASS if pct <= LIMITS["sampler_cpu_pct_of_core"] else WARN,
-                 round(pct, 2), "% of one core", LIMITS["sampler_cpu_pct_of_core"],
-                 f"{cpu_ms:.3f} ms CPU per sample at 10 samples/s "
-                 f"({s.get('sample_count')} samples)")]
+    parts = tel.profile_sampler()
+    top = ", ".join(f"{k} {v} ms" for k, v in sorted(parts.items(), key=lambda kv: -kv[1])[:3])
+    slow = tel.slow_zones()
+    detail = (f"{cpu_ms:.3f} ms CPU per sample at 10 samples/s ({s.get('sample_count')} "
+              f"samples). Most expensive parts: {top}.")
+    if slow:
+        detail += (" Slow thermal zones (read only every 20th sample): "
+                   + ", ".join(f"{n} {c} ms" for n, c in slow) + ".")
+    ok = pct <= LIMITS["sampler_cpu_pct_of_core"]
+    return [_row("sampler_cpu", PASS if ok else WARN, round(pct, 2), "% of one core",
+                 LIMITS["sampler_cpu_pct_of_core"], detail,
+                 fix=None if ok else "Sample less often for long runs (--interval 0.5); "
+                                     "telemetry_disturbance below shows whether it matters "
+                                     "for latency.")]
 
 
 def check_disturbance(duration_ms, iterations, rounds):
@@ -331,10 +388,22 @@ def check_chrony():
                      f"(e.g. sensor on the PMC, prediction on the PMA).",
                      fix="sudo apt install chrony   (and point both machines at the same "
                          "server)")]
-    return [_row("chrony", PASS if st["synchronized"] else WARN,
-                 round(st["error_bound_s"] * 1000, 3), "ms bound", None,
-                 f"stratum {st['stratum']}, reference {st['reference']}, "
-                 f"{'synchronised' if st['synchronized'] else 'NOT synchronised'}")]
+    bound_ms = st["error_bound_s"] * 1000
+    parts = (f"offset {st['offset_s'] * 1000:+.3f} ms, root delay "
+             f"{st['root_delay_s'] * 1000:.3f} ms, root dispersion "
+             f"{st['root_dispersion_s'] * 1000:.3f} ms")
+    if not st["synchronized"]:
+        return [_row("chrony", WARN, round(bound_ms, 3), "ms bound", None,
+                     f"NOT synchronised ({parts})")]
+    if bound_ms > LIMITS["chrony_bound_ms"]:
+        return [_row("chrony", WARN, round(bound_ms, 3), "ms bound", LIMITS["chrony_bound_ms"],
+                     f"chrony reports synchronised but its error bound is huge ({parts}): "
+                     f"usually the machine was offline or just resumed from suspend",
+                     fix="wait a few minutes online, or `sudo chronyc makestep`; check "
+                         "`chronyc tracking`")]
+    return [_row("chrony", PASS, round(bound_ms, 3), "ms bound", LIMITS["chrony_bound_ms"],
+                 f"stratum {st['stratum']}, reference {st['reference']}, synchronised "
+                 f"({parts})")]
 
 
 def run(quick=False, include_c=True):
