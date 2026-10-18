@@ -52,6 +52,15 @@ source ~/edgelens-venv/bin/activate
 pip install -e ".[dev,rosbag]"
 # Laptop: pip install -e ".[dev,onnx,rosbag]"
 
+# Jetson Nano (Ubuntu 18.04) only: if the line above fails with
+#   "No matching distribution found for rosbags>=0.9.20 ... (from versions: none)"
+# your Python is 3.8.0 (Ubuntu 18.04's python3.8) and every rosbags release
+# declares Python >= 3.8.2. Install it with that check off, then the rest:
+python3 -c "import sys; print(sys.version)"                 # 3.8.0 -> do this
+pip install --ignore-requires-python "rosbags==0.9.23"
+pip install -e ".[dev]"
+python3 -c "from rosbags.highlevel import AnyReader; print('rosbags OK')"
+
 sudo apt install -y g++            # C/C++ marker checks
 edgelens doctor                    # must show NO red panel
 ```
@@ -141,7 +150,7 @@ Each run writes `edgelens_validation_<board>_<date>/SUMMARY.txt` and a
 
 | | Jetson Nano (JetPack 4.6) | AGX Orin (JetPack 5/6) |
 | --- | --- | --- |
-| Python | system 3.6: use your **3.8 venv** | system 3.8 / 3.10 works |
+| Python | system 3.6: use your **3.8 venv** (Ubuntu's 3.8.0: rosbags needs `--ignore-requires-python`, step 1) | system 3.8 / 3.10 works |
 | onnxruntime | Jetson `onnxruntime-gpu` wheel only — never `[onnx]` | the onnxruntime-gpu wheel for your JetPack |
 | Power sensor | INA3221 iio, root-only → `chmod` in step 2 | INA3221 hwmon, normally readable; AGX Orin reports the **sum of module rails** (under-reads the carrier board) — write that in the row |
 | GPU power-gating | `railgate` shown by `edgelens periodic` | same |
