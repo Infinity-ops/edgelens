@@ -27,7 +27,7 @@ def _check(name, status, value, advice=None, fix=None):
 
 
 def assess(is_jetson, power_mode, cpu_pinned, gpu_pinned, providers, power_probe,
-           unloadable=()):
+           unloadable=(), gpu_reason=None, gpu_kind=None, gpu_cached_at=None, storage=None):
     """Return a list of readiness checks.
 
     is_jetson    bool
@@ -72,13 +72,21 @@ def assess(is_jetson, power_mode, cpu_pinned, gpu_pinned, providers, power_probe
                if p in GPU_PROVIDERS and p not in unloadable]
         if unloadable:
             from ..benchmark.onnx_pipeline import CUDA_UNLOADABLE_ADVICE
+            # the check's own finding: "missing libraries" advice only when that
+            # is what it found (a crash or a hang has a different cause and fix)
+            advice = (gpu_reason or CUDA_UNLOADABLE_ADVICE) if gpu_kind in ("crash", "hang") \
+                else ((gpu_reason + ". " if gpu_reason else "") + CUDA_UNLOADABLE_ADVICE)
             checks.append(_check(
                 "GPU inference", WARN,
                 "listed, cannot load (" + ", ".join(
                     p.replace("ExecutionProvider", "") for p in unloadable) + ")",
-                CUDA_UNLOADABLE_ADVICE))
+                advice, fix="edgelens doctor --no-cache    # after fixing: test again"))
         elif gpu:
-            checks.append(_check("GPU inference", OK, ", ".join(gpu)))
+            note = (f"verified with a CUDA session; cached from "
+                    f"{gpu_cached_at.replace('T', ' ')} — rerun with --no-cache"
+                    if gpu_cached_at else "verified with a CUDA session just now"
+                    if gpu_kind == "ok" else None)
+            checks.append(_check("GPU inference", OK, ", ".join(gpu), note))
         elif is_jetson:
             checks.append(_check(
                 "GPU inference", WARN, "CPU only",
@@ -88,6 +96,19 @@ def assess(is_jetson, power_mode, cpu_pinned, gpu_pinned, providers, power_probe
                 fix="pip uninstall -y onnxruntime"))
         else:
             checks.append(_check("GPU inference", INFO, "CPU only (no NVIDIA GPU provider)"))
+
+    if storage is not None:
+        from .storage import STORAGE_ADVICE
+        if storage.get("count"):
+            checks.append(_check("Storage", WARN,
+                                 f"{storage['count']} I/O error(s) in the kernel log",
+                                 STORAGE_ADVICE + " Last: " + storage["lines"][-1][:160]))
+        elif storage.get("readable"):
+            checks.append(_check("Storage", OK, "no I/O errors in the kernel log since boot"))
+        elif is_jetson:
+            checks.append(_check("Storage", INFO, "kernel log not readable",
+                                 "Can't check the SD card / disk for errors without root: "
+                                 "sudo dmesg | grep -i 'I/O error'"))
 
     if is_jetson:
         pw = power_probe or {}
@@ -120,12 +141,19 @@ def summary(checks, is_jetson=True):
 
 def gather(is_jetson, power_probe):
     """Collect live inputs for assess() on this host."""
-    from ..benchmark.onnx_pipeline import available_providers, unloadable_providers
+    from ..benchmark.onnx_pipeline import (available_providers, cuda_probe, cuda_probe_cached_at,
+                                           cuda_probe_kind, unloadable_providers)
     from ..core.identity import detect_clock_locking, detect_power_mode
+    from .storage import kernel_storage_errors
 
     cpu, gpu = detect_clock_locking() if is_jetson else (None, None)
+    providers = available_providers()
+    reason = kind = cached_at = None
+    if any(p in GPU_PROVIDERS for p in providers):
+        reason, kind, cached_at = cuda_probe()[1], cuda_probe_kind(), cuda_probe_cached_at()
     return assess(is_jetson=is_jetson,
                   power_mode=detect_power_mode() if is_jetson else None,
                   cpu_pinned=cpu, gpu_pinned=gpu,
-                  providers=available_providers(), power_probe=power_probe,
-                  unloadable=unloadable_providers())
+                  providers=providers, power_probe=power_probe,
+                  unloadable=unloadable_providers(), gpu_reason=reason, gpu_kind=kind,
+                  gpu_cached_at=cached_at, storage=kernel_storage_errors())

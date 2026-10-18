@@ -57,6 +57,22 @@
 - `tests/fixtures/lstm_anomaly.onnx` (DEM2-shaped stand-in),
   `examples/soak_leak_demo.py`; docs/insights.md.
 
+### Fixed — from the second Jetson Nano run
+- The GPU-provider check reported "SIGBUS: broken install" with a single,
+  sound onnxruntime-gpu 1.11 (JetPack 4.6): it allocated a bare CUDA tensor.
+  It now creates and runs a CUDA session on a tiny embedded model and names
+  the step that failed; "two packages" is blamed only when two are installed.
+- A SIGBUS is first checked against the kernel log: storage errors (a failing
+  SD card) are named as the cause. `doctor` has a Storage row; the validation
+  script warns that results from such a card are not evidence.
+- The check's cache can't outlive the problem: only a success is cached,
+  keyed by interpreter, onnxruntime install, CUDA driver file and boot id;
+  failures are re-tested every run. `doctor` says when a result came from the
+  cache; `doctor --no-cache` and `cuda_probe(force=True)` test again.
+- `doctor`'s GPU row shows the check's actual finding instead of always
+  "CUDA/cuDNN libraries missing".
+- The validation script's preflight no longer prints its output twice.
+
 ### Fixed — from the first Jetson Nano run
 - A broken onnxruntime (two packages installed over each other) crashed every
   command with "Bus error": the CUDA provider check now runs in a child

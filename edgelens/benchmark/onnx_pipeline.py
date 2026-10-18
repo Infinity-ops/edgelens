@@ -85,16 +85,36 @@ def available_providers():
 # Jetson onnxruntime-gpu wheel, mixing two builds in one package folder. A
 # crash in the child is a diagnosis; in this process it would take every
 # EdgeLens command down. Cached on disk per onnxruntime install.
+# The probe does what a real benchmark does: create a CUDA session on a tiny
+# model and run it once (v0.2.0.dev1 allocated a bare CUDA tensor instead, which
+# crashes the Jetson Nano's onnxruntime-gpu 1.11 build although sessions work —
+# a false "broken install"). Each STEP is printed first, so a crash names the
+# step that crashed.
+_PROBE_MODEL_B64 = ("CAQSDmVkZ2VsZW5zLXByb2JlOj8KDAoBeBIBeSIEUmVsdRIFcHJvYmVaEwoBeBIOCgwIARIICgIIAQoC"
+                    "CARiEwoBeRIOCgwIARIICgIIAQoCCARCBAoAEAk=")      # Relu, x/y float[1,4]
 _PROBE_CODE = r"""
+import base64, sys
+print("STEP import", flush=True)
 import numpy as np, onnxruntime as ort
 ort.set_default_logger_severity(4)
 p = ort.get_available_providers()
 print("LISTED " + ",".join(p), flush=True)
 if "CUDAExecutionProvider" in p:
-    ort.OrtValue.ortvalue_from_numpy(np.zeros(1, dtype=np.float32), "cuda", 0)
-    print("CUDA_OK", flush=True)
+    print("STEP session", flush=True)
+    s = ort.InferenceSession(base64.b64decode(sys.argv[1]),
+                             providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+    used = s.get_providers()
+    print("USED " + ",".join(used), flush=True)
+    if used and used[0] == "CUDAExecutionProvider":
+        print("STEP run", flush=True)
+        y = s.run(None, {"x": np.array([[-1.0, 2.0, -3.0, 4.0]], np.float32)})[0]
+        if y.tolist() == [[0.0, 2.0, 0.0, 4.0]]:
+            print("CUDA_OK", flush=True)
+        else:
+            print("CUDA_WRONG " + repr(y.tolist()), flush=True)
 """
-PROBE_TIMEOUT_S = 180
+PROBE_VERSION = 2               # part of the cache key: a new probe ignores old verdicts
+PROBE_TIMEOUT_S = 180            # EDGELENS_PROBE_TIMEOUT_S overrides
 
 
 def _probe_cache_path():
@@ -103,11 +123,47 @@ def _probe_cache_path():
     return os.path.join(base, "edgelens", "ort_cuda_probe.json")
 
 
+_CUDA_DRIVER_GLOBS = ("/usr/lib/aarch64-linux-gnu/tegra/libcuda.so*",     # Jetson (JetPack 4/5)
+                      "/usr/lib/aarch64-linux-gnu/nvidia/libcuda.so*",    # Jetson (JetPack 6)
+                      "/usr/lib/x86_64-linux-gnu/libcuda.so*",            # desktop
+                      "/usr/lib64/libcuda.so*", "/usr/lib/wsl/lib/libcuda.so*")
+
+
+def _cuda_driver_files():
+    import glob
+    import os
+    out = {}
+    for pattern in _CUDA_DRIVER_GLOBS:
+        for f in glob.glob(pattern):
+            real = os.path.realpath(f)
+            try:
+                st = os.stat(real)
+            except OSError:
+                continue
+            out[real] = [st.st_size, int(st.st_mtime)]
+    return out
+
+
+def _boot_id():
+    try:
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
 def _install_key():
     """Identifies this onnxruntime install: versions of every onnxruntime
     distribution plus the mtime of its native library folder."""
     import os
-    key = {"ort_file": getattr(ort, "__file__", None), "dists": ort_distributions(),
+    import sys
+    key = {"probe": PROBE_VERSION, "python": sys.executable,
+           "ort_version": getattr(ort, "__version__", None),
+           "ort_file": getattr(ort, "__file__", None), "dists": ort_distributions(),
+           # a driver reinstall / JetPack upgrade / reflash changes these ...
+           "cuda_driver": _cuda_driver_files(),
+           # ... and a reboot changes this: a verdict never outlives the boot
+           "boot_id": _boot_id(),
            # the environment decides which CUDA libraries / devices load
            "ld_library_path": os.environ.get("LD_LIBRARY_PATH"),
            "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES")}
@@ -115,9 +171,26 @@ def _install_key():
         capi = os.path.join(os.path.dirname(ort.__file__), "capi")
         key["capi_mtime"] = max(os.path.getmtime(os.path.join(capi, f))
                                 for f in os.listdir(capi))
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, AttributeError):
         key["capi_mtime"] = None
     return key
+
+
+def _probe_timeout():
+    import os
+    try:
+        return float(os.environ.get("EDGELENS_PROBE_TIMEOUT_S") or PROBE_TIMEOUT_S)
+    except ValueError:
+        return float(PROBE_TIMEOUT_S)
+
+
+def _last_step(stdout):
+    steps = [ln[5:].strip() for ln in (stdout or "").splitlines() if ln.startswith("STEP ")]
+    return steps[-1] if steps else "start"
+
+
+_STEP_TEXT = {"start": "starting Python", "import": "importing onnxruntime",
+              "session": "creating a CUDA session", "run": "running a CUDA session"}
 
 
 def _run_isolated_probe():
@@ -125,22 +198,55 @@ def _run_isolated_probe():
     import subprocess
     import sys
     try:
-        out = subprocess.run([sys.executable, "-c", _PROBE_CODE], stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, universal_newlines=True,
-                             timeout=PROBE_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        return (False, f"loading the CUDA provider hung for more than {PROBE_TIMEOUT_S} s "
-                       f"(broken CUDA/onnxruntime install?)", "hang")
+        out = subprocess.run([sys.executable, "-c", _PROBE_CODE, _PROBE_MODEL_B64],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             universal_newlines=True, timeout=_probe_timeout())
+    except subprocess.TimeoutExpired as e:
+        step = _last_step(e.stdout if isinstance(e.stdout, str) else
+                          (e.stdout or b"").decode("utf-8", "replace"))
+        return (False, f"{_STEP_TEXT.get(step, step)} hung for more than {_probe_timeout():g} s "
+                       f"(test model, isolated process)", "hang")
     if out.returncode < 0:
         try:
             sig = _signal.Signals(-out.returncode).name
         except ValueError:
             sig = f"signal {-out.returncode}"
-        return (False, f"loading the CUDA provider CRASHES Python ({sig}). onnxruntime is "
-                       f"broken — usually two onnxruntime packages installed over each other; "
-                       f"run `edgelens doctor` for the fix", "crash")
+        step = _last_step(out.stdout)
+        from ..hardware.storage import kernel_storage_errors
+        st = kernel_storage_errors() if sig == "SIGBUS" else {"count": 0}
+        if st.get("count"):
+            return (False, f"{_STEP_TEXT.get(step, step)} crashed Python ({sig}), and the "
+                           f"kernel log ({st['source']}) shows {st['count']} storage error(s), "
+                           f"e.g. \"{st['lines'][-1][:120]}\". A failing SD card / disk makes "
+                           f"memory-mapped libraries crash with SIGBUS: replace the card before "
+                           f"reinstalling anything. EdgeLens uses the CPU provider meanwhile",
+                    "crash")
+        if len(ort_distributions()) > 1:
+            why = ("two onnxruntime packages are installed over each other (see the fix "
+                   "above)")
+        else:
+            why = ("the onnxruntime-gpu build does not match this JetPack / CUDA, or its "
+                   "files were damaged by an earlier install; reinstall the wheel for your "
+                   "JetPack: pip install --force-reinstall --no-deps <onnxruntime_gpu wheel>")
+            if sig == "SIGBUS" and not st.get("readable", True):
+                why += ("; SIGBUS is also what a failing SD card causes — check "
+                        "`sudo dmesg | grep -i 'I/O error'` first")
+        return (False, f"{_STEP_TEXT.get(step, step)} crashed Python ({sig}) in an isolated "
+                       f"test process — {why}. EdgeLens itself is unaffected: it uses the CPU "
+                       f"provider until this is fixed", "crash")
     if "CUDA_OK" in out.stdout:
         return (True, None, "ok")
+    listed = next((ln[7:] for ln in out.stdout.splitlines() if ln.startswith("LISTED ")), None)
+    if listed is not None and "CUDAExecutionProvider" not in listed.split(","):
+        return (False, "CUDAExecutionProvider is not in this onnxruntime build", "absent")
+    if "CUDA_WRONG" in out.stdout:
+        return (False, "a CUDA session ran but returned wrong results (broken install)",
+                "error")
+    if "USED " in out.stdout and "CUDA_OK" not in out.stdout:
+        used = next(ln[5:] for ln in out.stdout.splitlines() if ln.startswith("USED "))
+        if "CUDAExecutionProvider" not in used.split(","):
+            return (False, "the CUDA/cuDNN libraries this onnxruntime-gpu build needs could not "
+                           "be loaded (a CUDA session fell back to the CPU)", "error")
     lines = (out.stderr or "").strip().splitlines()
     msg = lines[-1] if lines else "unknown error"
     if "not available" in msg or "cannot open shared object" in msg:
@@ -148,44 +254,80 @@ def _run_isolated_probe():
     return (False, msg[:200], "error")
 
 
-def cuda_probe():
+def forget_cuda_probe():
+    """Drop the cached verdict (this process and on disk): the next call re-probes."""
+    import os
+    global _cuda_probe_result, _cuda_probe_meta
+    _cuda_probe_result = None
+    _cuda_probe_meta = {}
+    try:
+        os.remove(_probe_cache_path())
+    except OSError:
+        pass
+
+
+_cuda_probe_meta = {}            # {"cached_at": iso time} when the verdict came from disk
+
+
+def cuda_probe(force=False):
     """(usable, reason): can this machine actually use the CUDA provider?
 
     get_available_providers() lists compiled-in providers only (found on a
     real laptop: onnxruntime-gpu listed CUDA without libcublasLt installed).
-    Allocating one CUDA tensor loads the provider library — done in a child
-    process, see above. Cached per process and on disk per install."""
-    global _cuda_probe_result
+    A CUDA session on a tiny model is created and run in a child process (see
+    above).
+
+    Only SUCCESS is cached on disk, keyed by the interpreter, the onnxruntime
+    install, the CUDA driver file and the boot: a failure is exactly the result
+    that changes once something is fixed, so it is re-tested every time (about
+    1-2 s, and only on a system with a problem). force=True ignores the cache."""
+    global _cuda_probe_result, _cuda_probe_meta
+    if force:
+        _cuda_probe_result = None
     if _cuda_probe_result is not None:
         return _cuda_probe_result[:2]
+    _cuda_probe_meta = {}
     if ort is None or "CUDAExecutionProvider" not in available_providers():
         _cuda_probe_result = (False, "CUDAExecutionProvider is not in this onnxruntime build",
                               "absent")
         return _cuda_probe_result[:2]
+    import datetime
     import json
     import os
     key = _install_key()
     path = _probe_cache_path()
-    try:
-        with open(path) as f:
-            cached = json.load(f)
-        if cached.get("key") == key:
-            _cuda_probe_result = tuple(cached["result"])
-            return _cuda_probe_result[:2]
-    except (OSError, ValueError, KeyError, TypeError):
-        pass
+    if not force:
+        try:
+            with open(path) as f:
+                cached = json.load(f)
+            if cached.get("key") == key and tuple(cached["result"])[2] == "ok":
+                _cuda_probe_result = tuple(cached["result"])
+                _cuda_probe_meta = {"cached_at": cached.get("saved_at")}
+                return _cuda_probe_result[:2]
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            pass
     _cuda_probe_result = _run_isolated_probe()
-    # Cache only definite answers about the install itself: "ok" and "crash".
-    # An error (missing library) or a hang may be fixed by the environment
-    # without touching onnxruntime: re-probe next time.
-    if _cuda_probe_result[2] in ("ok", "crash"):
+    if _cuda_probe_result[2] == "ok":
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w") as f:
-                json.dump({"key": key, "result": list(_cuda_probe_result)}, f)
+                json.dump({"key": key, "result": list(_cuda_probe_result),
+                           "saved_at": datetime.datetime.now().isoformat(timespec="minutes")},
+                          f)
+        except OSError:
+            pass
+    else:
+        try:
+            os.remove(path)                  # a stale success must not come back
         except OSError:
             pass
     return _cuda_probe_result[:2]
+
+
+def cuda_probe_cached_at():
+    """When the current verdict was cached ("2026-10-17T16:12"), or None if it
+    was measured in this process."""
+    return _cuda_probe_meta.get("cached_at")
 
 
 def cuda_probe_kind():

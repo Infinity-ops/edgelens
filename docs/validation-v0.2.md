@@ -41,12 +41,42 @@ the CUDA check runs in a child process, `edgelens doctor` shows a red
 **"ONNX Runtime installation is broken"** panel with the exact fix, and the
 validation script stops at its preflight step instead of running for hours.
 
+### 0b. Still "SIGBUS" with only ONE onnxruntime installed (second Nano run)
+
+Check in this order:
+
+1. **The SD card.** A failing card makes memory-mapped libraries (the CUDA
+   provider is hundreds of MB) crash with SIGBUS — it looks exactly like a
+   broken install. `sudo dmesg | grep -iE "I/O error|mmcblk|EXT4-fs error"`;
+   `edgelens doctor` shows this as the **Storage** row and the validation
+   script as a WARN line. With storage errors, replace the card first, and
+   measure nothing on it: its numbers are not evidence.
+2. **EdgeLens's check.** v0.2.0.dev1 tested CUDA by allocating a bare CUDA
+   tensor, which can crash the JetPack 4.6 onnxruntime-gpu 1.11 build even
+   though sessions work (TensorRT ran on this Nano in v0.1). From patch 0021
+   the check creates and runs a CUDA session on a tiny model, like a real
+   benchmark, and names the step that failed.
+3. **The wheel.** If the session-based check still crashes on a healthy card:
+   `pip install --force-reinstall --no-deps /path/to/onnxruntime_gpu-1.11.0-cp38-*-linux_aarch64.whl`.
+
+```bash
+edgelens doctor --no-cache     # test again now; expect: no red panel, Storage and GPU rows ✓
+```
+
+The check caches only a success, keyed by the Python interpreter, the
+onnxruntime install, the CUDA driver file and the boot: a reinstall, a JetPack
+upgrade, a reflash or a reboot all test again, and a failure is re-tested on
+every run. `doctor` says when a result came from the cache. The validation
+script continues CPU-only (WARN) when only the GPU provider is unusable; it
+still stops when two onnxruntime packages are installed over each other.
+
 ## 1. Install (once per board)
 
 ```bash
 cd ~/edgelens && git checkout v0.2-dev
 git am /path/to/0015-*.patch /path/to/0016-*.patch /path/to/0017-*.patch   # on top of 0012-0014
 git am /path/to/0019-*.patch /path/to/0020-*.patch                         # Layer 3 (after 0018)
+git am /path/to/0021-*.patch                                                # Nano GPU check fix
 source ~/edgelens-venv/bin/activate
 
 # Jetson: NO [onnx] extra (keeps the Jetson onnxruntime-gpu wheel)

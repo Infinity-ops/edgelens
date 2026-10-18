@@ -93,8 +93,21 @@ log "raw platform sources (what the parsers are written against)"
 : >"$OUT/SUMMARY.txt"
 
 # ------------------------------------------------------------------ preflight
+log "preflight: storage errors in the kernel log?"
+python3 - >>"$OUT/steps.log" 2>&1 <<'EOF'
+from edgelens.hardware.storage import kernel_storage_errors
+s = kernel_storage_errors()
+print("storage:", s["count"] if s["readable"] else "kernel log not readable", s["source"])
+for ln in s["lines"]:
+    print("  ", ln)
+raise SystemExit(4 if s.get("count") else 0)
+EOF
+if [ $? = 4 ]; then
+  echo "WARN  storage — I/O errors in the kernel log (see steps.log): a failing SD card / disk; results from this card are NOT evidence — replace it" >>"$OUT/SUMMARY.txt"
+  log "!! storage errors in the kernel log — replace the SD card before trusting results"
+fi
 log "preflight: is this Python environment sound?"
-if ! timeout 300 python3 - >>"$OUT/steps.log" 2>&1 <<'EOF'
+timeout 300 python3 - >>"$OUT/steps.log" 2>&1 <<'EOF'
 import sys
 from edgelens.benchmark.onnx_pipeline import cuda_probe, cuda_probe_kind, ort_install_problems
 problems = ort_install_problems()
@@ -102,15 +115,24 @@ for p in problems:
     print("PROBLEM:", p["problem"]); print("FIX:    ", p["fix"])
 kind = cuda_probe_kind()
 print("onnxruntime CUDA probe:", kind, cuda_probe()[1] or "")
-sys.exit(1 if problems or kind in ("crash", "hang") else 0)
+# 2 = two packages over each other (everything is unreliable): stop.
+# 3 = the GPU provider is unusable, CPU fine: EdgeLens never opens a GPU
+#     session then, so the run continues CPU-only and the GPU rows say why.
+sys.exit(2 if problems else (3 if kind in ("crash", "hang") else 0))
 EOF
-then
+PRE=$?
+if [ "$PRE" != 0 ] && [ "$PRE" != 3 ]; then
   echo "!! Preflight failed: the onnxruntime installation is broken (details and the fix:" | tee -a "$OUT/SUMMARY.txt"
   echo "!! tail $OUT/steps.log, or run 'edgelens doctor'). Fix it, then rerun this script." | tee -a "$OUT/SUMMARY.txt"
-  tail -6 "$OUT/steps.log"
+  # only the check's own findings (steps.log also holds the "==" lines already on screen)
+  grep -E "^(PROBLEM|FIX|onnxruntime CUDA probe):|Traceback|Error" "$OUT/steps.log" | tail -8
   exit 2
+elif [ "$PRE" = 3 ]; then
+  echo "WARN  preflight — GPU providers unusable (see steps.log: 'CUDA probe'); continuing CPU-only, GPU rows are SKIP/unavailable. After a fix: edgelens doctor --no-cache" >>"$OUT/SUMMARY.txt"
+  log "GPU providers unusable — continuing CPU-only: $(grep 'CUDA probe' "$OUT/steps.log" | tail -1)"
+else
+  echo "PASS  preflight — one onnxruntime install, CUDA provider loads or is absent cleanly" >>"$OUT/SUMMARY.txt"
 fi
-echo "PASS  preflight — one onnxruntime install, CUDA provider loads or is absent cleanly" >>"$OUT/SUMMARY.txt"
 
 # ------------------------------------------------------------------ v0.1 paths
 gate "unit tests" "all pass on the board" python3 -m pytest -q

@@ -41,15 +41,17 @@ def test_cuda_probe_crash_is_a_diagnosis_not_a_crash(fake_gpu_ort, monkeypatch):
                         "import os, signal\nprint('LISTED x', flush=True)\n"
                         "os.kill(os.getpid(), signal.SIGBUS)\n")
     usable, reason = op.cuda_probe()
-    assert usable is False and "CRASHES" in reason and "SIGBUS" in reason
+    assert usable is False and "crashed Python" in reason and "SIGBUS" in reason
     assert op.cuda_probe_kind() == "crash"
     assert set(op.unloadable_providers()) == {"CUDAExecutionProvider"}
     assert op.usable_providers() == ["CPUExecutionProvider"]
-    # cached on disk per install: a second process doesn't re-crash a probe
-    assert (fake_gpu_ort / "edgelens" / "ort_cuda_probe.json").exists()
+    # a failure is NOT cached on disk (it must not outlive the problem): the
+    # next process tests again — and sees the fix
+    assert not (fake_gpu_ort / "edgelens" / "ort_cuda_probe.json").exists()
     monkeypatch.setattr(op, "_cuda_probe_result", None)
-    monkeypatch.setattr(op, "_PROBE_CODE", "raise SystemExit('must not run')")
-    assert op.cuda_probe_kind() == "crash"
+    monkeypatch.setattr(op, "_PROBE_CODE", "print('LISTED CUDAExecutionProvider')\n"
+                                           "print('CUDA_OK')\n")
+    assert op.cuda_probe_kind() == "ok"
 
 
 def test_cuda_probe_ok_and_error_paths(fake_gpu_ort, monkeypatch):

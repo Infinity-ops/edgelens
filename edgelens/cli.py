@@ -257,8 +257,15 @@ def _print_benchmark(result):
 
 
 @app.command()
-def doctor():
+def doctor(
+    no_cache: bool = typer.Option(False, "--no-cache", "--recheck",
+                                  help="Ignore the cached GPU-provider check and test again "
+                                       "(after reinstalling onnxruntime / a driver)."),
+):
     """Environment + hardware fingerprint."""
+    if no_cache:
+        from .benchmark.onnx_pipeline import forget_cuda_probe
+        forget_cuda_probe()
     fp = detector.full_fingerprint()
     hw, sw = fp["hardware"], fp["software"]
 
@@ -301,9 +308,11 @@ def _print_ort_install_problems():
     lines = [f"• {p['problem']}\n  [cyan]Fix:[/cyan] {p['fix']}" for p in problems]
     if kind in ("crash", "hang"):
         lines.append(f"• {reason}")
+        lines.append("  [cyan]Check again after a fix:[/cyan] edgelens doctor --no-cache")
     if lines:
-        console.print(Panel("\n".join(lines), title="❌ ONNX Runtime installation is broken",
-                            border_style="red"))
+        title = ("❌ ONNX Runtime installation is broken" if problems
+                 else "❌ ONNX Runtime GPU provider is unusable")
+        console.print(Panel("\n".join(lines), title=title, border_style="red"))
 
 
 def _print_readiness(is_jetson, power_probe):
