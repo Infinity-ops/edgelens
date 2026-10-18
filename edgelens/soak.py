@@ -21,8 +21,9 @@ trends when there are enough windows):
   drift       p50 / p99 trend: linear fit over time, change start -> end,
               significance of the slope (t-test); "drift" only when the
               slope is significant AND the change is >= DRIFT_PCT.
-  throttling  a window is throttled when a (non-fan) thermal cooling device
-              was active, or the ALLOWED maximum CPU/GPU clock (the cap thermal
+  throttling  a window is throttled when a thermal cooling device that limits
+              frequency was active (not fans, Tegra voltage floors or VTS —
+              see NOT_THROTTLING), or the ALLOWED maximum CPU/GPU clock (the cap thermal
               management lowers) fell below 95% of the first window's — with
               the evidence listed. Current clocks are not used: they are low
               whenever the CPU idles between inferences.
@@ -100,6 +101,21 @@ def meminfo():
     return res
 
 
+# Cooling devices that are NOT frequency throttling (third Jetson Nano run:
+# CORE-floor, DFLL-floor and vdd-gpu-vts showed state 1-2 at 50 C in every
+# window). Tegra "floor" devices raise the MINIMUM voltage when the chip is cold;
+# "vts" (voltage-temperature scaling) picks the voltage table for the current
+# temperature band. Their state is normally non-zero; neither lowers a clock.
+# Fans and PWM fans are cooling, not throttling. Anything else still counts,
+# and a lowered clock cap counts regardless of the device names.
+NOT_THROTTLING = ("fan", "pwm", "floor", "vts")
+
+
+def throttling_cooling_device(name):
+    n = (name or "").lower()
+    return not any(k in n for k in NOT_THROTTLING)
+
+
 class SystemProbe:
     """Clock frequencies and cooling devices, sampled once per second on a
     background thread (cheap sysfs reads); summarized per window."""
@@ -109,10 +125,11 @@ class SystemProbe:
         self.cpu_cur = sorted(glob.glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq"))
         self.cpu_max = [p.replace("scaling_cur_freq", "scaling_max_freq") for p in self.cpu_cur]
         self.gpu = self._find_gpu_devfreq()
-        self.cooling = []
+        self.cooling, self.ignored_cooling = [], []
         for d in sorted(glob.glob("/sys/class/thermal/cooling_device*")):
             typ = _read(f"{d}/type") or ""
-            if "fan" in typ.lower():          # a fan spinning up is cooling, not throttling
+            if not throttling_cooling_device(typ):   # fans, voltage floors, VTS
+                self.ignored_cooling.append(typ)
                 continue
             if _int(f"{d}/max_state") in (None, 0):
                 continue
@@ -158,6 +175,7 @@ class SystemProbe:
             out["gpu_freq_mhz_max"] = g / 1e6 if g else None
             out["gpu_devfreq"] = self.gpu
         out["cooling_devices"] = [t for t, _ in self.cooling]
+        out["cooling_devices_ignored"] = sorted(set(self.ignored_cooling))
         return out
 
     def _run(self):
@@ -314,9 +332,12 @@ def analyze(rows, limits=None):
     base = rows[0] if rows else {}
     for r in rows:
         why = []
-        if r.get("cooling_active"):
+        # filtered here too, so `soak --report` of an older .jsonl is right
+        active = {k: v for k, v in (r.get("cooling_active") or {}).items()
+                  if throttling_cooling_device(k)}
+        if active:
             why.append("cooling device active: " + ", ".join(
-                f"{k} (state {v})" for k, v in r["cooling_active"].items()))
+                f"{k} (state {v})" for k, v in active.items()))
         for k, label in (("cpu", "CPU"), ("gpu", "GPU")):
             cap, cap0 = r.get(f"{k}_cap_mhz_min"), base.get(f"{k}_cap_mhz_min")
             if r is not base and cap and cap0 and cap < 0.95 * cap0:
@@ -661,8 +682,8 @@ def _progress_line(row, duration_s):
         parts.append(f"{row['max_temp_c']}C")
     if row.get("rss_mb") is not None:
         parts.append(f"RSS {row['rss_mb']} MB")
-    if row.get("cooling_active"):
-        parts.append("COOLING ACTIVE")
+    if any(throttling_cooling_device(k) for k in row.get("cooling_active") or {}):
+        parts.append("THROTTLING DEVICE ACTIVE")
     return "Soak: " + " · ".join(parts)
 
 

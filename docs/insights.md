@@ -79,7 +79,7 @@ rebuilds the analysis). Findings:
 | Finding | When |
 | --- | --- |
 | LATENCY_DRIFT | p50/p99 trend significant (t-test on the slope) AND >= 10% start to end |
-| THERMAL_THROTTLING | a non-fan cooling device active, or the CPU/GPU clock cap (scaling_max_freq / devfreq max_freq) below 95% of the first window's — reasons listed per window. A clock that is merely low because the board is idle is not throttling |
+| THERMAL_THROTTLING | a cooling device that limits frequency active (fans, Tegra voltage floors such as CORE-floor / DFLL-floor and voltage-temperature scaling such as vdd-gpu-vts are not throttling and are ignored), or the CPU/GPU clock cap (scaling_max_freq / devfreq max_freq) below 95% of the first window's — reasons listed per window. A clock that is merely low because the board is idle is not throttling |
 | MEMORY_LEAK | process RSS grows significantly (t-test on the slope) by at least max(5 MB/h, 1% of RSS per hour) |
 | GPU_MEMORY_GROWTH | Jetson NvMap (the GPU's share of unified memory) grows — invisible in RSS |
 | OUT_OF_MEMORY_RISK | available memory falls; projected to run out within 24 h |

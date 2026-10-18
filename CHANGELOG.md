@@ -83,6 +83,15 @@
   board's starting state on exit, and the A/B and trade-off gates fail unless
   the saved results really differ in clock state. The physical E1 clock test
   now runs in both directions.
+- Soak reported thermal throttling in 30 of 30 windows at 50 C: the "active"
+  cooling devices were Tegra voltage floors (CORE-floor, DFLL-floor) and
+  voltage-temperature scaling (vdd-gpu-vts), which never lower a clock. They
+  are now ignored like fans (listed as `cooling_devices_ignored`); real
+  throttling devices and lowered clock caps still count. `soak --report` of an
+  existing .jsonl applies the corrected rule.
+- Two unit tests read the machine's real kernel log, so they failed on a board
+  with a failing SD card; tests now always see a clean log unless they test
+  storage errors on purpose.
 
 ### Fixed — from the first Jetson Nano run
 - A broken onnxruntime (two packages installed over each other) crashed every

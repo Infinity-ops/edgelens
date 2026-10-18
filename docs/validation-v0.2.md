@@ -76,7 +76,7 @@ still stops when two onnxruntime packages are installed over each other.
 cd ~/edgelens && git checkout v0.2-dev
 git am /path/to/0015-*.patch /path/to/0016-*.patch /path/to/0017-*.patch   # on top of 0012-0014
 git am /path/to/0019-*.patch /path/to/0020-*.patch                         # Layer 3 (after 0018)
-git am /path/to/0021-*.patch /path/to/0022-*.patch                         # Nano fixes
+git am /path/to/0021-*.patch /path/to/0022-*.patch /path/to/0023-*.patch   # Nano fixes
 source ~/edgelens-venv/bin/activate
 
 # Jetson: NO [onnx] extra (keeps the Jetson onnxruntime-gpu wheel)
