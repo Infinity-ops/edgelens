@@ -1,6 +1,36 @@
 # Changelog
 
-## Unreleased — 0.2.0.dev0 (Layers 0, 1 and 2 of the v0.2 roadmap)
+## Unreleased — 0.2.0.dev0 (Layers 0–3 of the v0.2 roadmap)
+
+### Added — Layer 3: evidence and workflow
+- **Assumption contracts (E1):** `validate --contract c.yaml` checks
+  requirements AND the conditions they are claimed under — board, power mode,
+  pinned clocks, input period, start temperature, thermal envelope,
+  background CPU load, provider, model hash — plus `min_duration` /
+  `min_iterations` and requirement IDs. A violated or unverifiable assumption
+  gives INCONCLUSIVE, never PASS; a FAIL outside the assumptions is reported
+  but not counted as evidence. Unknown keys are errors with a suggestion.
+  `--evidence e.md` writes a Markdown evidence record (one row per
+  requirement ID). `edgelens contract init | check | run`: `run` checks the
+  assumptions it can before measuring, then measures exactly what the contract
+  needs (paced period, deadline, iterations, duration; soak or periodic when
+  the guarantees need it) and validates.
+- **Background load** is now measured in every run: CPU time of every process
+  except EdgeLens and the measured application (`telemetry.background`);
+  telemetry also records the start temperature, the GPU clock and every
+  power rail per sample.
+- **`edgelens export --perfetto` (E2):** spans of every process and thread,
+  end-to-end iterations, deadline misses, board counters (CPU/GPU load, GPU
+  clock, EMC, memory, temperature, power and each rail) and per-process
+  counters on one timeline for ui.perfetto.dev; several files share the
+  monotonic clock when recorded on the same boot. Checked against Perfetto's
+  trace processor.
+- **Performance CI (E3):** `examples/ci-jetson/` — a complete example
+  repository: GitHub Actions workflow for a self-hosted Jetson runner
+  (concurrency per board, clocks pinned and restored, evidence as job summary
+  and artifact), a DEM2 contract, the gate script (exit code = verdict) and a
+  DEM2-style pipeline; docs/contracts.md, docs/timeline.md, docs/ci.md.
+- Dependency: PyYAML (contract files).
 
 ### Added — Layer 2: insights nobody else gives you
 - **`edgelens sweep` (I3):** one model on CPU / CUDA / TensorRT FP32, FP16,

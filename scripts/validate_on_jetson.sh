@@ -306,6 +306,178 @@ else
   skip "I2 soak DEM2" "needs the S4 bag merge (pip install edgelens[rosbag])"
 fi
 
+# ------------------------------------------------------------------ Layer 3: E1 assumption contracts
+# Contracts are generated from THIS board's state, so the base contract can
+# PASS on a Nano and on an Orin; each variant then breaks exactly one
+# assumption — physically on the board where possible — and must give
+# INCONCLUSIVE (exit 2) with that assumption VIOLATED and the others holding.
+CON="$OUT/contracts"; mkdir -p "$CON"
+OUTABS="$(cd "$OUT" && pwd)"
+if [ "$QUICK" = "1" ]; then E1_P=100; E1_D=30s; else E1_P=1000; E1_D=5m; fi
+run py "$CON" "$E1_P" "$E1_D" <<'EOF'
+import copy, json, os, sys
+from edgelens.core.identity import capture_environment
+out, period, dur = sys.argv[1], float(sys.argv[2]), sys.argv[3]
+env = capture_environment()
+pm = env.get("power_mode") or {}
+cpu, gpu = env.get("cpu_clocks_locked"), env.get("gpu_clocks_locked")
+board = (env.get("board") or "unknown").replace("NVIDIA ", "")
+base = {"contract": "e1-this-board", "version": "1", "requirements_doc": "validation-v0.2",
+        "min_duration": dur,
+        "assumes": {"board": {"value": board, "id": "A-board"},
+                    "input_period_ms": {"value": period, "id": "A-period"},
+                    "max_background_cpu_pct": {"value": 20, "id": "A-load"}},
+        "guarantees": {"p99_ms": {"limit": period, "id": "R-p99"},
+                       "max_miss_ratio": {"limit": 0.01, "id": "R-miss"}}}
+from edgelens.hardware.telemetry import read_temps
+if read_temps():                       # every Jetson; not every laptop / VM
+    base["assumes"]["max_start_temp_c"] = {"value": 75, "id": "A-temp"}
+    base["guarantees"]["max_temp_c"] = {"limit": 95, "id": "R-temp"}
+if pm.get("name"):
+    base["assumes"]["power_mode"] = {"value": pm["name"], "id": "A-power"}
+if cpu is not None and gpu is not None:
+    base["assumes"]["clocks_pinned"] = {"value": bool(cpu and gpu), "id": "A-clocks"}
+short = copy.deepcopy(base); short["min_duration"] = "30s"
+short["assumes"]["input_period_ms"]["value"] = 100.0
+short["guarantees"]["p99_ms"]["limit"] = 100.0
+def write(name, doc):
+    json.dump(doc, open(os.path.join(out, name + ".json"), "w"), indent=2)
+write("base", base); write("short", short)
+def variant(name, key, value):
+    d = copy.deepcopy(short); d["assumes"].setdefault(key, {"id": "A-" + key})["value"] = value
+    write(name, d)
+variant("v_board", "board", "Raspberry Pi 5")
+if "max_start_temp_c" in short["assumes"]:
+    variant("v_start_temp", "max_start_temp_c", 1)
+if pm.get("name"):
+    variant("v_power", "power_mode", "NOT_" + pm["name"])
+if "clocks_pinned" in short["assumes"]:
+    variant("v_clocks_flipped", "clocks_pinned", not short["assumes"]["clocks_pinned"]["value"])
+d = copy.deepcopy(short); d["assumes"]["provider"] = "TensorrtExecutionProvider"; write("v_provider", d)
+print("board:", board, "| power mode:", pm.get("name"), "| clocks pinned:", cpu, gpu)
+print("contracts:", sorted(os.listdir(out)))
+EOF
+for f in "$CON"/*.json; do run edgelens contract check "$f"; done
+
+# e1_violated <validation.json> <assumption>: that row VIOLATED, every other one HOLDS
+e1_violated() {
+  py "$1" "$2" <<'EOF'
+import json, sys
+v = json.load(open(sys.argv[1]))
+rows = {a["assumption"]: a for a in v["assumptions"]}
+for k, a in rows.items():
+    print(f"  {k:24s} {a['status']:13s} {a.get('measured')}  {a.get('reason') or ''}")
+bad = rows[sys.argv[2]]["status"] == "VIOLATED"
+others = all(a["status"] == "HOLDS" for k, a in rows.items() if k != sys.argv[2])
+print("verdict:", v["verdict"], "| guarantees alone:", v["guarantees_verdict"])
+sys.exit(0 if bad and others and v["verdict"] == "INCONCLUSIVE" else 1)
+EOF
+}
+E1_OK=1
+e1_gate() {   # e1_gate <name> <validation.json> <assumption>
+  if e1_violated "$2" "$3" >>"$OUT/steps.log" 2>&1; then
+    echo "PASS  E1 violated: $1 — INCONCLUSIVE, only '$3' VIOLATED" >>"$OUT/SUMMARY.txt"
+  else E1_OK=0; echo "FAIL  E1 violated: $1 — expected INCONCLUSIVE with '$3' VIOLATED (see steps.log)" >>"$OUT/SUMMARY.txt"; fi
+}
+
+# PASS path (also the E3 reference run): the DEM2-style pipeline under this board's contract
+gate "E1 contract PASS" "every assumption holds on this board, every guarantee met (needs a quiet board)" \
+  edgelens contract run "$CON/base.json" --pipeline examples/ci-jetson/pipeline.py \
+  --save "$OUT/e1_base.json" --evidence "$OUT/e1_base.evidence.md" --perfetto "$OUT/e1_base.perfetto.json"
+run edgelens contract run "$CON/short.json" --pipeline examples/ci-jetson/pipeline.py --save "$OUT/e1_short.json"
+
+# contract-side violations, checked against this board's REAL readings
+for V in v_board v_start_temp v_power v_clocks_flipped; do
+  [ -f "$CON/$V.json" ] || { skip "E1 violated: $V" "not readable on this board"; continue; }
+  cp "$OUT/e1_short.json" "$OUT/e1_$V.json"
+  expect "2" edgelens validate "$OUT/e1_$V.json" --contract "$CON/$V.json" --evidence "$OUT/e1_$V.evidence.md"
+  case $V in v_board) K=board;; v_start_temp) K=max_start_temp_c;; v_power) K=power_mode;; v_clocks_flipped) K=clocks_pinned;; esac
+  e1_gate "$V" "$OUT/e1_$V.validation.json" "$K"
+done
+
+# input period, physically: a back-to-back run is not "one input every period"
+run edgelens benchmark --pipeline examples/ci-jetson/pipeline.py --iterations 400 --save "$OUT/e1_unpaced.json"
+expect "2" edgelens validate "$OUT/e1_unpaced.json" --contract "$CON/short.json"
+py "$OUT/e1_unpaced.validation.json" <<'EOF' >>"$OUT/steps.log" 2>&1 && echo "PASS  E1 violated: unpaced input — input_period_ms VIOLATED" >>"$OUT/SUMMARY.txt" || { E1_OK=0; echo "FAIL  E1 violated: unpaced input (see steps.log)" >>"$OUT/SUMMARY.txt"; }
+import json, sys
+v = json.load(open(sys.argv[1]))
+row = next(a for a in v["assumptions"] if a["assumption"] == "input_period_ms")
+print(row); sys.exit(0 if row["status"] == "VIOLATED" and v["verdict"] == "INCONCLUSIVE" else 1)
+EOF
+
+# background load, physically: CPU hogs on ~1/3 of the cores during the run
+NCPU=$(nproc); NHOG=$(( NCPU / 3 + 1 )); HOGS=""
+for _ in $(seq "$NHOG"); do python3 -c "while True: pass" & HOGS="$HOGS $!"; done
+log "background load: $NHOG CPU hog(s) on $NCPU cores"
+expect "2" edgelens contract run "$CON/short.json" --pipeline examples/ci-jetson/pipeline.py --run-anyway --save "$OUT/e1_busy.json"
+# shellcheck disable=SC2086
+kill $HOGS 2>/dev/null; wait $HOGS 2>/dev/null
+e1_gate "background load ($NHOG hogs)" "$OUT/e1_busy.validation.json" max_background_cpu_pct
+
+# provider, before the run: the contract wants TensorRT, the run would use the CPU
+expect "2" edgelens contract run "$CON/v_provider.json" --model "$LSTM" --provider CPUExecutionProvider --save "$OUT/e1_provider.json" --evidence "$OUT/e1_provider.evidence.md"
+if [ ! -f "$OUT/e1_provider.json" ] && grep -q "VIOLATED: ran on CPUExecutionProvider" "$OUT/e1_provider.evidence.md" 2>/dev/null; then
+  echo "PASS  E1 violated: provider — stopped BEFORE the run, evidence says why" >>"$OUT/SUMMARY.txt"
+else E1_OK=0; echo "FAIL  E1 violated: provider (see steps.log)" >>"$OUT/SUMMARY.txt"; fi
+
+# clocks, physically (sudo): pin them, while the contract assumes this board's unpinned state
+clocks_free() { python3 -c "import json,sys; a=json.load(open(sys.argv[1]))['assumes']; sys.exit(0 if a.get('clocks_pinned', {}).get('value') is False else 1)" "$1"; }
+if [ "${EDGELENS_VALIDATE_SUDO:-0}" = "1" ] && clocks_free "$CON/short.json"; then
+  sudo jetson_clocks --store "$OUT/clocks_e1.conf"; sudo jetson_clocks
+  expect "2" edgelens contract run "$CON/short.json" --pipeline examples/ci-jetson/pipeline.py --run-anyway --save "$OUT/e1_pinned.json"
+  sudo jetson_clocks --restore "$OUT/clocks_e1.conf"
+  e1_gate "clocks pinned by jetson_clocks" "$OUT/e1_pinned.validation.json" clocks_pinned
+else
+  skip "E1 violated: clocks (physical)" "EDGELENS_VALIDATE_SUDO=1 with unpinned clocks"
+fi
+if [ "$E1_OK" = 1 ]; then echo "PASS  E1 — each assumption, deliberately violated, gives INCONCLUSIVE" >>"$OUT/SUMMARY.txt"
+else echo "FAIL  E1 — at least one violated assumption did not give INCONCLUSIVE" >>"$OUT/SUMMARY.txt"; fi
+
+# ------------------------------------------------------------------ Layer 3: E2 Perfetto timeline
+# Two applications at once into ONE recording (several processes, one clock),
+# then that recording + the DEM2 contract run (board power) on one timeline.
+SOCK="$(mktemp -u /tmp/edgelens-e2-XXXXXX.sock)"     # AF_UNIX paths max 107 bytes
+EDGELENS_SOCKET="$SOCK" edgelens record --duration 12 --deadline-ms 50 --save "$OUT/e2_two_apps.json" >>"$OUT/steps.log" 2>&1 &
+REC=$!; sleep 2
+[ -x "$OUT/cpp_app" ] && EDGELENS_SOCKET="$SOCK" "$OUT/cpp_app" 300 >>"$OUT/steps.log" 2>&1 &
+EDGELENS_SOCKET="$SOCK" python3 examples/markers/python_app.py 200 >>"$OUT/steps.log" 2>&1
+wait "$REC"
+E2_IN=""; for f in "$OUT/e2_two_apps.json" "$OUT/e1_base.json"; do [ -f "$f" ] && E2_IN="$E2_IN $f"; done
+# shellcheck disable=SC2086
+gate "E2 export" "Perfetto JSON written" edgelens export $E2_IN --perfetto "$OUT/e2_timeline.perfetto.json"
+gate "E2 tracks" "spans of >= 1 process per file, iterations, CPU/GPU load, temperature, power (if the sensor reads)" py "$OUT/e2_timeline.perfetto.json" "$OUT/e1_base.json" <<'EOF'
+import json, sys
+t = json.load(open(sys.argv[1]))
+ev = t["traceEvents"]
+pids = {e["pid"] for e in ev if e["ph"] == "X" and e.get("cat") == "stage"}
+counters = {f"{e['name']} {k}" for e in ev if e["ph"] == "C" for k in e["args"]}
+names = {e["name"] for e in ev if e["ph"] == "X"}
+print("processes with spans:", sorted(pids)); print("counter tracks:", sorted(counters))
+print("span names:", sorted(names)[:20]); print("alignment:", t["metadata"]["alignment"])
+need = {"CPU load %"}
+base = json.load(open(sys.argv[2])) if len(sys.argv) > 2 else {}
+if any(s.get("max_temp_c") is not None for s in base.get("telemetry_series") or []):
+    need.add("Temperature max C")
+if (base.get("energy") or {}).get("available"):
+    need.add("Board power W")
+if any(s.get("gpu_percent") is not None for s in base.get("telemetry_series") or []):
+    need.add("GPU load %")
+missing = need - counters
+print("missing tracks:", missing or "none")
+sys.exit(0 if len(pids) >= 2 and "iteration" in names and not missing else 1)
+EOF
+echo "TODO  E2 by hand — open $OUT/e2_timeline.perfetto.json at https://ui.perfetto.dev: every process, iterations, counters visible" >>"$OUT/SUMMARY.txt"
+
+# ------------------------------------------------------------------ Layer 3: E3 performance CI
+# The example repository's gate script, as the CI job runs it (minus GitHub).
+mkdir -p "$OUTABS/e3"
+gate "E3 CI gate" "examples/ci-jetson/ci/perf_gate.sh: exit 0 (PASS), job summary + evidence + timeline written" \
+  env GITHUB_STEP_SUMMARY="$OUTABS/e3/summary.md" EDGELENS_OUT="$OUTABS/e3" \
+      EDGELENS_CONTRACT="$OUTABS/contracts/base.json" PYTHON=python3 \
+      bash -c 'cd examples/ci-jetson && bash ci/perf_gate.sh'
+ls "$OUT/e3" >>"$OUT/steps.log" 2>&1
+echo "TODO  E3 by hand — push examples/ci-jetson to a private repo, register this board as a runner (its README), open a PR: the check must run and block on FAIL / INCONCLUSIVE" >>"$OUT/SUMMARY.txt"
+
 # ------------------------------------------------------------------ S3 ROS 2
 if python3 -c "import rclpy" 2>/dev/null && [ -n "${EDGELENS_ROS_FROM:-}" ]; then
   gate "S3 ROS 2 latency" "chain latency matched" edgelens ros2 latency --from "$EDGELENS_ROS_FROM" --to "${EDGELENS_ROS_TO:-}" --duration 30 --save "$OUT/ros2.json"

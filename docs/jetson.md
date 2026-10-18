@@ -44,7 +44,7 @@ venv, ONNX Runtime CPU, CUDA and TensorRT providers):
 
 ## v0.2 validation (in progress)
 
-Layers 0, 1 and 2 of the v0.2 roadmap are implemented and pass CI. They enter
+Layers 0, 1, 2 and 3 of the v0.2 roadmap are implemented and pass CI. They enter
 the README only once their row below is filled from a real board, using
 `scripts/validate_on_jetson.sh` ([how](validation-v0.2.md)).
 
@@ -64,6 +64,9 @@ the README only once their row below is filled from a real board, using
 | I3 sweep | LSTM: p50 / energy / max error / decision agreement per backend (CPU, CUDA, TRT, TRT-FP16, DLA) | _pending_ | _pending_ |
 | I1 periodic | 1 Hz vs back-to-back p50; energy per period; pinned vs unpinned trade-off | _pending_ | _pending_ |
 | I2 soak | 30 min DEM2 at 1 Hz: drift, throttling, memory growth; deliberate leak found | _pending_ | _pending_ |
+| E1 contracts | PASS on a quiet board; each assumption deliberately violated → INCONCLUSIVE | _pending_ | _pending_ |
+| E2 timeline | two applications + board power on one Perfetto timeline, opened in ui.perfetto.dev | _pending_ | _pending_ |
+| E3 CI | example repository: self-hosted runner blocks a pull request that breaks the contract | _pending_ | _pending_ |
 
 ## Real results on a Jetson Nano
 

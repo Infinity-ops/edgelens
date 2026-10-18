@@ -46,6 +46,7 @@ validation script stops at its preflight step instead of running for hours.
 ```bash
 cd ~/edgelens && git checkout v0.2-dev
 git am /path/to/0015-*.patch /path/to/0016-*.patch /path/to/0017-*.patch   # on top of 0012-0014
+git am /path/to/0019-*.patch /path/to/0020-*.patch                         # Layer 3 (after 0018)
 source ~/edgelens-venv/bin/activate
 
 # Jetson: NO [onnx] extra (keeps the Jetson onnxruntime-gpu wheel)
@@ -111,7 +112,7 @@ own `sendto()`, and slow thermal zones are read only every 20th sample.
 
 ```bash
 EDGELENS_VALIDATE_QUICK=1 bash scripts/validate_on_jetson.sh       # ~15 min smoke run
-EDGELENS_VALIDATE_SUDO=1  bash scripts/validate_on_jetson.sh       # full: ~75 min (30 min soak)
+EDGELENS_VALIDATE_SUDO=1  bash scripts/validate_on_jetson.sh       # full: ~100 min (30 min soak, 3 x 5 min contract runs)
 ```
 
 Each run writes `edgelens_validation_<board>_<date>/SUMMARY.txt` and a
@@ -144,6 +145,13 @@ Each run writes `edgelens_validation_<board>_<date>/SUMMARY.txt` and a
 | **I2 leak** | the deliberate leak demo is detected by `soak` |
 | **I2 soak** | 30-minute DEM2 run at 1 Hz: drift, throttling, memory, JSONL streamed |
 | I2 soak requirements | the soak result passes `validate`: p99 <= 3 s, no misses, drift <= 10%, memory growth <= 20 MB/h, no throttled window |
+| **E1 contract PASS** | a contract generated from this board's state: every assumption holds, every guarantee met (needs a quiet board) |
+| **E1 violated: …** | board, power mode, clocks (contract-side and, with sudo, physically pinned), start temperature, unpaced input, background load (CPU hogs), provider: each gives INCONCLUSIVE with exactly that assumption VIOLATED |
+| **E1** | all of the above |
+| **E2 export / tracks** | two applications recorded at once + the DEM2 run: spans of several processes, iterations, CPU/GPU load, temperature, power |
+| E2 by hand (TODO) | open the `.perfetto.json` at https://ui.perfetto.dev and look at every track |
+| **E3 CI gate** | `examples/ci-jetson/ci/perf_gate.sh` exits 0 and writes summary, evidence, timeline |
+| E3 by hand (TODO) | the example repository on GitHub with this board as a runner blocks a pull request |
 | S3 ROS 2 | needs a ROS 2 system (section 7) |
 
 ## 6. Nano vs Orin: same steps, different setup
@@ -179,6 +187,29 @@ edgelens compare unpinned.json pinned.json      # trade-off: latency gained, mJ 
 edgelens soak --duration 30m --pipeline examples/dem2_bag_replay.py --period-ms 1000 --save soak.json
 edgelens soak --report soak.jsonl               # rebuild after a crash / power cut
 ```
+
+## 7b. Layer 3 by hand
+
+```bash
+# E1 — requirements with their conditions
+edgelens contract init my.yaml && edgelens contract check my.yaml
+edgelens contract run examples/ci-jetson/perf/dem2.contract.yaml --pipeline examples/ci-jetson/pipeline.py
+#   -> pre-run check (board, power mode, clocks, start temperature, background load),
+#      the run the contract needs, PASS / FAIL / INCONCLUSIVE + evidence.md
+edgelens validate run.json --contract my.yaml --evidence evidence.md     # any existing result
+
+# E2 — one timeline
+edgelens export run.json --perfetto run.perfetto.json     # open at https://ui.perfetto.dev
+
+# E3 — the CI gate, locally (as the GitHub job runs it)
+cd examples/ci-jetson && bash ci/perf_gate.sh
+```
+
+To finish E3 on GitHub: copy `examples/ci-jetson/` into a new **private**
+repository, follow its README (runner with the `jetson` label, sudoers line
+for `jetson_clocks`, power-sensor service on the Nano, branch protection),
+then open a pull request that makes `infer` slower than the deadline: the
+check must turn red with FAIL and the limiting stage in the job summary.
 
 ROS 2 (when a ROS 2 system is available):
 
