@@ -1,6 +1,46 @@
 # Changelog
 
-## Unreleased — 0.2.0.dev0 (Layers 0 and 1 of the v0.2 roadmap)
+## Unreleased — 0.2.0.dev0 (Layers 0, 1 and 2 of the v0.2 roadmap)
+
+### Added — Layer 2: insights nobody else gives you
+- **`edgelens sweep` (I3):** one model on CPU / CUDA / TensorRT FP32, FP16,
+  INT8 / DLA (+ external runtimes such as EDDL via exported inputs and saved
+  outputs): latency, energy, session start-up (TensorRT engine cache) and
+  output equivalence against a reference backend — max |error|, values within
+  tolerance, decision agreement (argmax / threshold). Verdicts EQUIVALENT /
+  NUMERIC_DRIFT / DECISIONS_DIFFER; finding OUTPUT_DRIFT; validate
+  `--max-output-error`, `--min-decision-agreement`.
+- **`edgelens periodic` (I1):** latency and energy at the real inference rate
+  (period sweep) against back-to-back, with service time and OS wake-up delay
+  kept apart, energy per period (idle included) and extra energy per
+  inference over a measured idle baseline; finding DUTY_CYCLE_PENALTY; GPU
+  railgate state; `compare` of two periodic runs prints the trade-off both
+  ways; validate `--max-energy-per-period-mj`.
+- **`edgelens soak` (I2):** time-boxed windows streamed to JSONL (crash-safe,
+  `--report` rebuilds), for EdgeLens-driven pipelines and observed
+  applications; drift (significance-tested trend), thermal throttling (cooling
+  devices, clock drops), process RSS and Jetson NvMap growth, available-memory
+  trend and time to OOM, swap; findings LATENCY_DRIFT, THERMAL_THROTTLING,
+  MEMORY_LEAK, GPU_MEMORY_GROWTH, OUT_OF_MEMORY_RISK, SWAP_IN_USE; validate
+  `--max-latency-drift-pct`, `--max-mem-growth-mb-per-h`,
+  `--max-throttled-windows`, `--max-temp-c`.
+- `tests/fixtures/lstm_anomaly.onnx` (DEM2-shaped stand-in),
+  `examples/soak_leak_demo.py`; docs/insights.md.
+
+### Fixed — from the first Jetson Nano run
+- A broken onnxruntime (two packages installed over each other) crashed every
+  command with "Bus error": the CUDA provider check now runs in a child
+  process with a timeout, cached per install; `doctor` names the conflict and
+  the fix; the validation script stops at a preflight check, gives every step
+  a timeout and stops on the first crash with a Python traceback.
+- Markers on slow CPUs: the collector receives raw and parses later; senders
+  flush overflow in 4 KB chunks with a 200 µs back-off (a full queue cost
+  234 µs per C span on the Nano); faster Python `mark.span`.
+- selftest: genuinely realistic marker rate (4000 spans/s), costs beyond the
+  kernel's sendto(), collector capacity, scheduling jitter (desktop hint),
+  sampler breakdown, implausible chrony bounds flagged.
+- Telemetry: slow thermal zones (firmware / I2C reads of several ms) are read
+  every 20th sample; swap every 10th.
 
 Implemented and tested in CI (Python 3.8 and 3.13); not yet validated on
 Jetson hardware — see docs/jetson.md for the rows still pending.

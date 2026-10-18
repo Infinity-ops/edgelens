@@ -44,7 +44,7 @@ venv, ONNX Runtime CPU, CUDA and TensorRT providers):
 
 ## v0.2 validation (in progress)
 
-Layers 0 and 1 of the v0.2 roadmap are implemented and pass CI. They enter
+Layers 0, 1 and 2 of the v0.2 roadmap are implemented and pass CI. They enter
 the README only once their row below is filled from a real board, using
 `scripts/validate_on_jetson.sh` ([how](validation-v0.2.md)).
 
@@ -61,6 +61,9 @@ the README only once their row below is filled from a real board, using
 | S2 attach | process table; deliberate leak detected | _pending_ | _pending_ |
 | S3 ROS 2 | chain latency vs markers in the node | _pending_ | _pending_ |
 | S4 bag replay | DEM2-shaped bag → 1 Hz pipeline, SLA check | _pending_ | _pending_ |
+| I3 sweep | LSTM: p50 / energy / max error / decision agreement per backend (CPU, CUDA, TRT, TRT-FP16, DLA) | _pending_ | _pending_ |
+| I1 periodic | 1 Hz vs back-to-back p50; energy per period; pinned vs unpinned trade-off | _pending_ | _pending_ |
+| I2 soak | 30 min DEM2 at 1 Hz: drift, throttling, memory growth; deliberate leak found | _pending_ | _pending_ |
 
 ## Real results on a Jetson Nano
 
