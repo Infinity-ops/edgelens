@@ -42,6 +42,26 @@ venv, ONNX Runtime CPU, CUDA and TensorRT providers):
   becomes the first stage (or use observer mode in your existing loop).
   Recorded signals can be replayed with `WindowSource`.
 
+## v0.2 validation (in progress)
+
+Layers 0 and 1 of the v0.2 roadmap are implemented and pass CI. They enter
+the README only once their row below is filled from a real board, using
+`scripts/validate_on_jetson.sh` ([how](validation-v0.2.md)).
+
+| Gate | What is measured | Jetson Nano (JP 4.6) | AGX Orin Industrial |
+| --- | --- | --- | --- |
+| T2 one clock | stage timing, markers, telemetry on CLOCK_MONOTONIC | _pending_ | _pending_ |
+| T3 selftest: harness error | 1 ms / 10 ms reference, median error | _pending_ | _pending_ |
+| T3 selftest: span cost | Python / C, µs per span (kernel sendto) | _pending_ | _pending_ |
+| T3 selftest: sampler | % of one core; telemetry shift % | _pending_ | _pending_ |
+| T4 A/A | identical setups → NO DETECTABLE CHANGE | _pending_ | _pending_ |
+| T4 A/B | `jetson_clocks` → IMPROVED, change and 95% CI | _pending_ | _pending_ |
+| T5 schema | 0.1.0 file loads in every command | _pending_ | _pending_ |
+| S1 markers | C++ and Python: received / lost at a realistic rate | _pending_ | _pending_ |
+| S2 attach | process table; deliberate leak detected | _pending_ | _pending_ |
+| S3 ROS 2 | chain latency vs markers in the node | _pending_ | _pending_ |
+| S4 bag replay | DEM2-shaped bag → 1 Hz pipeline, SLA check | _pending_ | _pending_ |
+
 ## Real results on a Jetson Nano
 
 Measured with this release (`tests/fixtures/small_cnn.onnx`, 300 iterations

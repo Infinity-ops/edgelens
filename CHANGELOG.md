@@ -1,5 +1,71 @@
 # Changelog
 
+## Unreleased — 0.2.0.dev0 (Layers 0 and 1 of the v0.2 roadmap)
+
+Implemented and tested in CI (Python 3.8 and 3.13); not yet validated on
+Jetson hardware — see docs/jetson.md for the rows still pending.
+
+### Added — can you trust the numbers?
+- **One clock (T2):** every timestamp is CLOCK_MONOTONIC: harness and
+  observer stages, markers, telemetry samples (`t_mono_ns`), energy
+  integration. New `clock` block in results with the wall↔monotonic offset
+  and its uncertainty; chrony error bounds for cross-machine comparisons.
+- **`edgelens selftest` (T3):** measures EdgeLens itself on the board:
+  clock, harness error against a known reference workload, Python and C
+  marker cost next to the kernel's `sendto()` cost, marker delivery and exact
+  loss accounting, datagram queue limit, sampler CPU, telemetry disturbance,
+  chrony.
+- **Statistical compare (T4):** `benchmark --repeat N [--cooldown S]` writes
+  NAME.r01.json…; `compare 'a.r*.json' 'b.r*.json'` gives IMPROVED /
+  REGRESSED / NO DETECTABLE CHANGE from Welch intervals over runs, with the
+  smallest change the runs could have detected; `--metric`, `--min-effect`.
+  Single-run compares show a within-run block-bootstrap interval of p99.
+  Results now carry `latency_series_ms`.
+- **Schema v1 frozen (T5):** docs/schema.md; a file written by edgelens
+  0.1.0 is a test fixture that must keep working everywhere; newer schemas
+  are refused clearly.
+- **Measurement integrity checks:** lost marker events, unsynchronised GPU
+  spans, log-sourced timing, missing latency, cross-machine clock doubt.
+  `validate` turns a latency PASS into NOT_MEASURED when an issue blocks it
+  (a FAIL stays a FAIL); `diagnose` lists them.
+
+### Added — systems EdgeLens doesn't run
+- **Markers (S1):** header-only `edgelens_mark.h` for C/C++ (`EL_SPAN`,
+  `EL_ITERATION`, `EL_SPAN_GPU`, `EL_SPAN_CUDA`, `-DEDGELENS_DISABLE`) and
+  `edgelens.mark` for Python; never-blocking UNIX datagrams with overflow
+  batching and exact loss accounting. `edgelens record [-- CMD]`,
+  `edgelens include` (for `-I`), `edgelens import-log --regex`.
+- **Attach mode (S2):** `edgelens watch --pid / --name / -- CMD`: per-process
+  CPU, memory and growth rate, threads, context switches, with board
+  telemetry on one timeline; collects markers too.
+- **ROS 2 latency (S3, experimental):** `edgelens ros2 latency --from --to`:
+  chain latency by matching header stamps (no clock sync needed), data age
+  with explicit clock uncertainty, per-topic rate, jitter and gaps.
+- **ROS bag replay (S4):** `examples/rosbag_to_windows.py` (as-of merge of
+  /imu, /odom, /cmd_vel_rc100 + any topic, data-age columns, gap report;
+  extra `edgelens[rosbag]`) and `examples/dem2_bag_replay.py` (1 Hz
+  stand-in LSTM pipeline with a freshness check).
+- `examples/markers/cpp_app.cpp`, `examples/markers/python_app.py`;
+  `scripts/validate_on_jetson.sh` extended with a gate per feature and a
+  SUMMARY.txt; docs/markers.md, docs/validation-v0.2.md.
+
+### Measurement correctness (from an independent pre-release review)
+- Throughput in markers / attach / ROS 2 / paced runs is the observed rate
+  over the run, not 1 / mean latency (`throughput_basis` says which).
+- `record -- CMD` uses a private socket; `watch --pid/--name` keeps only the
+  target's own spans. Energy per iteration in observed runs covers only the
+  active window (first to last span), not start-up.
+- Markers are fork-safe in C and Python; duplicate sequence numbers, senders
+  killed before their final message, unstored spans, multi-thread runs
+  without `@iteration`, and ROS messages missing from a chain all block a
+  latency PASS instead of passing silently.
+
+### Changed
+- Timeseries pack: `hop` may be larger than `window` (predict less often
+  than the sensor delivers, e.g. 0.5 s of history once per second).
+- Role inference recognises lstm/gru/rnn/cnn/eddl/trt/onnx/anomaly names as
+  inference.
+
 ## 0.1.0 — 2026-10-07
 
 ### Added
