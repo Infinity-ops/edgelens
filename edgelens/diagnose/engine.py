@@ -365,6 +365,9 @@ def diagnose(benchmark_result):
         except ValueError:
             pass   # result written by an unknown/third-party pack not installed here
 
+    from .insights import findings as layer2_findings
+    findings.extend(layer2_findings(benchmark_result))
+
     if not findings:
         findings.append({
             "type": "BALANCED",

@@ -281,11 +281,28 @@ def doctor():
         pkg_table.add_row(pkg, ver or "[dim]not installed[/dim]")
     console.print(pkg_table)
 
+    _print_ort_install_problems()
     src = _print_telemetry_sources()
     _print_readiness(hw["is_jetson"], src["power_ina3221"])
 
     if not hw["is_jetson"]:
         _non_jetson_notice()
+
+
+def _print_ort_install_problems():
+    try:
+        from .benchmark.onnx_pipeline import cuda_probe, cuda_probe_kind, ort_install_problems
+        problems = ort_install_problems()
+        kind = cuda_probe_kind()
+        reason = cuda_probe()[1]
+    except Exception as e:                       # never let doctor die on a broken ORT
+        problems, kind, reason = [], "error", f"{type(e).__name__}: {e}"
+    lines = [f"• {p['problem']}\n  [cyan]Fix:[/cyan] {p['fix']}" for p in problems]
+    if kind in ("crash", "hang"):
+        lines.append(f"• {reason}")
+    if lines:
+        console.print(Panel("\n".join(lines), title="❌ ONNX Runtime installation is broken",
+                            border_style="red"))
 
 
 def _print_readiness(is_jetson, power_probe):
@@ -692,6 +709,17 @@ def compare(
         stage_table.add_row(stage, f"{d['before_ms']:.3f}", f"{d['after_ms']:.3f}", change)
     console.print(stage_table)
 
+    from .periodic import tradeoff, tradeoff_sentence
+    t = tradeoff(before, after)
+    if t:
+        pinned = any(d["field"] in ("cpu_clocks_locked", "gpu_clocks_locked")
+                     for d in env["differences"])
+        sentence = tradeoff_sentence(t, "pinning the clocks" if pinned else "this change")
+        if sentence:
+            console.print(Panel(sentence + ("\nBoth sides of the decision: faster inference "
+                                            "and the power the board no longer saves while "
+                                            "idle." if pinned else ""),
+                                title="Trade-off (periodic runs)", border_style="cyan"))
     from .compare.stats import within_run_ci
     cis = [within_run_ci(r.get("latency_series_ms"), "p99") for r in (before, after)]
     if all(cis):
@@ -806,6 +834,23 @@ def validate(
     max_power_w: float = typer.Option(None, "--max-power-w", help="Max mean board power (W)."),
     max_energy_mj: float = typer.Option(None, "--max-energy-mj",
                                         help="Max energy per iteration (mJ)."),
+    max_output_error: float = typer.Option(None, "--max-output-error", help="Max |output "
+                                           "error| vs the reference backend (sweep results)."),
+    min_decision_agreement: float = typer.Option(None, "--min-decision-agreement",
+                                                 help="Min fraction of decisions equal to the "
+                                                      "reference backend, e.g. 1.0."),
+    max_temp_c: float = typer.Option(None, "--max-temp-c", help="Max peak temperature (C)."),
+    max_latency_drift_pct: float = typer.Option(None, "--max-latency-drift-pct",
+                                                help="Max p50 change first->last window "
+                                                     "(soak results)."),
+    max_mem_growth_mb_per_h: float = typer.Option(None, "--max-mem-growth-mb-per-h",
+                                                  help="Max process memory growth (soak)."),
+    max_throttled_windows: int = typer.Option(None, "--max-throttled-windows",
+                                              help="Max windows with thermal throttling "
+                                                   "(soak), e.g. 0."),
+    max_energy_per_period_mj: float = typer.Option(None, "--max-energy-per-period-mj",
+                                                   help="Max energy per inference period, idle "
+                                                        "included (periodic results)."),
 ):
     """Check a run against requirements: PASS / FAIL / INCONCLUSIVE, with evidence.
 
@@ -815,7 +860,13 @@ def validate(
     data = _load_result_or_exit(path)
     reqs = {"p50_ms": p50_ms, "p95_ms": p95_ms, "p99_ms": p99_ms, "p99_9_ms": p99_9_ms,
             "max_latency_ms": max_latency_ms, "max_miss_ratio": max_miss_ratio,
-            "min_fps": min_fps, "max_power_w": max_power_w, "max_energy_mj": max_energy_mj}
+            "min_fps": min_fps, "max_power_w": max_power_w, "max_energy_mj": max_energy_mj,
+            "max_output_error": max_output_error,
+            "min_decision_agreement": min_decision_agreement, "max_temp_c": max_temp_c,
+            "max_latency_drift_pct": max_latency_drift_pct,
+            "max_mem_growth_mb_per_h": max_mem_growth_mb_per_h,
+            "max_throttled_windows": max_throttled_windows,
+            "max_energy_per_period_mj": max_energy_per_period_mj}
     try:
         verdict = run_validate(data, reqs)
     except ValueError as e:
@@ -890,6 +941,7 @@ def version():
 
 # v0.2 command groups register themselves on `app` (kept in separate modules).
 from . import cli_observe  # noqa: E402,F401
+from . import cli_insights  # noqa: E402,F401
 
 
 if __name__ == "__main__":

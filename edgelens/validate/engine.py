@@ -32,7 +32,11 @@ _LATENCY = {"p50_ms": ("p50", 0.50), "p95_ms": ("p95", 0.95), "p99_ms": ("p99", 
             "p99_9_ms": ("p99_9", 0.999)}
 
 REQUIREMENT_KEYS = ("p50_ms", "p95_ms", "p99_ms", "p99_9_ms", "max_latency_ms",
-                    "max_miss_ratio", "min_fps", "max_power_w", "max_energy_mj")
+                    "max_miss_ratio", "min_fps", "max_power_w", "max_energy_mj",
+                    # v0.2 Layer 2
+                    "max_output_error", "min_decision_agreement", "max_temp_c",
+                    "max_latency_drift_pct", "max_mem_growth_mb_per_h",
+                    "max_throttled_windows", "max_energy_per_period_mj")
 
 
 def _row(key, label, limit, measured, unit, status, reason=None, direction="max"):
@@ -102,6 +106,72 @@ def _check(result, key, limit):
         measured = (en["power_w_mean"] if key == "max_power_w"
                     else round(en["energy_per_iteration_j"] * 1000.0, 3))
         return _row(key, label, limit, measured, unit, _compare(measured, limit, "max"))
+
+    if key in ("max_output_error", "min_decision_agreement"):
+        eq = result.get("equivalence")
+        if not eq:
+            return _row(key, "Output equivalence", limit, None,
+                        "abs" if key == "max_output_error" else "", NOT_MEASURED,
+                        "no output comparison in this run; use a per-backend file from "
+                        "`edgelens sweep`", direction="max" if key.startswith("max") else "min")
+        if key == "max_output_error":
+            return _row(key, f"Max |output error| vs {eq.get('reference_backend')}", limit,
+                        eq["max_abs_error"], "abs", _compare(eq["max_abs_error"], limit, "max"))
+        agree = eq.get("decision_agreement")
+        if agree is None:
+            return _row(key, "Decision agreement", limit, None, "", NOT_MEASURED,
+                        "outputs have no decision (use --decision / --threshold)",
+                        direction="min")
+        row = _row(key, f"Decision agreement vs {eq.get('reference_backend')}", limit, agree,
+                   "", _compare(agree, limit, "min"), direction="min")
+        row["detail"] = (f"{eq.get('decisions_flipped', 0)} of {eq.get('decisions_compared', 0)} "
+                         f"decisions flipped ({eq.get('inputs')})")
+        return row
+
+    if key == "max_temp_c":
+        tel = result.get("telemetry") or {}
+        peak = (result.get("soak") or {}).get("max_temp_c") or tel.get("max_temp_c")
+        if not peak:
+            return _row(key, "Peak temperature", limit, None, "C", NOT_MEASURED,
+                        "no temperature readings in this run")
+        return _row(key, "Peak temperature", limit, peak, "C", _compare(peak, limit, "max"))
+
+    if key in ("max_latency_drift_pct", "max_mem_growth_mb_per_h", "max_throttled_windows"):
+        soak = result.get("soak")
+        label = {"max_latency_drift_pct": "Latency drift (p50, first vs last)",
+                 "max_mem_growth_mb_per_h": "Memory growth",
+                 "max_throttled_windows": "Windows with thermal throttling"}[key]
+        unit = {"max_latency_drift_pct": "%", "max_mem_growth_mb_per_h": "MB/h",
+                "max_throttled_windows": "windows"}[key]
+        if not soak:
+            return _row(key, label, limit, None, unit, NOT_MEASURED,
+                        "not a soak run; use `edgelens soak --duration 30m ...`")
+        if key == "max_latency_drift_pct":
+            d = (soak.get("drift") or {}).get("p50") or {}
+            if d.get("change_pct") is None:
+                return _row(key, label, limit, None, unit, NOT_MEASURED,
+                            "needs at least 4 windows with iterations")
+            measured = abs(d["change_pct"])
+        elif key == "max_mem_growth_mb_per_h":
+            m = (soak.get("memory") or {}).get("process_rss_mb_per_h")
+            if m is None:
+                return _row(key, label, limit, None, unit, NOT_MEASURED,
+                            "needs at least 4 windows")
+            measured = max(0.0, m)
+        else:
+            measured = (soak.get("throttling") or {}).get("throttled_windows", 0)
+        return _row(key, label, limit, round(measured, 3), unit,
+                    _compare(measured, limit, "max"))
+
+    if key == "max_energy_per_period_mj":
+        per = result.get("periodic") or {}
+        primary = per.get("primary") or {}
+        e = primary.get("energy_per_period_mj")
+        if e is None:
+            return _row(key, "Energy per period", limit, None, "mJ", NOT_MEASURED,
+                        "not a periodic run with a power sensor (`edgelens periodic`)")
+        return _row(key, f"Energy per period ({primary.get('period_ms')} ms)", limit, e, "mJ",
+                    _compare(e, limit, "max"))
 
     raise ValueError(f"Unknown requirement '{key}'. Known: {', '.join(REQUIREMENT_KEYS)}")
 

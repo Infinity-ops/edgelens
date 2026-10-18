@@ -51,7 +51,7 @@ def measure_idle_power(seconds, reader=None):
 def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=None,
                 period_ms=None, pace=False, telemetry=True, telemetry_interval_s=0.1,
                 idle_baseline_s=None, pipeline_source=None, attach_ids=True,
-                model_path=None):
+                model_path=None, max_seconds=None):
     if len(pipeline) == 0:
         raise ValueError("Pipeline has no stages.")
     if iterations < 1:
@@ -111,7 +111,10 @@ def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=No
     it_end = t_origin
     try:
         period_ns = int(period_ms * 1e6) if (pace and period_ms) else None
+        stop_at = t_origin + int(max_seconds * 1e9) if max_seconds else None
         for it in range(iterations):
+            if stop_at is not None and now_ns() >= stop_at:
+                break                      # time-boxed run (soak windows)
             value = next_input()
             if period_ns is not None:
                 release = t_origin + it * period_ns

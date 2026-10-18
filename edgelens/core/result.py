@@ -173,6 +173,10 @@ def build_result(*, pipeline_desc, stage_samples_ms, e2e_ms, mode, pipeline_sour
                                            energy_window_ns[1], len(e2e_ms), idle_power_w)
     if keep_series:
         result["latency_series_ms"] = [round(v, 4) for v in e2e_ms[:MAX_TRACE_EVENTS]]
+        if service_ms is not e2e_ms:
+            # paced: the pipeline's own work per iteration (latency minus the
+            # wait for the release time / OS wake-up)
+            result["service_series_ms"] = [round(v, 4) for v in service_ms[:MAX_TRACE_EVENTS]]
     if pack is not None:
         result["pack_metrics"] = pack.metrics(result)
     if extra:
