@@ -76,7 +76,7 @@ still stops when two onnxruntime packages are installed over each other.
 cd ~/edgelens && git checkout v0.2-dev
 git am /path/to/0015-*.patch /path/to/0016-*.patch /path/to/0017-*.patch   # on top of 0012-0014
 git am /path/to/0019-*.patch /path/to/0020-*.patch                         # Layer 3 (after 0018)
-git am /path/to/0021-*.patch                                                # Nano GPU check fix
+git am /path/to/0021-*.patch /path/to/0022-*.patch                         # Nano fixes
 source ~/edgelens-venv/bin/activate
 
 # Jetson: NO [onnx] extra (keeps the Jetson onnxruntime-gpu wheel)
@@ -163,7 +163,7 @@ Each run writes `edgelens_validation_<board>_<date>/SUMMARY.txt` and a
 | T2 one clock | results say CLOCK_MONOTONIC; telemetry samples carry `t_mono_ns` |
 | T3 selftest | no FAIL |
 | T4 A/A | the same setup twice: no change beyond 2% (A and B interleaved) |
-| T4 A/B (sudo) | unpinned -> `jetson_clocks`: IMPROVED on p99 |
+| T4 A/B (sudo) | free -> `jetson_clocks`: IMPROVED on p99. The script unpins first (even if the board starts pinned), and the gate checks that the saved runs really alternate between free and pinned clocks |
 | T5 schema | the v0.1.0 file loads in diagnose / validate / compare without a crash |
 | S1 markers | C++ 300 and Python 200 iterations, 0 lost; import-log parses 300 lines |
 | S2 watch | process table + board power; a deliberate leak detected; markers picked up |

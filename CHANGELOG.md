@@ -73,6 +73,17 @@
   "CUDA/cuDNN libraries missing".
 - The validation script's preflight no longer prints its output twice.
 
+### Fixed — from the third Jetson Nano run
+- Validation with sudo on a board that was already pinned measured "unpinned"
+  runs with pinned clocks (`jetson_clocks --store` saves the current state, so
+  `--restore` pinned again): T4 A/B reported NO DETECTABLE CHANGE and the I1
+  trade-off compared pinned with pinned. The script now unpins explicitly
+  (re-applying the nvpmodel mode, falling back to the cpufreq / devfreq
+  minimums), checks the state from sysfs after every change, restores the
+  board's starting state on exit, and the A/B and trade-off gates fail unless
+  the saved results really differ in clock state. The physical E1 clock test
+  now runs in both directions.
+
 ### Fixed — from the first Jetson Nano run
 - A broken onnxruntime (two packages installed over each other) crashed every
   command with "Bus error": the CUDA provider check now runs in a child

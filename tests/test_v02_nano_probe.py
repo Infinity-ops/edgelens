@@ -258,3 +258,66 @@ def test_validation_preflight_stops_only_for_a_broken_install(tmp_path, rc, stop
                          env=dict(os.environ, PATH=f"{shim}:{os.environ['PATH']}"))
     assert ("CONTINUED" not in res.stdout) == stops, res.stdout
     assert line in (out / "SUMMARY.txt").read_text() + res.stdout
+
+
+# ---------------------------------------------------------------- clocks in the validation script
+
+def _clock_harness(tmp_path, body, nvpmodel_unpins=True, start="pinned"):
+    """The script's clock helpers against fake sudo / nvpmodel / jetson_clocks and a
+    fake clock state (third Nano run: the board started pinned)."""
+    import os
+    import subprocess
+    import sys
+    text = (Path(__file__).resolve().parents[1] / "scripts" / "validate_on_jetson.sh").read_text()
+    helpers = text[text.index("STEP_TIMEOUT="):text.index("gate() {")]
+    clocks = text[text.index("# ---- clock state"):text.index('# expect "<allowed exit codes>"')]
+    state = tmp_path / "state"
+    state.write_text(start)
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    real_py = sys.executable
+
+    def tool(name, script):
+        (shim / name).write_text("#!/bin/sh\n" + script)
+        (shim / name).chmod(0o755)
+    tool("sudo", '"$@"\n')
+    tool("jetson_clocks", f"echo pinned > {state}\n")
+    tool("nvpmodel", "if [ \"$1\" = -q ]; then echo 'NV Power Mode: MAXN'; echo 0; else "
+         + (f"echo free > {state}; " if nvpmodel_unpins else "") + "fi\n")
+    tool("python3", f'case "$*" in *detect_clock_locking*) cat {state};; '
+                    f'*) exec {real_py} "$@";; esac\n')
+    h = tmp_path / "h.sh"
+    out = tmp_path / "o"
+    h.write_text(f"set -u\nOUT={out}\nmkdir -p $OUT\n: > $OUT/SUMMARY.txt\n"
+                 f"EDGELENS_VALIDATE_SUDO=1\n{helpers}\n{clocks}\n{body}\n")
+    res = subprocess.run(["bash", str(h)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         universal_newlines=True,
+                         env=dict(os.environ, PATH=f"{shim}:{os.environ['PATH']}"))
+    return res, state.read_text().strip()
+
+
+def test_ab_starts_from_free_clocks_even_on_a_pinned_board(tmp_path):
+    res, end = _clock_harness(tmp_path, 'echo start=$CLOCKS_AT_START\n'
+                              'clocks_unpin && echo now=$(clocks_state)\n'
+                              'clocks_pin && echo now=$(clocks_state)\n'
+                              'clocks_unpin && echo now=$(clocks_state)\n')
+    assert "start=pinned" in res.stdout, res.stdout
+    assert res.stdout.count("now=free") == 2 and "now=pinned" in res.stdout
+    assert end == "pinned"                 # restored to how the board started
+
+
+def test_unpin_failure_is_reported_not_silently_measured_pinned(tmp_path):
+    res, end = _clock_harness(tmp_path, 'clocks_unpin && echo UNPINNED || echo COULD-NOT\n',
+                              nvpmodel_unpins=False)
+    assert "COULD-NOT" in res.stdout and "UNPINNED" not in res.stdout
+
+
+def test_ab_gate_checks_the_runs_really_differ(tmp_path):
+    import json
+    for name, locked in (("u.r1", False), ("p.r1", True), ("bad.r1", True)):
+        (tmp_path / f"{name}.json").write_text(json.dumps(
+            {"environment": {"cpu_clocks_locked": locked, "gpu_clocks_locked": locked}}))
+    body = (f'both_states "{tmp_path}/u.r*.json" "{tmp_path}/p.r*.json" && echo DIFFER\n'
+            f'both_states "{tmp_path}/bad.r*.json" "{tmp_path}/p.r*.json" || echo SAME\n')
+    res, _ = _clock_harness(tmp_path, body)
+    assert "DIFFER" in res.stdout and "SAME" in res.stdout, res.stdout

@@ -56,6 +56,50 @@ gate() {  # gate "<feature>" "<done-when>" <command...>
 }
 skip() { echo "SKIP  $1 — $2" >>"$OUT/SUMMARY.txt"; log "skip: $1 ($2)"; }
 py() { python3 - "$@"; }
+# ---- clock state (sudo runs). `jetson_clocks --store` saves the CURRENT state:
+# on a board that is already pinned, "--restore" pins again, and every
+# "unpinned" run is really pinned (found on the Nano: A/B gave NO CHANGE).
+clocks_state() {   # pinned | free | mixed | unknown — read from sysfs, no root needed
+  python3 -c "from edgelens.core.identity import detect_clock_locking as d; c,g=d(); print('unknown' if c is None or g is None else 'pinned' if c and g else 'free' if not c and not g else 'mixed')"
+}
+# shellcheck disable=SC2024  # the log is the user's file: no sudo for the redirect
+clocks_pin() { sudo jetson_clocks >>"$OUT/steps.log" 2>&1; [ "$(clocks_state)" = pinned ]; }
+clocks_unpin() {   # back to the power mode's own DVFS limits
+  local mode; mode=$(nvpmodel -q 2>/dev/null | grep -E '^[0-9]+$' | tail -1)
+  # shellcheck disable=SC2024
+  [ -n "$mode" ] && sudo nvpmodel -m "$mode" >>"$OUT/steps.log" 2>&1
+  [ "$(clocks_state)" = free ] && return 0
+  # nvpmodel kept them pinned: lower bounds back to the hardware minimum
+  for f in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_min_freq; do
+    sudo sh -c "cat '${f%scaling_min_freq}cpuinfo_min_freq' > '$f'" 2>>"$OUT/steps.log"
+  done
+  for d in /sys/devices/gpu.0/devfreq/* /sys/devices/platform/*gpu*/devfreq/* /sys/devices/platform/bus@0/*gpu*/devfreq/*; do
+    [ -f "$d/available_frequencies" ] || continue
+    sudo sh -c "tr ' ' '\n' < '$d/available_frequencies' | grep -v '^$' | sort -n | head -1 > '$d/min_freq'" 2>>"$OUT/steps.log"
+  done
+  [ "$(clocks_state)" = free ]
+}
+clocks_restore() { case "$CLOCKS_AT_START" in pinned) clocks_pin ;; free) clocks_unpin ;; esac; }
+CLOCKS_AT_START=""
+if [ "${EDGELENS_VALIDATE_SUDO:-0}" = "1" ]; then
+  CLOCKS_AT_START=$(clocks_state)
+  trap clocks_restore EXIT
+fi
+# both_states <unpinned.json> <pinned.json>: the two runs really differ in clocks
+both_states() {
+  python3 - "$@" <<'EOF'
+import glob, json, sys
+def states(pattern):
+    out = set()
+    for f in sorted(glob.glob(pattern)):
+        e = json.load(open(f)).get("environment") or {}
+        out.add((e.get("cpu_clocks_locked"), e.get("gpu_clocks_locked")))
+    return out
+a, b = states(sys.argv[1]), states(sys.argv[2])
+print("clock state (cpu, gpu locked) — unpinned runs:", a, "pinned runs:", b)
+sys.exit(0 if a == {(False, False)} and b == {(True, True)} else 1)
+EOF
+}
 # expect "<allowed exit codes>" cmd...: the exit code must be one of the allowed
 # ones AND the output must not contain a Python traceback (a crash exits 1 too).
 expect() {
@@ -177,16 +221,19 @@ print(r["verdict"], row.get("change_pct"), row.get("min_detectable_change_pct"))
 # 5% of the time by design, and from residual drift).
 sys.exit(0 if r["verdict"] == NO_CHANGE or abs(row.get("change_pct") or 0) < 2.0 else 1)
 EOF
-if [ "${EDGELENS_VALIDATE_SUDO:-0}" = "1" ]; then
-  sudo jetson_clocks --store "$OUT/clocks_before.conf"
+if [ "${EDGELENS_VALIDATE_SUDO:-0}" = "1" ] && clocks_unpin; then
+  log "clocks at start: $CLOCKS_AT_START; A/B from free clocks"
   for i in $(seq -w 1 "$REPEATS"); do          # interleaved: unpinned, pinned, unpinned, ...
-    sudo jetson_clocks --restore "$OUT/clocks_before.conf"
+    clocks_unpin
     run edgelens benchmark --model tests/fixtures/small_cnn.onnx --provider TensorrtExecutionProvider --iterations 300 --save "$OUT/unpinned.r$i.json"
-    sudo jetson_clocks
+    clocks_pin
     run edgelens benchmark --model tests/fixtures/small_cnn.onnx --provider TensorrtExecutionProvider --iterations 300 --save "$OUT/pinned.r$i.json"
   done
-  sudo jetson_clocks --restore "$OUT/clocks_before.conf"
+  clocks_restore
   run edgelens compare "$OUT/unpinned.r*.json" "$OUT/pinned.r*.json"
+  if ! both_states "$OUT/unpinned.r*.json" "$OUT/pinned.r*.json" >>"$OUT/steps.log" 2>&1; then
+    echo "FAIL  T4 A/B — the runs did not alternate between free and pinned clocks (see steps.log)" >>"$OUT/SUMMARY.txt"
+  else
   py "$OUT" <<'EOF' && echo "PASS  T4 A/B — jetson_clocks gives IMPROVED on p99" >>"$OUT/SUMMARY.txt" || echo "FAIL  T4 A/B — expected IMPROVED (see steps.log)" >>"$OUT/SUMMARY.txt"
 import glob, json, sys
 from edgelens.compare.stats import compare_groups, IMPROVED
@@ -196,6 +243,9 @@ r = compare_groups(load(d + "/unpinned.r*.json"), load(d + "/pinned.r*.json"))
 print(r["verdict"], r["metrics"][r["primary_metric"]].get("change_pct"))
 sys.exit(0 if r["verdict"] == IMPROVED else 1)
 EOF
+  fi
+elif [ "${EDGELENS_VALIDATE_SUDO:-0}" = "1" ]; then
+  skip "T4 A/B" "could not unpin the clocks (nvpmodel / sysfs); reboot so the board starts unpinned"
 else
   skip "T4 A/B" "set EDGELENS_VALIDATE_SUDO=1 to run the jetson_clocks before/after"
 fi
@@ -294,16 +344,21 @@ run edgelens periodic --model "$LSTM" --provider CPUExecutionProvider --period-m
 # best provider that actually LOADS here (TensorRT > CUDA > CPU), named in the summary
 TRTP=$(python3 -c "from edgelens.benchmark.onnx_pipeline import usable_providers as u; p=u(); print(next((x for x in ('TensorrtExecutionProvider','CUDAExecutionProvider') if x in p), 'CPUExecutionProvider'))")
 log "periodic provider: $TRTP"
+if [ "${EDGELENS_VALIDATE_SUDO:-0}" = "1" ]; then clocks_unpin || log "!! could not unpin clocks"; fi
 gate "I1 periodic 1 Hz ($TRTP)" "latency + energy per period at 1 Hz, duty-cycle check" \
   edgelens periodic --model "$LSTM" --provider "$TRTP" --period-ms 1000 --iterations "$PI" --save "$OUT/periodic_unpinned.json"
 if [ "${EDGELENS_VALIDATE_SUDO:-0}" = "1" ]; then
-  sudo jetson_clocks --store "$OUT/clocks_periodic.conf"
-  sudo jetson_clocks
+  clocks_pin
   run edgelens periodic --model "$LSTM" --provider "$TRTP" --period-ms 1000 --iterations "$PI" --save "$OUT/periodic_pinned.json"
-  sudo jetson_clocks --restore "$OUT/clocks_periodic.conf"
+  clocks_restore
   run edgelens compare "$OUT/periodic_unpinned.json" "$OUT/periodic_pinned.json"
-  grep -q "Trade-off" "$OUT/steps.log" && echo "PASS  I1 trade-off — pinned vs unpinned at 1 Hz: latency AND energy per period" >>"$OUT/SUMMARY.txt" \
-    || echo "FAIL  I1 trade-off — no trade-off line (see steps.log)" >>"$OUT/SUMMARY.txt"
+  if ! both_states "$OUT/periodic_unpinned.json" "$OUT/periodic_pinned.json" >>"$OUT/steps.log" 2>&1; then
+    echo "FAIL  I1 trade-off — the two runs did not differ in clock state (see steps.log)" >>"$OUT/SUMMARY.txt"
+  elif tail -n 60 "$OUT/steps.log" | grep -q "Trade-off"; then
+    echo "PASS  I1 trade-off — free vs pinned clocks at 1 Hz: latency AND energy per period" >>"$OUT/SUMMARY.txt"
+  else
+    echo "FAIL  I1 trade-off — no trade-off line (see steps.log)" >>"$OUT/SUMMARY.txt"
+  fi
 else
   skip "I1 trade-off" "set EDGELENS_VALIDATE_SUDO=1 for the pinned/unpinned pair"
 fi
@@ -442,15 +497,20 @@ if [ ! -f "$OUT/e1_provider.json" ] && grep -q "VIOLATED: ran on CPUExecutionPro
   echo "PASS  E1 violated: provider — stopped BEFORE the run, evidence says why" >>"$OUT/SUMMARY.txt"
 else E1_OK=0; echo "FAIL  E1 violated: provider (see steps.log)" >>"$OUT/SUMMARY.txt"; fi
 
-# clocks, physically (sudo): pin them, while the contract assumes this board's unpinned state
-clocks_free() { python3 -c "import json,sys; a=json.load(open(sys.argv[1]))['assumes']; sys.exit(0 if a.get('clocks_pinned', {}).get('value') is False else 1)" "$1"; }
-if [ "${EDGELENS_VALIDATE_SUDO:-0}" = "1" ] && clocks_free "$CON/short.json"; then
-  sudo jetson_clocks --store "$OUT/clocks_e1.conf"; sudo jetson_clocks
-  expect "2" edgelens contract run "$CON/short.json" --pipeline examples/ci-jetson/pipeline.py --run-anyway --save "$OUT/e1_pinned.json"
-  sudo jetson_clocks --restore "$OUT/clocks_e1.conf"
-  e1_gate "clocks pinned by jetson_clocks" "$OUT/e1_pinned.validation.json" clocks_pinned
+# clocks, physically (sudo): put the board in the OTHER state than the contract assumes
+assumed_pinned() { python3 -c "import json,sys; a=json.load(open(sys.argv[1]))['assumes']; v=a.get('clocks_pinned', {}).get('value'); print('none' if v is None else 'pinned' if v else 'free')" "$1"; }
+if [ "${EDGELENS_VALIDATE_SUDO:-0}" = "1" ] && [ "$(assumed_pinned "$CON/short.json")" != none ]; then
+  if [ "$(assumed_pinned "$CON/short.json")" = pinned ]; then FLIP=clocks_unpin; WHAT="unpinned (nvpmodel)"; else FLIP=clocks_pin; WHAT="pinned by jetson_clocks"; fi
+  if $FLIP; then
+    expect "2" edgelens contract run "$CON/short.json" --pipeline examples/ci-jetson/pipeline.py --run-anyway --save "$OUT/e1_clocks.json"
+    clocks_restore
+    e1_gate "clocks $WHAT" "$OUT/e1_clocks.validation.json" clocks_pinned
+  else
+    clocks_restore; E1_OK=0
+    echo "FAIL  E1 violated: clocks (physical) — could not change the clock state" >>"$OUT/SUMMARY.txt"
+  fi
 else
-  skip "E1 violated: clocks (physical)" "EDGELENS_VALIDATE_SUDO=1 with unpinned clocks"
+  skip "E1 violated: clocks (physical)" "EDGELENS_VALIDATE_SUDO=1 on a board whose clock state is readable"
 fi
 if [ "$E1_OK" = 1 ]; then echo "PASS  E1 — each assumption, deliberately violated, gives INCONCLUSIVE" >>"$OUT/SUMMARY.txt"
 else echo "FAIL  E1 — at least one violated assumption did not give INCONCLUSIVE" >>"$OUT/SUMMARY.txt"; fi
