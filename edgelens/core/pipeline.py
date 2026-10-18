@@ -37,7 +37,8 @@ ROLES = ("input", "preprocess", "transfer", "inference", "postprocess", "decisio
 _ROLE_PREFIXES = (
     ("transfer", ("h2d", "d2h", "copy", "upload", "download", "transfer", "memcpy")),
     ("inference", ("infer", "model", "predict", "forward", "engine", "prefill",
-                   "generate", "classif", "detect")),
+                   "generate", "classif", "detect", "lstm", "gru", "rnn", "cnn", "dnn",
+                   "eddl", "tensorrt", "trt", "onnx", "anomal", "ensemble")),
     ("input", ("capture", "acquire", "acquisition", "grab", "read", "sensor", "camera",
                "ingest", "receive", "source")),
     ("postprocess", ("post", "nms", "argmax", "detoken", "track")),

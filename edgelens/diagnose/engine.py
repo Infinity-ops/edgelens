@@ -401,8 +401,10 @@ def diagnose(benchmark_result):
         f["evidence_strength"] = strength_label(f["rank_score"])
     findings.sort(key=lambda f: f["rank_score"], reverse=True)
 
+    from ..core import integrity
     return {
         "schema_version": SCHEMA_VERSION,
+        "measurement_integrity": integrity.check(benchmark_result),
         "data_quality": {
             "iterations": benchmark_result.get("iterations"),
             "telemetry_sample_count": sample_count,

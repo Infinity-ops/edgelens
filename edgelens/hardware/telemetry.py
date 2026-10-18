@@ -33,6 +33,7 @@ import time
 import psutil
 
 from . import power as power_mod
+from ..core.clock import now_ns as _now_ns
 
 # GPU load nodes, per-mille (0..1000). Paths differ across Jetson modules
 # and JetPack releases; the first readable one wins.
@@ -248,6 +249,10 @@ def snapshot(stream=None, power_reader=None):
         "rails_w": rails or {},
         "power_w": power_mod.total_power_w(rails) if rails else None,
         "timestamp": time.time(),
+        # The one clock (CLOCK_MONOTONIC) — what markers and stage timings use.
+        # Series and energy integration use this, never wall time, which
+        # jumps when chrony/NTP corrects it.
+        "mono_ns": _now_ns(),
     }
     # Wall time includes waiting for the GIL while the workload thread runs,
     # so it overstates the sampler's real cost; CPU time is what it steals.
@@ -278,6 +283,7 @@ class TelemetryRecorder:
         self._power = power_mod.PowerReader() if use_power else None
         self._power_denied = self._power.denied if self._power is not None else []
         self.start_time = None
+        self.start_mono_ns = None
 
     def start(self):
         self._samples = []
@@ -296,6 +302,7 @@ class TelemetryRecorder:
             self._stream.start()
         psutil.cpu_percent(interval=None)   # reset the CPU% window to "now"
         self.start_time = time.time()
+        self.start_mono_ns = _now_ns()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -322,13 +329,19 @@ class TelemetryRecorder:
         return self.summarize()
 
     def series(self):
-        """Compact timestamped series, t_s relative to the recording start."""
-        t0 = self.start_time or (self._samples[0]["timestamp"] if self._samples else 0)
+        """Compact timestamped series. t_s is relative to the recording start
+        on CLOCK_MONOTONIC; t_mono_ns is the absolute monotonic timestamp, so
+        samples line up with marker spans from other processes."""
+        t0 = self.start_mono_ns
+        if t0 is None:
+            t0 = self._samples[0].get("mono_ns", 0) if self._samples else 0
         out = []
         for s in self._samples:
             temps = s.get("temps_c") or {}
+            mono = s.get("mono_ns")
             out.append({
-                "t_s": round(s["timestamp"] - t0, 4),
+                "t_s": round((mono - t0) / 1e9, 4) if mono is not None else None,
+                "t_mono_ns": mono,
                 "cpu_percent": s.get("cpu_percent"),
                 "gpu_percent": s.get("gpu_percent"),
                 "mem_percent": s.get("mem_percent"),
@@ -369,11 +382,17 @@ class TelemetryRecorder:
             temps_peak[k] = peak(vs)
 
         n = len(self._samples)
-        span = (self._samples[-1]["timestamp"] - self._samples[0]["timestamp"]) if n > 1 else 0.0
+        first, last = self._samples[0], self._samples[-1]
+        if n > 1 and first.get("mono_ns") is not None and last.get("mono_ns") is not None:
+            span = (last["mono_ns"] - first["mono_ns"]) / 1e9
+        else:
+            span = (last["timestamp"] - first["timestamp"]) if n > 1 else 0.0
         single = n == 1 and self._samples[0].get("_single_fallback")
 
         summary = {
             "sample_count": 0 if single else n,
+            "clock": "CLOCK_MONOTONIC",
+            "origin_mono_ns": self.start_mono_ns,
             # Core count lets diagnosis tell "one core saturated" from "all busy".
             "cpu_count": psutil.cpu_count(logical=True),
             # Wall-clock span from real timestamps, NOT n * interval_s.

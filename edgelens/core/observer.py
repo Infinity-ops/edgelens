@@ -26,12 +26,12 @@ logical stream.
 
 import json
 import threading
-import time
 from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
 
 from ..hardware import telemetry as telemetry_mod
+from .clock import now_ns
 from ..packs import get_pack
 from .harness import measure_idle_power
 from .pipeline import infer_role
@@ -75,7 +75,7 @@ class Tracer:
         if self._telemetry:
             self._recorder = telemetry_mod.TelemetryRecorder(interval_s=self._telemetry_interval_s)
             self._recorder.start()
-        self._origin = time.perf_counter_ns()
+        self._origin = now_ns()
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -93,7 +93,7 @@ class Tracer:
             telemetry_summary=tel, telemetry_series=series, events=self._events,
             events_truncated=self._truncated, deadline_ms=self.deadline_ms,
             period_ms=self.period_ms, paced=False, idle_power_w=self._idle_w,
-            pack=self.pack,
+            pack=self.pack, trace_origin_ns=self._origin,
         )
         from .identity import attach_identity
         attach_identity(self.result)
@@ -123,26 +123,27 @@ class Tracer:
             self._iter += 1
             self._iter_seen = set()
             self._explicit_depth += 1
-        t0 = time.perf_counter_ns()
+        t0 = now_ns()
         try:
             yield
         finally:
-            t1 = time.perf_counter_ns()
+            t1 = now_ns()
             with self._lock:
                 self._explicit_depth -= 1
                 self._e2e.append((t1 - t0) / 1e6)
 
     @contextmanager
     def stage(self, name):
-        t0 = time.perf_counter_ns()
+        t0 = now_ns()
         try:
             yield
         finally:
-            t1 = time.perf_counter_ns()
+            t1 = now_ns()
             self.record(name, t0, t1)
 
     def record(self, name, start_ns, end_ns):
-        """Record a stage interval measured elsewhere (perf_counter_ns clock)."""
+        """Record a stage interval measured elsewhere, in CLOCK_MONOTONIC ns
+        (edgelens.core.clock.now_ns(); clock_gettime(CLOCK_MONOTONIC) in C)."""
         with self._lock:
             if self._explicit_depth == 0:
                 if self._iter < 0 or name in self._iter_seen:

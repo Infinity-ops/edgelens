@@ -20,6 +20,7 @@ Honesty rules, same as the rest of EdgeLens:
   to "why?" comes with the answer to "does it work?".
 """
 
+from ..core import integrity
 from ..core.schema import SCHEMA_VERSION
 from ..core.stats import min_samples_for
 
@@ -141,6 +142,15 @@ def validate(result, requirements):
             raise ValueError(f"Unknown requirement '{k}'. Known: {', '.join(REQUIREMENT_KEYS)}")
 
     rows = [_check(result, k, reqs[k]) for k in REQUIREMENT_KEYS if k in reqs]
+    # Measurement integrity (v0.2): an issue that blocks a PASS (e.g. lost
+    # marker events) turns that PASS into NOT_MEASURED. A FAIL stays a FAIL:
+    # what was observed really happened.
+    issues = integrity.check(result)
+    for row in rows:
+        block = integrity.blocking(issues, row["requirement"])
+        if block and row["status"] == PASS:
+            row["status"] = NOT_MEASURED
+            row["reason"] = f"{block['code']}: {block['detail']}"
     statuses = {r["status"] for r in rows}
 
     notes = []
@@ -162,6 +172,7 @@ def validate(result, requirements):
         "requirements": reqs,
         "checks": rows,
         "notes": notes,
+        "integrity": issues,
         "run": {
             "pipeline_source": result.get("pipeline_source"),
             "iterations": result.get("iterations"),

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "edgelens"
-version = "0.1.0"
+version = "0.2.0.dev0"
 description = "Measure, diagnose and validate AI pipelines on edge devices: stage-level latency, tail and deadlines, power and energy, evidence-based diagnosis. Deep NVIDIA Jetson support."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -53,6 +53,10 @@ dependencies = [
 dev = ["pytest>=7.0.0"]
 onnx = ["onnxruntime>=1.16.0"]
 fixtures = ["onnx>=1.14.0"]
+# Reading ROS 1 .bag and ROS 2 .db3/.mcap files without a ROS install
+# (examples/rosbag_to_windows.py). Live ROS 2 (`edgelens ros2`) needs rclpy
+# from your ROS 2 installation instead; it is not on PyPI.
+rosbag = ["rosbags>=0.9.20"]
 
 [project.urls]
 Homepage = "https://github.com/Infinity-ops/edgelens"
@@ -65,3 +69,7 @@ edgelens = "edgelens.cli:app"
 
 [tool.setuptools.packages.find]
 include = ["edgelens*"]
+
+[tool.setuptools.package-data]
+# The C/C++ marker header ships in the wheel:  -I$(edgelens include)
+edgelens = ["include/*.h"]

@@ -6,7 +6,7 @@
 # fails. Distro / conda-forge packagers build and test from the sdist.
 include LICENSE README.md CHANGELOG.md CITATION.cff CONTRIBUTING.md ROADMAP.md
 include requirements.txt
-recursive-include tests *.py *.onnx
+recursive-include tests *.py *.onnx *.json
 recursive-include examples *.py
 recursive-include scripts *.sh
 prune docs

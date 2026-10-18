@@ -157,7 +157,10 @@ def summarize_power(samples, unavailable_reason=None, fix_command=None):
     """Mean/peak power and energy over a list of telemetry samples that
     carry "timestamp", "power_w" and "rails_w". Energy is the trapezoidal
     integral of power over the sampled interval."""
-    pts = [(s["timestamp"], s["power_w"]) for s in samples if s.get("power_w") is not None]
+    # Integrate on the monotonic clock: a chrony step of the wall clock in the
+    # middle of a run would otherwise add or remove energy.
+    pts = [((s["mono_ns"] / 1e9) if s.get("mono_ns") is not None else s["timestamp"],
+            s["power_w"]) for s in samples if s.get("power_w") is not None]
     if not pts:
         out = {"available": False}
         if unavailable_reason:

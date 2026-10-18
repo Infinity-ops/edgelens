@@ -39,3 +39,5 @@ observer.html
 *.cast
 
 ROADMAP.md
+# the frozen v0.1.0 result: schema-stability test fixture (docs/schema.md)
+!tests/fixtures/result_v0_1_0.json

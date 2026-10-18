@@ -18,6 +18,7 @@ import time
 
 from ..hardware import power as power_mod
 from ..hardware import telemetry as telemetry_mod
+from .clock import now_ns
 from .result import MAX_TRACE_EVENTS, build_result
 
 
@@ -106,31 +107,32 @@ def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=No
     if telemetry:
         recorder = telemetry_mod.TelemetryRecorder(interval_s=telemetry_interval_s)
         recorder.start()
-    t_origin = time.perf_counter_ns()
+    t_origin = now_ns()
+    it_end = t_origin
     try:
         period_ns = int(period_ms * 1e6) if (pace and period_ms) else None
         for it in range(iterations):
             value = next_input()
             if period_ns is not None:
                 release = t_origin + it * period_ns
-                now = time.perf_counter_ns()
+                now = now_ns()
                 if now < release:
                     time.sleep((release - now) / 1e9)
                 it_start = release           # response time counts from release
             else:
-                it_start = time.perf_counter_ns()
-            work_start = time.perf_counter_ns()  # service time excludes queueing
+                it_start = now_ns()
+            work_start = now_ns()  # service time excludes queueing
             for st in stages:
-                t0 = time.perf_counter_ns()
+                t0 = now_ns()
                 value = _call(st, value, it)
-                t1 = time.perf_counter_ns()
+                t1 = now_ns()
                 samples[st.name].append((t1 - t0) / 1e6)
                 if len(events) < MAX_TRACE_EVENTS:
                     events.append({"iter": it, "stage": st.name, "start_ns": t0 - t_origin,
                                    "dur_ns": t1 - t0, "thread": tid})
                 else:
                     truncated = True
-            it_end = time.perf_counter_ns()
+            it_end = now_ns()
             e2e.append((it_end - it_start) / 1e6)
             service.append((it_end - work_start) / 1e6)
     finally:
@@ -144,6 +146,8 @@ def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=No
         telemetry_summary=tel_summary, telemetry_series=series, events=events,
         events_truncated=truncated, deadline_ms=deadline_ms, period_ms=period_ms,
         paced=bool(pace and period_ms), idle_power_w=idle_w, pack=pack,
+        trace_origin_ns=t_origin,
+        throughput_window_ms=((it_end - t_origin) / 1e6 if (pace and period_ms and e2e) else None),
     )
     if attach_ids:
         from .identity import attach_identity
