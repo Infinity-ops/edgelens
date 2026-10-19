@@ -261,8 +261,15 @@ def doctor(
     no_cache: bool = typer.Option(False, "--no-cache", "--recheck",
                                   help="Ignore the cached GPU-provider check and test again "
                                        "(after reinstalling onnxruntime / a driver)."),
+    forget_storage_errors: bool = typer.Option(False, "--forget-storage-errors",
+                                               help="Forget storage errors remembered for "
+                                                    "the SD card / disk (after testing it)."),
 ):
     """Environment + hardware fingerprint."""
+    if forget_storage_errors:
+        from .hardware.storage import forget
+        forget()
+        console.print("[dim]Forgot the remembered storage errors.[/dim]")
     if no_cache:
         from .benchmark.onnx_pipeline import forget_cuda_probe
         forget_cuda_probe()

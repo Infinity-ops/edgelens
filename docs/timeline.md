@@ -39,7 +39,9 @@ python3 lstm_service.py
 edgelens export dem2.json --perfetto dem2.perfetto.json
 ```
 
-Files from different boots or machines cannot share a monotonic clock: each is
+Files recorded on the same boot but hours apart keep their real distance; the
+export says how far apart they are, and `--align start` puts them side by
+side. Files from different boots or machines cannot share a monotonic clock: each is
 then aligned at its own start and the export says so (`--align start` forces
 this, `--align mono` forces real time).
 

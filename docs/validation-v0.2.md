@@ -41,6 +41,22 @@ the CUDA check runs in a child process, `edgelens doctor` shows a red
 **"ONNX Runtime installation is broken"** panel with the exact fix, and the
 validation script stops at its preflight step instead of running for hours.
 
+### 0a. Laptop: "2 onnxruntime packages are installed over each other"
+
+Same problem as on the Jetson, on a laptop: `onnxruntime` and `onnxruntime-gpu`
+in one environment. Keep ONE:
+
+```bash
+python3 -m pip uninstall -y onnxruntime onnxruntime-gpu
+python3 -m pip uninstall -y onnxruntime onnxruntime-gpu   # twice
+python3 -m pip install onnxruntime        # CPU; or onnxruntime-gpu if CUDA + cuDNN are installed
+```
+
+If `pip install -e .` reports "Successfully installed edgelens-0.1.0" for a
+0.2 checkout, a stale `edgelens.egg-info` from v0.1 is in the folder:
+`rm -rf edgelens.egg-info && python3 -m pip install -e ".[dev,onnx,rosbag]"`,
+then `python3 -c "import edgelens; print(edgelens.__version__)"` must say 0.2.
+
 ### 0b. Still "SIGBUS" with only ONE onnxruntime installed (second Nano run)
 
 Check in this order:
@@ -63,6 +79,11 @@ Check in this order:
 edgelens doctor --no-cache     # test again now; expect: no red panel, Storage and GPU rows ✓
 ```
 
+Storage errors are remembered per SD card (its CID), so a reboot — which empties
+the kernel log — does not make a failing card look healthy; a new card starts
+clean. `edgelens doctor --forget-storage-errors` clears them after you have
+tested the card.
+
 The check caches only a success, keyed by the Python interpreter, the
 onnxruntime install, the CUDA driver file and the boot: a reinstall, a JetPack
 upgrade, a reflash or a reboot all test again, and a failure is re-tested on
@@ -77,6 +98,7 @@ cd ~/edgelens && git checkout v0.2-dev
 git am /path/to/0015-*.patch /path/to/0016-*.patch /path/to/0017-*.patch   # on top of 0012-0014
 git am /path/to/0019-*.patch /path/to/0020-*.patch                         # Layer 3 (after 0018)
 git am /path/to/0021-*.patch /path/to/0022-*.patch /path/to/0023-*.patch   # Nano fixes
+git am /path/to/0024-*.patch                                                # fourth Nano run
 source ~/edgelens-venv/bin/activate
 
 # Jetson: NO [onnx] extra (keeps the Jetson onnxruntime-gpu wheel)
@@ -163,7 +185,8 @@ Each run writes `edgelens_validation_<board>_<date>/SUMMARY.txt` and a
 | T2 one clock | results say CLOCK_MONOTONIC; telemetry samples carry `t_mono_ns` |
 | T3 selftest | no FAIL |
 | T4 A/A | the same setup twice: no change beyond 2% (A and B interleaved) |
-| T4 A/B (sudo) | free -> `jetson_clocks`: IMPROVED on p99. The script unpins first (even if the board starts pinned), and the gate checks that the saved runs really alternate between free and pinned clocks |
+| T4 A/B known change | +1 ms injected into a 2 ms stage, interleaved repeats: REGRESSED, change near +50% (the statistics find a real change) |
+| T4 clocks (sudo, INFO) | free vs `jetson_clocks` for TensorRT back to back — a **measurement**, not a gate: under sustained load DVFS ramps up anyway (Nano: no change), so whether pinning helps is a property of the workload. The 1 Hz case is the I1 trade-off. Still FAIL if the runs did not really alternate clock states |
 | T5 schema | the v0.1.0 file loads in diagnose / validate / compare without a crash |
 | S1 markers | C++ 300 and Python 200 iterations, 0 lost; import-log parses 300 lines |
 | S2 watch | process table + board power; a deliberate leak detected; markers picked up |
@@ -175,7 +198,7 @@ Each run writes `edgelens_validation_<board>_<date>/SUMMARY.txt` and a
 | **I2 leak** | the deliberate leak demo is detected by `soak` |
 | **I2 soak** | 30-minute DEM2 run at 1 Hz: drift, throttling, memory, JSONL streamed |
 | I2 soak requirements | the soak result passes `validate`: p99 <= 3 s, no misses, drift <= 10%, memory growth <= 20 MB/h, no throttled window |
-| **E1 contract PASS** | a contract generated from this board's state: every assumption holds, every guarantee met (needs a quiet board) |
+| **E1 contract PASS** | a contract generated from this board's state: every assumption holds, every guarantee met. The script first waits up to 2 min (`EDGELENS_QUIET_WAIT_S`) for background load < 20%; if the board stays busy it names the busiest processes (INFO line) and allows that load + 15% |
 | **E1 violated: …** | board, power mode, clocks (contract-side and, with sudo, physically pinned), start temperature, unpaced input, background load (CPU hogs), provider: each gives INCONCLUSIVE with exactly that assumption VIOLATED |
 | **E1** | all of the above |
 | **E2 export / tracks** | two applications recorded at once + the DEM2 run: spans of several processes, iterations, CPU/GPU load, temperature, power |

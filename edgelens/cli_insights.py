@@ -233,7 +233,9 @@ def print_periodic(result):
             rs = f"[bold red]{rs}[/bold red]"
         t.add_row(f"every {r['period_ms']:g} ms ({hz:g} Hz)", _ms(r["p50_ms"]), _ms(r["p99_ms"]),
                   rs, _ms(r.get("wake_delay_p50_ms")), _fmt(r.get("energy_per_period_mj"), 4, " mJ"),
-                  _fmt(r.get("dynamic_energy_per_inference_mj"), 3, " mJ"),
+                  (f"< {r['dynamic_energy_below_mj']:g} mJ (below sensor resolution)"
+                   if r.get("dynamic_energy_below_mj") is not None
+                   else _fmt(r.get("dynamic_energy_per_inference_mj"), 3, " mJ")),
                   _fmt(r.get("power_w_mean"), 3, " W"))
     console.print(t)
     console.print("[dim]p50 / p99 = the pipeline's own work per inference (service time). OS "

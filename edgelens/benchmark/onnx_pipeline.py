@@ -214,6 +214,10 @@ def _run_isolated_probe():
         step = _last_step(out.stdout)
         from ..hardware.storage import kernel_storage_errors
         st = kernel_storage_errors() if sig == "SIGBUS" else {"count": 0}
+        if not st.get("count") and st.get("remembered"):
+            r = st["remembered"][0]
+            st = dict(st, count=r["count"], source=f"an earlier boot, {r['device']}",
+                      lines=[r.get("last_line") or ""])
         if st.get("count"):
             return (False, f"{_STEP_TEXT.get(step, step)} crashed Python ({sig}), and the "
                            f"kernel log ({st['source']}) shows {st['count']} storage error(s), "

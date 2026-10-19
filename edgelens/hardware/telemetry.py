@@ -396,6 +396,7 @@ class TelemetryRecorder:
         self._own = {}                 # pid -> [first cpu s, last cpu s]
         self._sys0 = None
         self._bg = None
+        self._procs0 = None
 
     def track_pid(self, pid):
         """Count this process (the application being measured) as part of
@@ -426,10 +427,27 @@ class TelemetryRecorder:
         total -= getattr(t, "guest", 0.0) + getattr(t, "guest_nice", 0.0)
         return total - idle
 
+    @staticmethod
+    def _all_cpu():
+        """{pid: (name, cpu seconds)} of every process — twice per run, not per sample."""
+        out = {}
+        for p in psutil.process_iter(["name", "cpu_times"]):
+            try:
+                t = p.info["cpu_times"]
+                if t is not None:
+                    out[p.pid] = (p.info["name"] or "?", t.user + t.system)
+            except (psutil.Error, OSError, KeyError):
+                continue
+        return out
+
     def _bg_start(self):
         self._own = {pid: [None, None] for pid in self._own}
         for pid in list(self._own) + [os.getpid()]:
             self._touch(pid, first=True)
+        try:
+            self._procs0 = self._all_cpu()
+        except Exception:
+            self._procs0 = None
         self._sys0 = (self._sys_busy(), _now_ns())
 
     def _bg_stop(self):
@@ -446,12 +464,33 @@ class TelemetryRecorder:
         own = sum((b - a) for a, b in self._own.values() if a is not None and b is not None)
         ncpu = psutil.cpu_count(logical=True) or 1
         other = max(0.0, sys_busy - own)
+        top = []
+        if getattr(self, "_procs0", None):
+            # who the background load is (fourth Nano run: ~0.9 cores of "other
+            # processes" and no way to tell what they were)
+            try:
+                now = self._all_cpu()
+                mine = set(self._own) | {os.getpid()}       # same rule as the total
+                for pid, (name, cpu) in now.items():
+                    if pid in mine:
+                        continue
+                    before = self._procs0.get(pid)
+                    used = cpu - (before[1] if before and before[0] == name else 0.0)
+                    if before is None and used > elapsed:      # older than the window
+                        continue
+                    if used / elapsed >= 0.01:
+                        top.append({"pid": pid, "name": name, "cores": round(used / elapsed, 3)})
+                top.sort(key=lambda r: -r["cores"])
+                top = top[:5]
+            except Exception:
+                top = []
         return {
             "cpu_pct": round(other / (elapsed * ncpu) * 100.0, 2),     # % of the whole machine
             "cores": round(other / elapsed, 3),
             "workload_cores": round(own / elapsed, 3),
             "interval_s": round(elapsed, 2),
             "workload_pids": sorted(self._own),
+            "top": top,                    # the biggest other processes in this window
             "method": ("system CPU time minus EdgeLens and the measured application "
                        "(psutil cpu_times; children included once they exit)"),
         }

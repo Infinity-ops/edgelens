@@ -73,6 +73,23 @@ def _first_abs(result):
     return min(cands) if cands else None
 
 
+GAP_NOTE_NS = 60 * 10 ** 9
+
+
+def _length_ns(result):
+    """Rough length of a result on the timeline (spans or telemetry)."""
+    ends = []
+    o = _origin(result)
+    ev = (result.get("trace") or {}).get("events") or []
+    if o is not None and ev:
+        ends.append(max(o + e["start_ns"] + e["dur_ns"] for e in ev))
+    ser = [s["t_mono_ns"] for s in result.get("telemetry_series") or [] if s.get("t_mono_ns")]
+    if ser:
+        ends.append(max(ser))
+    first = _first_abs(result)
+    return (max(ends) - first) if ends and first is not None else 0
+
+
 def _alignment(items, align):
     """'mono' when every file comes from the same boot, else 'start'."""
     if align in ("mono", "start"):
@@ -102,6 +119,13 @@ def build(items, align="auto"):
                             "telemetry series (summary-only results, e.g. a soak, keep "
                             "per-window data in their .jsonl instead).")
     base_all = min(f for f in firsts if f is not None)
+    if mode == "mono" and len(items) > 1:
+        spans = sorted((f, f + _length_ns(r)) for f, (_, r) in zip(firsts, items)
+                       if f is not None)
+        gap = max((b0 - a1 for (_, a1), (b0, _) in zip(spans, spans[1:])), default=0)
+        if gap > GAP_NOTE_NS:
+            notes.append(f"the files were recorded {gap / 1e9:.0f} s apart (same boot, real "
+                         f"time kept); --align start puts them side by side")
 
     ev = []
     sort_index = [0]

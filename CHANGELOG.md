@@ -73,6 +73,25 @@
   "CUDA/cuDNN libraries missing".
 - The validation script's preflight no longer prints its output twice.
 
+### Fixed — from the fourth Jetson Nano run (and a laptop run)
+- `sweep`: the `dla` backend on a board without a DLA engine (Nano) returned
+  GPU numbers as a "DLA" result — TensorRT falls back silently. It is now
+  "unavailable" with the reason.
+- `periodic`: extra energy per inference below the sensor's resolution was
+  printed as 0.0 mJ; it is now a bound ("< 28 mJ").
+- Background load names the busiest other processes (`telemetry.background.top`),
+  and a violated `max_background_cpu_pct` assumption lists them.
+- Storage errors are remembered per SD card (CID) across reboots; a new card
+  starts clean; `doctor --forget-storage-errors`.
+- Contracts: `min_duration` used the telemetry sampler's span (up to one
+  interval short: a 1.0 s run counted as 0.9 s); it now uses the run window.
+- `export --perfetto` notes when same-boot files are far apart (`--align start`).
+- Validation script: T4 gates a known, injected change (the statistics), and
+  reports free-vs-pinned clocks as a measurement (INFO), since pinning does not
+  help every workload; E1 waits for a quiet board, names what is busy, adapts the
+  contracts' background limit, and skips (not fails) checks whose reference run
+  could not run; E2 takes board counters from any EdgeLens run.
+
 ### Fixed — from the third Jetson Nano run
 - Validation with sudo on a board that was already pinned measured "unpinned"
   runs with pinned clocks (`jetson_clocks --store` saves the current state, so

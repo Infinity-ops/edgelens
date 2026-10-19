@@ -103,6 +103,15 @@ def assess(is_jetson, power_mode, cpu_pinned, gpu_pinned, providers, power_probe
             checks.append(_check("Storage", WARN,
                                  f"{storage['count']} I/O error(s) in the kernel log",
                                  STORAGE_ADVICE + " Last: " + storage["lines"][-1][:160]))
+        elif storage.get("remembered"):
+            r = storage["remembered"][0]
+            checks.append(_check(
+                "Storage", WARN,
+                f"this card ({r['device']}) logged {r['count']} I/O error(s) "
+                f"(last {r.get('last_seen', '?').replace('T', ' ')}, an earlier boot)",
+                STORAGE_ADVICE + " A reboot clears the kernel log, not the card. Last: "
+                + (r.get("last_line") or "")[:160],
+                fix="edgelens doctor --forget-storage-errors   # only after testing or replacing the card"))
         elif storage.get("readable"):
             checks.append(_check("Storage", OK, "no I/O errors in the kernel log since boot"))
         elif is_jetson:

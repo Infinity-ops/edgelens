@@ -36,6 +36,9 @@ from .core.stats import latency_stats
 PENALTY_RATIO = 1.5          # paced p50 / back-to-back p50 that counts as a penalty
 PENALTY_MIN_MS = 0.5         # ... and at least this many ms more
 MIN_PERIODS_FOR_ENERGY = 30
+# mean power above the idle baseline that a board power sensor can resolve
+IDLE_RESOLUTION_W = 0.02        # INA3221: a few mW per LSB, plus baseline drift
+IDLE_RESOLUTION_REL = 0.01      # 1% of idle power
 
 _RAILGATE_GLOBS = ("/sys/devices/gpu.0/railgate_enable",
                    "/sys/devices/platform/gpu.0/railgate_enable",
@@ -66,11 +69,16 @@ def _energy_row(result, period_ms, idle_w, n):
     pw = en.get("power_w_mean")
     row = {"power_w_mean": pw,
            "energy_per_period_mj": round(pw * period_ms, 3) if pw is not None else None}
-    if idle_w is not None and en.get("power_w_mean") is not None:
-        row["dynamic_energy_per_inference_mj"] = round(
-            max(0.0, en["power_w_mean"] - idle_w) * period_ms, 3)     # W * ms = mJ
-    else:
-        row["dynamic_energy_per_inference_mj"] = None
+    row["dynamic_energy_per_inference_mj"] = None
+    if idle_w is not None and pw is not None:
+        # Fourth Nano run: at 1 Hz a 9 ms inference raised mean power by less
+        # than the sensor resolves, and "max(0, P - idle)" printed a confident
+        # 0.0 mJ. Below the resolution there is no measurement, only a bound.
+        floor_w = max(IDLE_RESOLUTION_W, IDLE_RESOLUTION_REL * idle_w)
+        if pw - idle_w < floor_w:
+            row["dynamic_energy_below_mj"] = round(floor_w * period_ms, 1)
+        else:
+            row["dynamic_energy_per_inference_mj"] = round((pw - idle_w) * period_ms, 3)
     if n < MIN_PERIODS_FOR_ENERGY or en.get("low_confidence"):
         row["energy_low_confidence"] = (
             f"only {n} periods: energy per period/inference is an average over the run and "

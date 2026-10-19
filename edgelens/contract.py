@@ -211,10 +211,15 @@ def run_duration_s(result):
     soak = result.get("soak") or {}
     if soak.get("duration_s"):
         return float(soak["duration_s"])
+    # The run's own window (first release / first span to the last end) when it
+    # was measured: the telemetry span is shorter by up to one sampling interval
+    # (a 1.0 s run measured as 0.9 s on a laptop failed min_duration: 1s).
+    fps, n = result.get("fps"), result.get("iterations")
+    if fps and n and str(result.get("throughput_basis", "")).startswith("observed"):
+        return n / fps
     tel = result.get("telemetry") or {}
     if tel.get("duration_s"):
         return float(tel["duration_s"])
-    fps, n = result.get("fps"), result.get("iterations")
     if fps and n:
         return n / fps
     return None
@@ -392,8 +397,11 @@ def check_assumption(result, key, spec):
                         "the result has no background-load measurement (made with an older "
                         "EdgeLens, or imported)", spec=spec)
         ok = v <= want
+        top = ", ".join(f"{t['name']} (pid {t['pid']}) {t['cores']:g} cores"
+                        for t in (bg.get("top") or [])[:3])
         return _row(key, label, f"<= {want:g}%", v, HOLDS if ok else VIOLATED,
-                    None if ok else f"other processes used {v:g}% of the CPU "
+                    None if ok else (f"busiest: {top}; " if top else "") +
+                    f"other processes used {v:g}% of the CPU "
                     f"{'(' + format(bg['cores'], 'g') + ' cores)' if bg.get('cores') is not None else ''}; stop them (desktop: sudo systemctl "
                     f"isolate multi-user.target)", "measured", spec)
 

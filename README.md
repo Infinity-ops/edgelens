@@ -106,7 +106,7 @@ From source (contributors):
 git clone https://github.com/Infinity-ops/edgelens
 cd edgelens
 pip install -e ".[dev,onnx]"       # on Jetson: pip install -e ".[dev]"
-python -m pytest -q
+python3 -m pytest -q
 ```
 
 | Extra      | Adds                       | When you need it                          |

@@ -63,6 +63,19 @@ def default_trt_cache():
     return os.path.join(base, "edgelens", "trt_engines")
 
 
+def dla_engines():
+    """Number of DLA engines on this board (0 on a Jetson Nano, a TX2, a PC)."""
+    import glob
+    found = set()
+    for pattern in ("/dev/nvhost-ctrl-nvdla*", "/dev/nvhost-nvdla*",
+                    "/sys/devices/platform/*nvdla*", "/sys/devices/platform/bus@0/*nvdla*",
+                    "/sys/devices/platform/host1x/*nvdla*"):
+        for p in glob.glob(pattern):
+            name = p.rsplit("/", 1)[-1]
+            found.add(name.replace("nvhost-ctrl-", "").replace("nvhost-", ""))
+    return len(found)
+
+
 def backend_spec(name, trt_cache=None):
     if name not in BACKENDS:
         raise ValueError(f"Unknown backend '{name}'. Known: {', '.join(BACKENDS)}")
@@ -272,6 +285,13 @@ def run_sweep(model, backends, reference="cpu", iterations=300, input_shapes=Non
     for name in order:
         provider, opts = backend_spec(name, trt_cache)
         row = {"backend": name, "provider": provider, "options": opts}
+        if opts.get("trt_dla_enable") and not dla_engines():
+            # TensorRT falls back to the GPU without a word when there is no DLA
+            # (fourth Nano run: a "dla" row with GPU numbers) — that is not a DLA result
+            row.update(status="unavailable", reason="this board has no DLA engine; TensorRT "
+                       "would silently run the model on the GPU (DLA: Xavier / Orin)")
+            rows.append(row)
+            continue
         say(f"{name}: creating session (TensorRT may build an engine; this can take minutes "
             f"the first time)...")
         t0 = time.perf_counter()
