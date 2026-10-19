@@ -65,6 +65,9 @@ ASSUMPTIONS = {
     "max_background_cpu_pct": ("Background CPU load (other processes)", ()),
     "provider": ("ONNX Runtime execution provider", ()),
     "model_sha256": ("Model file (SHA-256)", ()),
+    # v0.2 Layer 4 (edgelens replay / detect)
+    "min_in_envelope_pct": ("Inputs inside the training envelope", ()),
+    "stream_spec_sha256": ("Stream spec (SHA-256)", ()),
 }
 
 GUARANTEE_EXTRA = {"max_miss_ratio": ("deadline_ms",)}
@@ -154,14 +157,16 @@ def parse(doc, source="<contract>"):
         v = s["value"]
         if k == "clocks_pinned" and not isinstance(v, bool):
             raise ContractError("assumes.clocks_pinned: expected true or false.")
-        if k in ("input_period_ms", "max_start_temp_c", "max_temp_c", "max_background_cpu_pct"):
+        if k in ("input_period_ms", "max_start_temp_c", "max_temp_c", "max_background_cpu_pct",
+                 "min_in_envelope_pct"):
             s["value"] = _number(f"assumes.{k}", v)
             if k == "input_period_ms" and s["value"] <= 0:
                 raise ContractError("assumes.input_period_ms must be > 0.")
         if k == "input_period_ms":
             s["tolerance_pct"] = _number("assumes.input_period_ms.tolerance_pct",
                                          s.get("tolerance_pct", DEFAULT_PERIOD_TOLERANCE_PCT))
-        if k in ("board", "provider", "model_sha256") and not isinstance(v, str):
+        if k in ("board", "provider", "model_sha256", "stream_spec_sha256") and \
+                not isinstance(v, str):
             raise ContractError(f"assumes.{k}: expected text, got {v!r}.")
         if k == "power_mode" and not isinstance(v, (str, int)):
             raise ContractError("assumes.power_mode: expected a mode name (MAXN) or id (0).")
@@ -264,7 +269,8 @@ def _declared_period(result):
     return p, "unpaced"
 
 
-UNITS = {"max_start_temp_c": "C", "max_temp_c": "C", "max_background_cpu_pct": "%"}
+UNITS = {"max_start_temp_c": "C", "max_temp_c": "C", "max_background_cpu_pct": "%",
+         "min_in_envelope_pct": "%"}
 
 
 def _row(key, label, expected, measured, status, reason=None, basis=None, spec=None):
@@ -429,6 +435,31 @@ def check_assumption(result, key, spec):
         return _row(key, label, want, got, HOLDS if ok else VIOLATED,
                     None if ok else "a different model file was measured", "measured", spec)
 
+    if key == "min_in_envelope_pct":
+        dec = result.get("decision") or {}
+        v = dec.get("in_envelope_pct")
+        if dec.get("aggregate"):
+            v = dec["aggregate"].get("in_envelope_pct_min")
+        if v is None:
+            return _row(key, label, f">= {want:g}%", None, NOT_VERIFIED,
+                        "no envelope check in this run: fit one (edgelens envelope fit) and "
+                        "name it in the stream spec", spec=spec)
+        ok = v >= want
+        return _row(key, label, f">= {want:g}%", v, HOLDS if ok else VIOLATED,
+                    None if ok else "the model answered about inputs outside its training "
+                    "data: `edgelens envelope check` names them", "measured", spec)
+
+    if key == "stream_spec_sha256":
+        got = ((result.get("stream") or {}).get("spec") or {}).get("sha256")
+        if not got:
+            return _row(key, label, want, None, NOT_VERIFIED,
+                        "not an `edgelens replay` result", spec=spec)
+        a, b = got.lower(), want.lower()
+        ok = a.startswith(b) or b.startswith(a)
+        return _row(key, label, want, got, HOLDS if ok else VIOLATED,
+                    None if ok else "the pipeline was replayed with another spec "
+                    "(scaler, window or post-processing changed)", "measured", spec)
+
     raise ContractError(f"Unknown assumption '{key}'.")      # pragma: no cover
 
 
@@ -526,13 +557,8 @@ def evaluate(result, contract, contract_sha256=None):
         out.pop("diagnosis", None)
         out.pop("limiting_stage", None)
     elif "diagnosis" not in out:
-        from .diagnose.engine import diagnose
-        from .validate.engine import _limiting_stage
-        d = diagnose(result)
-        out["limiting_stage"] = _limiting_stage(result)
-        out["diagnosis"] = {"primary": {k: d["primary"].get(k) for k in
-                                        ("type", "evidence_strength", "detail",
-                                         "recommendation", "evidence")}}
+        from .validate.engine import failure_diagnosis
+        out["limiting_stage"], out["diagnosis"] = failure_diagnosis(result, out["checks"])
     return out
 
 
@@ -681,4 +707,7 @@ guarantees:
   # max_latency_drift_pct: {limit: 10, id: R-06}         # edgelens soak
   # max_mem_growth_mb_per_h: {limit: 20, id: R-07}       # edgelens soak
   # max_throttled_windows: {limit: 0, id: R-08}          # edgelens soak
+  # max_time_to_detect_s: {limit: 120, id: R-09}         # edgelens replay / detect
+  # max_false_alarms_per_h: {limit: 0.5, id: R-10}       # edgelens replay / detect
+  # max_missed_events: {limit: 0, id: R-11}              # edgelens replay / detect
 """

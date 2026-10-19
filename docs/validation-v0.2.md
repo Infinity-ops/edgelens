@@ -271,6 +271,27 @@ source /opt/ros/humble/setup.bash
 edgelens ros2 latency --from /imu --to /prediction --same-machine --duration 60
 ```
 
+## 7c. Layer 4 by hand (windowed time-series pipelines, docs/stream.md)
+
+```bash
+cp -r ~/edgelens/examples/stream ~/toy && cd ~/toy
+python3 make_toy_robot.py toy_data
+edgelens stream fit-scaler toy.stream.yaml toy_data/train/*.csv --out scaler.json
+edgelens envelope fit toy.stream.yaml toy_data/train/*.csv --out envelope.json
+echo "envelope: {file: envelope.json}" >> toy.stream.yaml
+edgelens replay toy.stream.yaml toy_data/test/*.csv --save-dir runs                 # compute per step
+edgelens replay toy.stream.yaml toy_data/test/run_101.csv --features recompute --save rc.json
+edgelens replay toy.stream.yaml toy_data/test/run_101.csv --speed 10 --save x10.json # paced, with telemetry
+edgelens detect runs/*.json --save detect.json --markdown detect.md
+edgelens perturb toy.stream.yaml toy_data/test/*.csv --faults faults.yaml --markdown rob.md
+edgelens export x10.json --perfetto x10.perfetto.json
+```
+
+Pass when: the board's `detect` table equals the laptop's (same time to detect
+per recording: decisions must not depend on the machine), `recompute` is
+slower than `incremental` per step, and the paced run has no deadline misses.
+Then run the same with your real model's spec and recordings.
+
 ## 8. Write the rows
 
 For each PASS, add a row to the v0.2 table in [jetson.md](jetson.md): board,

@@ -1,6 +1,47 @@
 # Changelog
 
-## Unreleased — 0.2.0.dev0 (Layers 0–3 of the v0.2 roadmap)
+## Unreleased — 0.2.0.dev0 (Layers 0–4 of the v0.2 roadmap)
+
+### Added — Layer 4: windowed time-series pipelines, from inference latency to decision latency
+- **Stream spec** (`edgelens stream init | check | fit-scaler`): one file
+  describes a windowed pipeline exactly as trained — columns and rate, the
+  scaler (scikit-learn Robust/Standard/MinMax, as JSON), block statistics
+  (min/std/max/mean/last/…; pandas `rolling` semantics, ddof=1), sequence
+  length and padding, the model (ONNX or a Python function), post-processing
+  (slew limit, rolling mean), the alarm rule and the deployed period. Unknown
+  keys are errors; a model whose input width doesn't match says why.
+- **`edgelens replay`**: recordings go through the pipeline one block at a
+  time inside the harness (`ingest → features → inference → postprocess →
+  decision`): per-stage timing, telemetry, deadline (the deployed period), a
+  decision series with ground truth, and "where decision time goes" (history,
+  warm-up, block wait, smoothing delay, slew floor). `--speed` paces at real
+  time or faster; `--features recompute` measures a direct port of batch
+  training code against the incremental path.
+- **`edgelens detect`**: time to detect (event → alarm, negative = early
+  warning), detection from onset, false alarms per healthy hour (episodes),
+  early alarms kept apart from false ones, missed events, RMSE — for the raw
+  output and after post-processing; `--thresholds` decision-latency curve;
+  `--mean-steps / --slew-per-step / --threshold` what-ifs recomputed without
+  re-running the model; `--save` (validate/contract input), `--markdown`.
+- **`edgelens envelope fit | check`** and a runtime guard per prediction
+  (valid / degraded / invalid / gap / warming_up); inputs constant in
+  training count as outside as soon as they move.
+- **`edgelens perturb`**: data faults (noise, bias, gain, stuck, dropout,
+  spike, gap, rate) swept over severity from a shareable fault file:
+  robustness curves of RMSE, time to detect, misses, false alarms and
+  envelope, and the breaking point.
+- **`edgelens parity`**: streaming vs batch features, against the training
+  code's own tensor (.npy / float32 .bin) and against another runtime's
+  outputs (decisions flipped); signatures for ddof, scaler/column order,
+  one-step shift and step-count bugs. Exit code = match.
+- Validate / contract keys `max_time_to_detect_s`, `max_false_alarms_per_h`,
+  `max_missed_events`, `max_rmse`; assumptions `min_in_envelope_pct`,
+  `stream_spec_sha256`. A FAIL of decision requirements is explained by a
+  decision finding, not a stage bottleneck.
+- Findings DECISION_LATENCY, CADENCE_MISMATCH, WARMUP_PADDING,
+  OUT_OF_ENVELOPE, DATA_GAPS, DEAD_INPUTS.
+- `examples/stream/` (toy robot generator, spec, stand-in model);
+  docs/stream.md.
 
 ### Added — Layer 3: evidence and workflow
 - **Assumption contracts (E1):** `validate --contract c.yaml` checks

@@ -36,7 +36,10 @@ REQUIREMENT_KEYS = ("p50_ms", "p95_ms", "p99_ms", "p99_9_ms", "max_latency_ms",
                     # v0.2 Layer 2
                     "max_output_error", "min_decision_agreement", "max_temp_c",
                     "max_latency_drift_pct", "max_mem_growth_mb_per_h",
-                    "max_throttled_windows", "max_energy_per_period_mj")
+                    "max_throttled_windows", "max_energy_per_period_mj",
+                    # v0.2 Layer 4: decisions in time (edgelens replay / detect)
+                    "max_time_to_detect_s", "max_false_alarms_per_h", "max_missed_events",
+                    "max_rmse")
 
 
 def _row(key, label, limit, measured, unit, status, reason=None, direction="max"):
@@ -173,7 +176,71 @@ def _check(result, key, limit):
         return _row(key, f"Energy per period ({primary.get('period_ms')} ms)", limit, e, "mJ",
                     _compare(e, limit, "max"))
 
+    if key in _DECISION:
+        return _check_decision(result, key, limit)
+
     raise ValueError(f"Unknown requirement '{key}'. Known: {', '.join(REQUIREMENT_KEYS)}")
+
+
+_DECISION = {"max_time_to_detect_s": ("Time to detect (event -> alarm)", "s"),
+             "max_false_alarms_per_h": ("False alarms per healthy hour", "/h"),
+             "max_missed_events": ("Events missed", "events"),
+             "max_rmse": ("Output error vs ground truth (RMSE)", "")}
+
+
+def _check_decision(result, key, limit):
+    """Decision metrics of a replay (one recording) or of `edgelens detect`
+    (aggregate over recordings: the worst time to detect)."""
+    label, unit = _DECISION[key]
+    unit = None if unit == "" else unit
+    dec = result.get("decision") or {}
+    agg = (dec.get("aggregate") or {}).get("output")
+    one = dec.get("output")
+    if not agg and not one:
+        return _row(key, label, limit, None, unit, NOT_MEASURED,
+                    "no decisions in this run: use `edgelens replay` with a spec that has a "
+                    "decision rule (and ground truth in the data)")
+    if key == "max_time_to_detect_s":
+        if agg:
+            ttd = (agg.get("time_to_detect_s") or {}).get("max")
+            missed, events = agg.get("missed") or 0, agg.get("events") or 0
+        else:
+            ttd, events = one.get("time_to_detect_s"), int(one.get("event_s") is not None)
+            missed = int(bool(one.get("missed")))
+        if missed:
+            return _row(key, label + " (worst)" if agg else label, limit, None, unit, FAIL,
+                        f"{missed} of {events} event(s) never raised the alarm")
+        if ttd is None:
+            return _row(key, label, limit, None, unit, NOT_MEASURED,
+                        "no event in the ground truth (or no ground truth in the data)")
+        return _row(key, label + (f" (worst of {events})" if agg else ""), limit, ttd, unit,
+                    _compare(ttd, limit, "max"))
+    if key == "max_false_alarms_per_h":
+        src = agg or one
+        v = src.get("false_alarms_per_h")
+        if v is None:
+            return _row(key, label, limit, None, unit, NOT_MEASURED,
+                        "needs ground truth with a healthy level (decision.healthy_level)")
+        row = _row(key, label, limit, v, unit, _compare(v, limit, "max"))
+        row["detail"] = (f"{src.get('false_alarms')} false alarm(s) in "
+                         f"{src.get('healthy_hours')} healthy hours")
+        return row
+    if key == "max_missed_events":
+        src = agg or one
+        if agg:
+            missed, events = agg.get("missed") or 0, agg.get("events") or 0
+        else:
+            missed, events = int(bool(one.get("missed"))), int(one.get("event_s") is not None)
+        if not events:
+            return _row(key, label, limit, None, unit, NOT_MEASURED, "no event in the data")
+        row = _row(key, label, limit, missed, unit, _compare(missed, limit, "max"))
+        row["detail"] = f"{missed} of {events} missed"
+        return row
+    v = (agg or {}).get("rmse_mean") if agg else one.get("rmse")
+    if v is None:
+        return _row(key, label, limit, None, unit, NOT_MEASURED, "no ground truth in the data")
+    return _row(key, label + (" (mean over recordings)" if agg else ""), limit, v, unit,
+                _compare(v, limit, "max"))
 
 
 def _limiting_stage(result):
@@ -255,16 +322,35 @@ def validate(result, requirements):
         },
     }
     if verdict == FAIL:
-        from ..diagnose.engine import diagnose
-        d = diagnose(result)
-        out["limiting_stage"] = _limiting_stage(result)
-        out["diagnosis"] = {
-            "primary": {k: d["primary"].get(k) for k in
-                        ("type", "evidence_strength", "detail", "recommendation", "evidence")},
-            "also_considered": [{"type": f["type"], "evidence_strength": f["evidence_strength"]}
-                                for f in d.get("secondary", [])],
-        }
+        out["limiting_stage"], out["diagnosis"] = failure_diagnosis(result, rows)
     return out
+
+
+# Findings that explain a failed DECISION requirement (time to detect, false
+# alarms, misses, accuracy): a stage bottleneck can't explain a 200 s alarm.
+DECISION_FINDINGS = ("DECISION_LATENCY", "OUT_OF_ENVELOPE", "CADENCE_MISMATCH", "DATA_GAPS",
+                     "WARMUP_PADDING", "DEAD_INPUTS")
+
+
+def failure_diagnosis(result, rows):
+    """(limiting stage, diagnosis) for a FAIL: the stage view when a timing
+    requirement failed, the decision view when only decision requirements did."""
+    from ..diagnose.engine import diagnose
+    d = diagnose(result)
+    failed = {r["requirement"] for r in rows if r["status"] == FAIL}
+    primary, others = d["primary"], d.get("secondary", [])
+    limiting = _limiting_stage(result)
+    if failed and failed <= set(_DECISION):
+        limiting = None
+        ranked = [f for t in DECISION_FINDINGS for f in d["all_findings"] if f["type"] == t]
+        if ranked:
+            primary, others = ranked[0], ranked[1:3]
+    return limiting, {
+        "primary": {k: primary.get(k) for k in
+                    ("type", "evidence_strength", "detail", "recommendation", "evidence")},
+        "also_considered": [{"type": f["type"], "evidence_strength": f["evidence_strength"]}
+                            for f in others],
+    }
 
 
 def exit_code(verdict):

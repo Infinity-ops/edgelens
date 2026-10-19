@@ -1,0 +1,23 @@
+# Data faults for the toy robot: edgelens perturb toy.stream.yaml toy_data/test/*.csv --faults faults.yaml
+seed: 1
+faults:
+  - name: vibration-noise
+    kind: noise
+    columns: [vib]
+    severity: [0.25, 0.5, 1, 2]
+  - name: vibration-sensor-stuck
+    kind: stuck
+    columns: [vib]
+    severity: [1]
+    start_s: 200
+  - name: steering-bias
+    kind: bias
+    columns: [steer]
+    severity: [1, 3]
+  - name: bus-dropout
+    kind: dropout
+    columns: ["*"]
+    severity: [0.2, 0.5]
+  - name: half-rate
+    kind: rate
+    severity: [0.5]

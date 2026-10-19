@@ -15,9 +15,10 @@ X merged readings of /imu, /odom and /cmd_vel and predicts the robot's
 state. Here X = 50 rows of the 100 Hz IMU timeline (0.5 s of history) and a
 new prediction every 100 rows (1 Hz).
 
-The model is a STAND-IN LSTM in NumPy with the right input shape, until
-SML's trained model exists. Replace `lstm` with the real one (ONNX Runtime,
-TensorRT or PyEDDL) and keep the rest.
+The model is a STAND-IN LSTM in NumPy (a bag-replay timing demo). For a real
+trained windowed model, describe its preprocessing in a stream spec and use
+`edgelens replay` / `edgelens detect` instead (docs/stream.md): that replays
+the exact training features and measures decisions against ground truth.
 
 Environment variables: DEM2_MERGED (default dem2_merged.npy), DEM2_WINDOW
 (rows, default 50), DEM2_HOP (rows, default 100), DEM2_RATE_HZ (base topic

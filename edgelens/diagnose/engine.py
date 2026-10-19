@@ -367,6 +367,8 @@ def diagnose(benchmark_result):
 
     from .insights import findings as layer2_findings
     findings.extend(layer2_findings(benchmark_result))
+    from ..stream.findings import findings as stream_findings
+    findings.extend(stream_findings(benchmark_result))
 
     if not findings:
         findings.append({

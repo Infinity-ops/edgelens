@@ -37,6 +37,7 @@ is a loop, and EdgeLens is built around it:
 | **Does my system meet its requirement?** | `validate --p99-ms 10 --max-miss-ratio 0.001 --max-energy-mj 60`: PASS / FAIL / INCONCLUSIVE per requirement, with the measured value | v0.2: contract files, quality and thermal requirements, validated on Jetson AGX Orin |
 | **If not, why?**                         | `validate` names the limiting stage and attaches the diagnosis; `diagnose` on its own gives the full evidence                         | v0.3: concurrent stages, queues, critical path                                       |
 | **What should I change?**                | each finding names the next experiment to run                                                                                         | v0.4: run the experiments for you, under your constraints                            |
+| **Does the system decide in time?**      | —                                                                                                                                     | v0.2: `replay` + `detect`: time from event to alarm, false alarms per hour, robustness to sensor faults (docs/stream.md) |
 | **Did the change actually help?**        | `compare`: before/after per stage; warns when the runs come from different environments (`--strict-env` fails instead)                | —                                                                                    |
 
 Measured fact → evidence → hypothesis → experiment → measured result.

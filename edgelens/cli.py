@@ -868,6 +868,16 @@ def validate(
     max_energy_per_period_mj: float = typer.Option(None, "--max-energy-per-period-mj",
                                                    help="Max energy per inference period, idle "
                                                         "included (periodic results)."),
+    max_time_to_detect_s: float = typer.Option(None, "--max-time-to-detect-s",
+                                               help="Max seconds from the event to the alarm "
+                                                    "(replay / detect results)."),
+    max_false_alarms_per_h: float = typer.Option(None, "--max-false-alarms-per-h",
+                                                 help="Max alarms per hour while the ground "
+                                                      "truth is healthy (replay / detect)."),
+    max_missed_events: int = typer.Option(None, "--max-missed-events",
+                                          help="Max events that never raised the alarm."),
+    max_rmse: float = typer.Option(None, "--max-rmse", help="Max output error vs ground "
+                                   "truth (replay / detect)."),
     contract: str = typer.Option(None, "--contract", help="Assumption contract (.yaml / "
                                  ".json): requirements AND the conditions they hold under. "
                                  "A violated assumption gives INCONCLUSIVE, never PASS. "
@@ -889,7 +899,9 @@ def validate(
         max_latency_drift_pct=max_latency_drift_pct,
         max_mem_growth_mb_per_h=max_mem_growth_mb_per_h,
         max_throttled_windows=max_throttled_windows,
-        max_energy_per_period_mj=max_energy_per_period_mj).items() if v is not None}
+        max_energy_per_period_mj=max_energy_per_period_mj,
+        max_time_to_detect_s=max_time_to_detect_s, max_false_alarms_per_h=max_false_alarms_per_h,
+        max_missed_events=max_missed_events, max_rmse=max_rmse).items() if v is not None}
     if contract:
         from .cli_evidence import validate_with_contract
         if flags:
@@ -906,7 +918,10 @@ def validate(
             "max_latency_drift_pct": max_latency_drift_pct,
             "max_mem_growth_mb_per_h": max_mem_growth_mb_per_h,
             "max_throttled_windows": max_throttled_windows,
-            "max_energy_per_period_mj": max_energy_per_period_mj}
+            "max_energy_per_period_mj": max_energy_per_period_mj,
+            "max_time_to_detect_s": max_time_to_detect_s,
+            "max_false_alarms_per_h": max_false_alarms_per_h,
+            "max_missed_events": max_missed_events, "max_rmse": max_rmse}
     try:
         verdict = run_validate(data, reqs)
     except ValueError as e:
@@ -921,7 +936,7 @@ def validate(
             return "—"
         if unit == "":
             return f"{v * 100:.3f}%"
-        return f"{v:g} {unit}"
+        return f"{v:g} {unit}" if unit else f"{v:g}"
 
     style = {"PASS": "green", "FAIL": "red", "NOT_MEASURED": "yellow"}
     table = Table(title="Requirements")
@@ -988,6 +1003,7 @@ def version():
 from . import cli_observe  # noqa: E402,F401
 from . import cli_insights  # noqa: E402,F401
 from . import cli_evidence  # noqa: E402,F401
+from . import cli_stream  # noqa: E402,F401
 
 
 if __name__ == "__main__":

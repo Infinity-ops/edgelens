@@ -67,6 +67,8 @@ the README only once their row below is filled from a real board, using
 | E1 contracts | PASS on a quiet board; each assumption deliberately violated → INCONCLUSIVE | _pending_ | _pending_ |
 | E2 timeline | two applications + board power on one Perfetto timeline, opened in ui.perfetto.dev | _pending_ | _pending_ |
 | E3 CI | example repository: self-hosted runner blocks a pull request that breaks the contract | _pending_ | _pending_ |
+| L4 replay | windowed pipeline, incremental vs recompute features: per-stage ms per step; `--speed 1` deadline misses | _pending_ | _pending_ |
+| L4 detect / envelope / perturb / parity | identical decisions on the board as on the laptop (same time to detect, same outputs to 1e-4) | _pending_ | _pending_ |
 
 ## Real results on a Jetson Nano
 
