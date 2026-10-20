@@ -328,3 +328,17 @@ Jetson hardware — see docs/jetson.md for the rows still pending.
 - HTML report inserted stage names / paths / JSON unescaped.
 - `GPU_BOUND` was suppressed whenever any other finding existed.
 - `requirements.txt` was missing `numpy`.
+
+### Fixed — found on an AGX Orin 32GB, custom carrier, Yocto (OE4Tegra) rootfs
+
+- `doctor` said "Is Jetson: no" and missed CUDA and TensorRT on a Jetson whose
+  model string is the integrator's own and whose rootfs is not NVIDIA's
+  Ubuntu. Detection now also uses `/proc/device-tree/compatible`
+  (`nvidia,tegra*`) and `/sys/devices/soc0/family`; CUDA is found under
+  versioned `/usr/local/cuda-*/` without the `cuda` symlink, and on
+  runtime-only installs (no version.json, no nvcc) from `libcudart.so.X.Y.Z`
+  or the `/usr/local/cuda-X.Y` directory name; TensorRT under
+  `/usr/lib/libnvinfer.so.*` and `/usr/include/NvInferVersion.h`.
+- `doctor` shows the module and SoC from the part number
+  (e.g. `Jetson AGX Orin 32GB · tegra234`) and says why L4T is missing
+  instead of "not detected".
