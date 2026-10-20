@@ -280,8 +280,16 @@ def doctor(
     table.add_column(style="dim")
     table.add_column()
     table.add_row("Board", hw["model"])
+    if hw.get("module") or hw.get("soc"):
+        table.add_row("Module / SoC", " · ".join(x for x in (hw.get("module"), hw.get("soc")) if x))
     table.add_row("Is Jetson", "[green]yes[/green]" if hw["is_jetson"] else "[yellow]no[/yellow]")
-    table.add_row("L4T / JetPack", sw["jetpack_l4t"] or "[dim]not detected[/dim]")
+    if sw["jetpack_l4t"]:
+        l4t_cell = sw["jetpack_l4t"]
+    elif hw["is_jetson"]:
+        l4t_cell = "[dim]no /etc/nv_tegra_release (custom rootfs, e.g. Yocto/meta-tegra)[/dim]"
+    else:
+        l4t_cell = "[dim]not detected[/dim]"
+    table.add_row("L4T / JetPack", l4t_cell)
     table.add_row("CUDA", sw["cuda"] or "[dim]not detected[/dim]")
     table.add_row("TensorRT", _tensorrt_cell(sw))
     table.add_row("ORT providers", _ort_providers_cell(hw["is_jetson"]))

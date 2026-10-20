@@ -1,49 +1,7 @@
 # Changelog
 
-## Unreleased — 0.2.0.dev0 (Layers 0–4 of the v0.2 roadmap)
-
-### Added — Layer 4: windowed time-series pipelines, from inference latency to decision latency
-- **Stream spec** (`edgelens stream init | check | fit-scaler`): one file
-  describes a windowed pipeline exactly as trained — columns and rate, the
-  scaler (scikit-learn Robust/Standard/MinMax, as JSON), block statistics
-  (min/std/max/mean/last/…; pandas `rolling` semantics, ddof=1), sequence
-  length and padding, the model (ONNX or a Python function), post-processing
-  (slew limit, rolling mean), the alarm rule and the deployed period. Unknown
-  keys are errors; a model whose input width doesn't match says why.
-- **`edgelens replay`**: recordings go through the pipeline one block at a
-  time inside the harness (`ingest → features → inference → postprocess →
-  decision`): per-stage timing, telemetry, deadline (the deployed period), a
-  decision series with ground truth, and "where decision time goes" (history,
-  warm-up, block wait, smoothing delay, slew floor). `--speed` paces at real
-  time or faster; `--features recompute` measures a direct port of batch
-  training code against the incremental path.
-- **`edgelens detect`**: time to detect (event → alarm, negative = early
-  warning), detection from onset, false alarms per healthy hour (episodes),
-  early alarms kept apart from false ones, missed events, RMSE — for the raw
-  output and after post-processing; `--thresholds` decision-latency curve;
-  `--mean-steps / --slew-per-step / --threshold` what-ifs recomputed without
-  re-running the model; `--save` (validate/contract input), `--markdown`.
-- **`edgelens envelope fit | check`** and a runtime guard per prediction
-  (valid / degraded / invalid / gap / warming_up); inputs constant in
-  training count as outside as soon as they move.
-- **`edgelens perturb`**: data faults (noise, bias, gain, stuck, dropout,
-  spike, gap, rate) swept over severity from a shareable fault file:
-  robustness curves of RMSE, time to detect, misses, false alarms and
-  envelope, and the breaking point.
-- **`edgelens parity`**: streaming vs batch features, against the training
-  code's own tensor (.npy / float32 .bin) and against another runtime's
-  outputs (decisions flipped); signatures for ddof, scaler/column order,
-  one-step shift and step-count bugs. Exit code = match.
-- Validate / contract keys `max_time_to_detect_s`, `max_false_alarms_per_h`,
-  `max_missed_events`, `max_rmse`; assumptions `min_in_envelope_pct`,
-  `stream_spec_sha256`. A FAIL of decision requirements is explained by a
-  decision finding, not a stage bottleneck.
-- Findings DECISION_LATENCY, CADENCE_MISMATCH, WARMUP_PADDING,
-  OUT_OF_ENVELOPE, DATA_GAPS, DEAD_INPUTS.
-- `examples/stream/` (toy robot generator, spec, stand-in model);
-  docs/stream.md.
-
 ### Added — Layer 3: evidence and workflow
+
 - **Assumption contracts (E1):** `validate --contract c.yaml` checks
   requirements AND the conditions they are claimed under — board, power mode,
   pinned clocks, input period, start temperature, thermal envelope,
@@ -74,6 +32,7 @@
 - Dependency: PyYAML (contract files).
 
 ### Added — Layer 2: insights nobody else gives you
+
 - **`edgelens sweep` (I3):** one model on CPU / CUDA / TensorRT FP32, FP16,
   INT8 / DLA (+ external runtimes such as EDDL via exported inputs and saved
   outputs): latency, energy, session start-up (TensorRT engine cache) and
@@ -99,6 +58,7 @@
   `examples/soak_leak_demo.py`; docs/insights.md.
 
 ### Fixed — from the second Jetson Nano run
+
 - The GPU-provider check reported "SIGBUS: broken install" with a single,
   sound onnxruntime-gpu 1.11 (JetPack 4.6): it allocated a bare CUDA tensor.
   It now creates and runs a CUDA session on a tiny embedded model and names
@@ -115,6 +75,7 @@
 - The validation script's preflight no longer prints its output twice.
 
 ### Fixed — from the fourth Jetson Nano run (and a laptop run)
+
 - `sweep`: the `dla` backend on a board without a DLA engine (Nano) returned
   GPU numbers as a "DLA" result — TensorRT falls back silently. It is now
   "unavailable" with the reason.
@@ -134,6 +95,7 @@
   could not run; E2 takes board counters from any EdgeLens run.
 
 ### Fixed — from the third Jetson Nano run
+
 - Validation with sudo on a board that was already pinned measured "unpinned"
   runs with pinned clocks (`jetson_clocks --store` saves the current state, so
   `--restore` pinned again): T4 A/B reported NO DETECTABLE CHANGE and the I1
@@ -154,6 +116,7 @@
   storage errors on purpose.
 
 ### Fixed — from the first Jetson Nano run
+
 - A broken onnxruntime (two packages installed over each other) crashed every
   command with "Bus error": the CUDA provider check now runs in a child
   process with a timeout, cached per install; `doctor` names the conflict and
@@ -172,6 +135,7 @@ Implemented and tested in CI (Python 3.8 and 3.13); not yet validated on
 Jetson hardware — see docs/jetson.md for the rows still pending.
 
 ### Added — can you trust the numbers?
+
 - **One clock (T2):** every timestamp is CLOCK_MONOTONIC: harness and
   observer stages, markers, telemetry samples (`t_mono_ns`), energy
   integration. New `clock` block in results with the wall↔monotonic offset
@@ -196,6 +160,7 @@ Jetson hardware — see docs/jetson.md for the rows still pending.
   (a FAIL stays a FAIL); `diagnose` lists them.
 
 ### Added — systems EdgeLens doesn't run
+
 - **Markers (S1):** header-only `edgelens_mark.h` for C/C++ (`EL_SPAN`,
   `EL_ITERATION`, `EL_SPAN_GPU`, `EL_SPAN_CUDA`, `-DEDGELENS_DISABLE`) and
   `edgelens.mark` for Python; never-blocking UNIX datagrams with overflow
@@ -216,6 +181,7 @@ Jetson hardware — see docs/jetson.md for the rows still pending.
   SUMMARY.txt; docs/markers.md, docs/validation-v0.2.md.
 
 ### Measurement correctness (from an independent pre-release review)
+
 - Throughput in markers / attach / ROS 2 / paced runs is the observed rate
   over the run, not 1 / mean latency (`throughput_basis` says which).
 - `record -- CMD` uses a private socket; `watch --pid/--name` keeps only the
@@ -227,6 +193,7 @@ Jetson hardware — see docs/jetson.md for the rows still pending.
   latency PASS instead of passing silently.
 
 ### Changed
+
 - Timeseries pack: `hop` may be larger than `window` (predict less often
   than the sensor delivers, e.g. 0.5 s of history once per second).
 - Role inference recognises lstm/gru/rnn/cnn/eddl/trt/onnx/anomaly names as
@@ -235,6 +202,7 @@ Jetson hardware — see docs/jetson.md for the rows still pending.
 ## 0.1.0 — 2026-10-07
 
 ### Added
+
 - Generic `edgelens.Pipeline` engine: any named stages with roles; harness
   mode (`Pipeline.run`, `benchmark --pipeline` with `build_pipeline()`) and
   observer mode (`edgelens.trace`).
@@ -259,6 +227,7 @@ Jetson hardware — see docs/jetson.md for the rows still pending.
   `scripts/validate_on_jetson.sh`.
 
 ### Changed
+
 - `evidence_strength` is now categorical (`weak`/`moderate`/`strong`); the
   numeric ordering value moved to `rank_score`.
 - Diagnosis rules use stage roles, not the six fixed stage names.
@@ -269,11 +238,12 @@ Jetson hardware — see docs/jetson.md for the rows still pending.
 - `fingerprint_id` is now an alias of `environment_id`.
 
 ### Added after Jetson Nano validation
+
 - `doctor` shows **Benchmark readiness**: power mode, clock pinning, GPU
   inference providers and power-sensor access, each with a copyable fix.
   Built from the three issues hit on a real Nano (unpinned clocks, PyPI
   onnxruntime replacing the GPU build, root-only power sensor).
-- `doctor` prints a *Telemetry sources* table (GPU load, INA3221 power,
+- `doctor` prints a _Telemetry sources_ table (GPU load, INA3221 power,
   thermal zones, tegrastats) with values and read cost.
 - Diagnosis `CLOCKS_NOT_PINNED`: long tail with unpinned clocks on Jetson
   (from a real Nano run: p99 148 ms unpinned vs 9.4 ms pinned).
@@ -281,6 +251,7 @@ Jetson hardware — see docs/jetson.md for the rows still pending.
   requirements (deadline/period/pacing/pack).
 
 ### Fixed after Jetson Nano validation
+
 - Paced mode: real-time factor used response time (incl. queueing) and the
   hop period instead of service time and the actual period (Nano run showed
   RTF 10.4 instead of ~2.7). An explicit `--period-ms` now also sets the
@@ -305,6 +276,7 @@ Jetson hardware — see docs/jetson.md for the rows still pending.
   of a traceback.
 
 ### Project
+
 - GitHub Actions: lint, tests on Python 3.8–3.13 (with and without
   onnxruntime), wheel build + clean-venv smoke test; release workflow with
   PyPI trusted publishing (manual run -> TestPyPI, GitHub Release -> PyPI).
@@ -313,6 +285,7 @@ Jetson hardware — see docs/jetson.md for the rows still pending.
   architecture diagram, measured headline result. Classifier: Alpha.
 
 ### Added: `edgelens validate`
+
 - Checks a saved run against requirements given as flags (latency
   percentiles, worst case, deadline miss ratio, throughput, power, energy
   per iteration) and answers PASS / FAIL / INCONCLUSIVE per requirement with
@@ -323,6 +296,7 @@ Jetson hardware — see docs/jetson.md for the rows still pending.
   Contract files come in v0.2.
 
 ### Fixed in the pre-release review
+
 - The sdist was missing `tests/__init__.py` and `tests/fixtures/` (the test
   suite failed when run from the sdist); added `MANIFEST.in`.
 - The release workflow ran no tests before publishing; it now runs the suite
@@ -347,6 +321,7 @@ Jetson hardware — see docs/jetson.md for the rows still pending.
   that would silently fall back to CPU, and `doctor` warns.
 
 ### Fixed
+
 - Multi-input ONNX models crashed with a raw `ValueError`.
 - Non-image dynamic dimensions were silently set to 224.
 - A new tegrastats process was spawned for every telemetry sample.
