@@ -30,7 +30,7 @@ def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced"
                   model_path=None, provider=None, stage_fns=None, pipeline_path=None,
                   telemetry_interval_s=0.1, input_shapes=None, pipeline=None,
                   deadline_ms=None, period_ms=None, pace=False, idle_baseline_s=None,
-                  source=None):
+                  source=None, gc_mode="normal"):
     """Run a benchmark and return a result document
     (see edgelens.core.result for the shape).
 
@@ -63,7 +63,8 @@ def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced"
         return pipe.run(iterations=iterations, warmup=warmup, source=source,
                         deadline_ms=deadline_ms, period_ms=period_ms, pace=pace,
                         telemetry_interval_s=telemetry_interval_s,
-                        idle_baseline_s=idle_baseline_s, pipeline_source=source_label)
+                        idle_baseline_s=idle_baseline_s, pipeline_source=source_label,
+                        gc_mode=gc_mode)
     except StageError as e:
         raise RuntimeError(str(e)) from e
     except ValueError as e:

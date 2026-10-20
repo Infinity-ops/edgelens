@@ -188,7 +188,7 @@ class Pipeline:
 
     def run(self, iterations=100, warmup=10, source=None, deadline_ms=None,
             period_ms=None, pace=False, telemetry=True, telemetry_interval_s=0.1,
-            idle_baseline_s=None, pipeline_source=None):
+            idle_baseline_s=None, pipeline_source=None, gc_mode="normal"):
         """Harness mode: EdgeLens drives the loop. Returns a result dict
         (see edgelens.core.result.build_result)."""
         from .harness import run_harness
@@ -198,5 +198,5 @@ class Pipeline:
             deadline_ms=deadline_ms, period_ms=period_ms, pace=pace,
             telemetry=telemetry, telemetry_interval_s=telemetry_interval_s,
             idle_baseline_s=idle_baseline_s, pipeline_source=pipeline_source,
-            model_path=getattr(self, "_model_path", None),
+            model_path=getattr(self, "_model_path", None), gc_mode=gc_mode,
         )

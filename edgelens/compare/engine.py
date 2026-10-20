@@ -154,6 +154,12 @@ def requirements_diff(before, after):
     a_pack = (after.get("pipeline") or {}).get("pack")
     if b_pack != a_pack:
         diffs.append({"field": "pack", "label": "pack", "before": b_pack, "after": a_pack})
+    # Files without a "gc" block (before 0.2.0) ran with the collector as is.
+    b_gc = (before.get("gc") or {}).get("mode", "normal")
+    a_gc = (after.get("gc") or {}).get("mode", "normal")
+    if b_gc != a_gc:
+        diffs.append({"field": "gc_mode", "label": "Python GC mode (--gc)",
+                      "before": b_gc, "after": a_gc})
     return diffs
 
 

@@ -216,7 +216,7 @@ Each run writes `edgelens_validation_<board>_<date>/SUMMARY.txt` and a
 | Power sensor | INA3221 iio, root-only → `chmod` in step 2 | INA3221 hwmon, normally readable; AGX Orin reports the **sum of module rails** (under-reads the carrier board) — write that in the row |
 | GPU power-gating | `railgate` shown by `edgelens periodic` | same |
 | DLA | none: the `dla` sweep row says "unavailable" | 2 DLA engines: the `dla` row is a real result |
-| CPU cores | 4 | 12: single-core-bound stages show low system CPU % — use `watch`'s per-process % of one core |
+| CPU cores | 4 | 8 (AGX Orin 32GB) or 12 (64GB): single-core-bound stages show low system CPU % — use `watch`'s per-process % of one core |
 
 Must come out the **same** on both: every gate PASS (except skipped ones),
 0 lost markers at 4000 spans/s, NO DETECTABLE CHANGE in A/A, the leak found.

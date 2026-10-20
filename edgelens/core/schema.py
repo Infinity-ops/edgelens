@@ -25,7 +25,7 @@ ADDED_IN_V1 = (
     ("environment", "0.1.0"), ("identity", "0.1.0"), ("service_latency", "0.1.0"),
     ("clock", "0.2.0"), ("latency_series_ms", "0.2.0"), ("markers", "0.2.0"),
     ("process", "0.2.0"), ("process_series", "0.2.0"), ("observation", "0.2.0"),
-    ("stream", "0.2.0"), ("decision", "0.2.0"),
+    ("gc", "0.2.0"),
 )
 
 KNOWN_MODES = ("hardware", "demo", "markers", "attach", "imported-log", "ros2", "detect")

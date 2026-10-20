@@ -11,6 +11,11 @@ Paced (pace=True with a period): iteration k is released at t0 + k*period.
 Response time is measured from the scheduled release to the end of the last
 stage, so an overrun that delays the next release shows up as real queueing
 in the next iteration's latency — measured, not simulated.
+
+Python's garbage collector is watched for the timed loop (core.gcwatch) and
+can be set with gc_mode="normal" | "freeze" | "off". The trace is stored in
+integer columns (core.eventbuf), so EdgeLens adds no objects for the
+collector to scan while it measures.
 """
 
 import threading
@@ -19,7 +24,9 @@ import time
 from ..hardware import power as power_mod
 from ..hardware import telemetry as telemetry_mod
 from .clock import now_ns
-from .result import MAX_TRACE_EVENTS, build_result
+from .eventbuf import EventBuffer
+from .gcwatch import GcWatch
+from .result import build_result
 
 
 class StageError(RuntimeError):
@@ -51,7 +58,7 @@ def measure_idle_power(seconds, reader=None):
 def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=None,
                 period_ms=None, pace=False, telemetry=True, telemetry_interval_s=0.1,
                 idle_baseline_s=None, pipeline_source=None, attach_ids=True,
-                model_path=None, max_seconds=None):
+                model_path=None, max_seconds=None, gc_mode="normal"):
     if len(pipeline) == 0:
         raise ValueError("Pipeline has no stages.")
     if iterations < 1:
@@ -67,6 +74,7 @@ def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=No
         raise ValueError("pace=True needs a period (period_ms=..., or a pack config that "
                          "defines one, e.g. timeseries sample_rate_hz/window/hop).")
 
+    gcw = GcWatch(gc_mode)               # validates the mode before any work
     stages = pipeline.stages
     src = iter(source) if source is not None else None
     consumed = [0]
@@ -100,8 +108,8 @@ def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=No
     idle_w = measure_idle_power(idle_baseline_s) if idle_baseline_s else None
 
     samples = {s.name: [] for s in stages}
-    e2e, service, events = [], [], []
-    truncated = False
+    e2e, service = [], []
+    events = EventBuffer()
     tid = threading.get_ident()
     recorder = None
     if telemetry:
@@ -109,12 +117,14 @@ def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=No
         recorder.start()
     t_origin = now_ns()
     it_end = t_origin
+    gcw.start(t_origin)
     try:
         period_ns = int(period_ms * 1e6) if (pace and period_ms) else None
         stop_at = t_origin + int(max_seconds * 1e9) if max_seconds else None
         for it in range(iterations):
             if stop_at is not None and now_ns() >= stop_at:
                 break                      # time-boxed run (soak windows)
+            gcw.current_iter = it
             value = next_input()
             if period_ns is not None:
                 release = t_origin + it * period_ns
@@ -130,15 +140,12 @@ def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=No
                 value = _call(st, value, it)
                 t1 = now_ns()
                 samples[st.name].append((t1 - t0) / 1e6)
-                if len(events) < MAX_TRACE_EVENTS:
-                    events.append({"iter": it, "stage": st.name, "start_ns": t0 - t_origin,
-                                   "dur_ns": t1 - t0, "thread": tid})
-                else:
-                    truncated = True
+                events.add(it, st.name, t0 - t_origin, t1 - t0, tid)
             it_end = now_ns()
             e2e.append((it_end - it_start) / 1e6)
             service.append((it_end - work_start) / 1e6)
     finally:
+        gcw.stop()
         tel_summary = recorder.stop() if recorder else {}
         series = recorder.series() if recorder else []
 
@@ -146,12 +153,13 @@ def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=No
         pipeline_desc=pipeline.describe(), stage_samples_ms=samples, e2e_ms=e2e,
         service_ms=service,
         mode="hardware", pipeline_source=pipeline_source or f"pipeline:{pipeline.name}",
-        telemetry_summary=tel_summary, telemetry_series=series, events=events,
-        events_truncated=truncated, deadline_ms=deadline_ms, period_ms=period_ms,
+        telemetry_summary=tel_summary, telemetry_series=series, events=events.to_dicts(),
+        events_truncated=events.truncated, deadline_ms=deadline_ms, period_ms=period_ms,
         paced=bool(pace and period_ms), idle_power_w=idle_w, pack=pack,
         trace_origin_ns=t_origin,
         throughput_window_ms=((it_end - t_origin) / 1e6 if (pace and period_ms and e2e) else None),
     )
+    result["gc"] = gcw.summary(e2e, deadline_ms)
     if attach_ids:
         from .identity import attach_identity
         attach_identity(result, model_path=model_path)

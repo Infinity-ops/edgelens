@@ -86,6 +86,22 @@ def _tensorrt_cell(sw):
     )
 
 
+def _print_gc(gcb):
+    """One line on Python GC during the timed loop; yellow when it hit a deadline."""
+    worst = max(gcb.get("pauses") or [], key=lambda p: p["dur_ms"], default=None)
+    c = gcb.get("collections") or {}
+    line = (f"GC ({gcb.get('mode')}): {c.get('gen0', 0)}/{c.get('gen1', 0)}/{c.get('gen2', 0)} "
+            f"collections (gen0/1/2) · longest pause {gcb.get('max_pause_ms')} ms")
+    if worst and worst.get("iter") is not None:
+        line += f" (gen {worst['generation']}, iteration {worst['iter']})"
+    hit = gcb.get("deadline_misses_during_gc")
+    if hit:
+        console.print(f"[yellow]{line} · caused {hit} of {gcb.get('deadline_misses')} deadline "
+                      f"miss(es) — see `edgelens diagnose`[/yellow]")
+    else:
+        console.print(f"[dim]{line}[/dim]")
+
+
 def _ort_providers_cell(is_jetson):
     try:
         from .benchmark.onnx_pipeline import available_providers, unloadable_providers
@@ -212,6 +228,9 @@ def _print_benchmark(result):
             f"{dl['worst_ms']} ms (overrun {dl['worst_overrun_ms']} ms) · longest burst "
             f"{dl['max_consecutive_misses']}",
             title="Deadline", border_style=style, style=style))
+    gcb = result.get("gc")
+    if gcb:
+        _print_gc(gcb)
     bl = result.get("backlog")
     if bl:
         console.print(f"[dim]Backlog at {bl['period_ms']} ms period ({bl['method']}): "
@@ -477,8 +496,16 @@ def benchmark(
                                "use 3 or more (5 recommended)."),
     cooldown: float = typer.Option(0.0, "--cooldown", help="Seconds to wait between "
                                    "repeats (lets temperature settle)."),
+    gc_mode: str = typer.Option("normal", "--gc", help="Python garbage collector during "
+                                "the timed loop: normal (as in your app; pauses are "
+                                "recorded), freeze (gc.freeze() after warmup, like a tuned "
+                                "real-time app) or off (lower bound only)."),
 ):
     """Run a benchmark; measure per-stage latency, tail, deadlines, power and energy."""
+    from .core.gcwatch import GC_MODES
+    if gc_mode not in GC_MODES:
+        console.print(f"[red]--gc must be one of: {', '.join(GC_MODES)}[/red]")
+        raise typer.Exit(2)
     is_jetson = detector.is_jetson()
 
     if not demo and model is None and pipeline is None and not is_jetson:
@@ -503,7 +530,7 @@ def benchmark(
                     model_path=model, provider=provider, pipeline_path=pipeline,
                     input_shapes=parse_input_shapes(input_shape),
                     deadline_ms=deadline_ms, period_ms=period_ms, pace=pace,
-                    idle_baseline_s=idle_baseline or None,
+                    idle_baseline_s=idle_baseline or None, gc_mode=gc_mode,
                 )
             except RuntimeError as e:
                 console.print(f"[red]{e}[/red]")

@@ -21,7 +21,7 @@ probability and it is not one. Rules use stage ROLES, so they apply to any
 pipeline (vision, timeseries, custom), and scenario packs add their own
 findings. DEADLINE_MISSED fires for any run with a deadline.
 
-Verdict types: DEADLINE_MISSED, CLOCKS_NOT_PINNED, CPU_BOUND_PREPROCESS, INFERENCE_ON_CPU, MEMORY_TRANSFER_BOUND,
+Verdict types: DEADLINE_MISSED, GC_PAUSE, CLOCKS_NOT_PINNED, CPU_BOUND_PREPROCESS, INFERENCE_ON_CPU, MEMORY_TRANSFER_BOUND,
 GPU_BOUND, THERMAL, MEMORY_BOUND, BALANCED.
 """
 
@@ -296,6 +296,53 @@ def diagnose(benchmark_result):
                 "max_consecutive_misses": dl["max_consecutive_misses"],
                 "latency_p99_ms": lat.get("p99"), "dominant_stage": worst_stage,
             },
+        })
+
+    # Python garbage collection. A gen-2 collection stops all Python threads
+    # while it scans every tracked object, and lands in whichever stage is
+    # running — so it looks like a random stage spike. Found on an AGX Orin:
+    # a 27.4 ms gen-2 pause caused the only miss in 30 000 iterations of a
+    # 0.18 ms pipeline; with the collector off the worst case was 1.3 ms.
+    gcb = benchmark_result.get("gc") or {}
+    lat_all = benchmark_result.get("latency") or {}
+    gc_pauses = gcb.get("pauses") or []
+    gc_hits = [p for p in gc_pauses if p.get("deadline_missed")]
+    p99 = lat_all.get("p99")
+    gc_outliers = [p for p in gc_pauses if p99 and p.get("iter_latency_ms") is not None
+                   and p["iter_latency_ms"] >= 5 * p99 and p["dur_ms"] >= 0.5 * p["iter_latency_ms"]]
+    if gc_hits or gc_outliers:
+        worst = max(gc_hits or gc_outliers, key=lambda p: p["dur_ms"])
+        misses = (dl or {}).get("misses") or 0
+        if gc_hits:
+            explained = len({p["iter"] for p in gc_hits})
+            head = (f"{explained} of {misses} deadline miss(es) happened during a Python "
+                    f"garbage collection")
+            score = 0.85 if explained >= misses else 0.7
+        else:
+            head = (f"{len(gc_outliers)} latency outlier(s) of 5x p99 or more happened during "
+                    f"a Python garbage collection")
+            score = 0.6
+        findings.append({
+            "type": "GC_PAUSE",
+            "rank_score": score,
+            "detail": f"{head}. Worst: a generation-{worst['generation']} collection of "
+                      f"{worst['dur_ms']} ms in iteration {worst['iter']} (that iteration took "
+                      f"{worst.get('iter_latency_ms')} ms; p99 {p99} ms). The pause lands in "
+                      f"whichever stage is running, so it is not that stage's fault.",
+            "recommendation": "In the application: after start-up run `gc.collect(); "
+                              "gc.freeze()` so imports and the loaded model are never scanned "
+                              "again; keep allocations out of the hot loop (reuse numpy "
+                              "buffers, no per-iteration dicts/lists); if needed run "
+                              "gc.collect() yourself where there is slack (between periods). "
+                              "To measure the effect: `edgelens benchmark --gc freeze` (tuned "
+                              "app) and `--gc off` (lower bound), then `edgelens compare`.",
+            "evidence": {"gc_mode": gcb.get("mode"), "collections": gcb.get("collections"),
+                         "worst_pause_ms": worst["dur_ms"],
+                         "worst_pause_generation": worst["generation"],
+                         "worst_pause_iteration": worst["iter"],
+                         "deadline_misses": misses,
+                         "deadline_misses_during_gc": gcb.get("deadline_misses_during_gc"),
+                         "latency_p99_ms": p99},
         })
 
     # Clock scaling (DVFS) on Jetson: with clocks not pinned, the governor
