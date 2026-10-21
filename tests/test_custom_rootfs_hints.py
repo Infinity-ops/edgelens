@@ -76,3 +76,43 @@ def test_readiness_pin_fix_without_jetson_clocks():
                               jetson_clocks=False)
     c = [c for c in checks if c["name"] == "Clocks pinned"][0]
     assert "scaling_min_freq" in c["fix"] and "sudo jetson_clocks" not in c["fix"]
+
+
+# ---- "NVPM WARN: power mode is not set!" (AGX Orin, Yocto image) ----
+
+class _Out:
+    def __init__(self, text):
+        self.stdout = text
+
+
+def test_power_mode_not_set_is_detected():
+    from edgelens.core import identity
+    with patch.object(identity.subprocess, "run",
+                      return_value=_Out("NVPM WARN: power mode is not set!\n")):
+        assert identity.detect_power_mode_status() == "not set"
+    with patch.object(identity.subprocess, "run",
+                      return_value=_Out("NV Power Mode: MAXN\n0\n")):
+        assert identity.detect_power_mode_status() is None
+    with patch.object(identity.subprocess, "run", side_effect=FileNotFoundError):
+        assert identity.detect_power_mode_status() is None
+
+
+def test_readiness_warns_when_power_mode_not_set():
+    checks = readiness.assess(True, None, True, True, [], {"total_w": 5.7},
+                              power_mode_status="not set")
+    c = [c for c in checks if c["name"] == "Power mode"][0]
+    assert c["status"] == readiness.WARN and "not set" in c["value"]
+    assert "default clock limits" in c["advice"]
+
+
+def test_contract_power_mode_not_set_is_violated():
+    r = contract.check_assumption(_env(power_mode=None, power_mode_status="not set"),
+                                  "power_mode", {"value": "MAXN"})
+    assert r["status"] == contract.VIOLATED and r["measured"] == "not set"
+
+
+def test_unpin_advice_without_jetson_clocks():
+    checks = readiness.assess(True, None, False, False, [], {"total_w": 5.7},
+                              jetson_clocks=False)
+    c = [c for c in checks if c["name"] == "Clocks pinned"][0]
+    assert "jetson_clocks" not in c["advice"] and "min_freq" in c["advice"]

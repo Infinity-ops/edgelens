@@ -28,7 +28,7 @@ def _check(name, status, value, advice=None, fix=None):
 
 def assess(is_jetson, power_mode, cpu_pinned, gpu_pinned, providers, power_probe,
            unloadable=(), gpu_reason=None, gpu_kind=None, gpu_cached_at=None, storage=None,
-           clock_unset=None, jetson_clocks=True):
+           clock_unset=None, jetson_clocks=True, power_mode_status=None):
     """Return a list of readiness checks.
 
     is_jetson    bool
@@ -47,6 +47,10 @@ def assess(is_jetson, power_mode, cpu_pinned, gpu_pinned, providers, power_probe
                 "Power mode", INFO, label,
                 "Results are only comparable within the same power mode; "
                 "`compare` warns when it differs."))
+        elif power_mode_status == "not set":
+            from .platform_hints import POWER_MODE_NOT_SET_ADVICE
+            checks.append(_check("Power mode", WARN, "not set (nvpmodel)",
+                                 POWER_MODE_NOT_SET_ADVICE))
         else:
             from .platform_hints import power_mode_unreadable_reason
             checks.append(_check("Power mode", INFO, "not detected",
@@ -57,8 +61,7 @@ def assess(is_jetson, power_mode, cpu_pinned, gpu_pinned, providers, power_probe
             checks.append(_check(
                 "Clocks pinned", WARN, f"no ({', '.join(unpinned)} scaling)",
                 "Clock scaling inflates the latency tail (Nano: p99 148 ms unpinned "
-                "vs 9.4 ms pinned). Pin for benchmarks; undo with "
-                "`sudo jetson_clocks --restore`.",
+                "vs 9.4 ms pinned). Pin for benchmarks; " + _unpin(jetson_clocks) + ".",
                 fix=_pin_fix(jetson_clocks)))
         elif cpu_pinned and gpu_pinned:
             checks.append(_check("Clocks pinned", OK, "yes (CPU and GPU)"))
@@ -177,7 +180,18 @@ def gather(is_jetson, power_probe):
                   providers=providers, power_probe=power_probe,
                   unloadable=unloadable_providers(), gpu_reason=reason, gpu_kind=kind,
                   gpu_cached_at=cached_at, storage=kernel_storage_errors(),
-                  clock_unset=_clock_unset(), jetson_clocks=_has_jetson_clocks())
+                  clock_unset=_clock_unset(), jetson_clocks=_has_jetson_clocks(),
+                  power_mode_status=_power_mode_status() if is_jetson else None)
+
+
+def _power_mode_status():
+    from ..core.identity import detect_power_mode_status
+    return detect_power_mode_status()
+
+
+def _unpin(jetson_clocks):
+    from .platform_hints import unpin_hint
+    return unpin_hint(jetson_clocks)
 
 
 def _clock_unset():

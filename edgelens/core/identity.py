@@ -40,6 +40,24 @@ def _read(path):
         return None
 
 
+POWER_MODE_NOT_SET = "not set"
+
+
+def detect_power_mode_status():
+    """"not set" when nvpmodel exists but reports that no mode was ever
+    applied, else None. Found on an AGX Orin with a Yocto image: `nvpmodel -q`
+    printed only "NVPM WARN: power mode is not set!" (exit 0) and there was no
+    /var/lib/nvpmodel/status — the board ran with its default clock limits,
+    not in MAXN or any other defined mode. Kept apart from power_mode so
+    environment_id does not change."""
+    try:
+        out = subprocess.run(["nvpmodel", "-q"], stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, universal_newlines=True, timeout=5)
+    except Exception:
+        return None
+    return POWER_MODE_NOT_SET if "power mode is not set" in out.stdout.lower() else None
+
+
 def detect_power_mode():
     """nvpmodel power mode, e.g. {"id": 0, "name": "MAXN"}; None off-Jetson."""
     name, mode_id = None, None
@@ -117,6 +135,7 @@ def capture_environment(hw_sw=None):
         # listed AND loadable (onnxruntime-gpu without CUDA libs lists CUDA)
         "ort_providers_usable": usable,
         "power_mode": detect_power_mode(),
+        "power_mode_status": detect_power_mode_status(),   # not in environment_id
         "cpu_clocks_locked": cpu_locked,
         "gpu_clocks_locked": gpu_locked,
         "cpu_count": os.cpu_count(),

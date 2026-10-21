@@ -302,6 +302,11 @@ def check_assumption(result, key, spec):
         pm = env.get("power_mode") or {}
         if not pm or (pm.get("name") is None and pm.get("id") is None):
             from .hardware.platform_hints import power_mode_unreadable_reason
+            if env.get("power_mode_status") == "not set":
+                # nvpmodel itself says no mode is in effect: the required mode
+                # is known NOT to be the one the run used
+                return _row(key, label, want, "not set", VIOLATED,
+                            power_mode_unreadable_reason(True, "not set"), "environment", spec)
             return _row(key, label, want, None, NOT_VERIFIED,
                         power_mode_unreadable_reason(bool(env.get("is_jetson"))), spec=spec)
         got = pm.get("name") if isinstance(want, str) else pm.get("id")

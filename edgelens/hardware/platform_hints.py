@@ -38,13 +38,28 @@ def jetson_clocks_available():
     return shutil.which("jetson_clocks") is not None
 
 
-def power_mode_unreadable_reason(is_jetson):
+POWER_MODE_NOT_SET_ADVICE = (
+    "nvpmodel reports 'power mode is not set': the board runs with its default clock "
+    "limits, not MAXN or any other defined mode, so results compare to no published "
+    "mode. Set one with `sudo nvpmodel -m <id>` (MAXN is 0 on AGX Orin); on a shared "
+    "board agree on it first")
+
+
+def power_mode_unreadable_reason(is_jetson, status=None):
+    if status == "not set":
+        return POWER_MODE_NOT_SET_ADVICE
     if not is_jetson:
         return "power mode not readable (nvpmodel -q): not a Jetson"
     if not nvpmodel_available():
         return ("power mode not readable: this image has no nvpmodel (custom rootfs, e.g. "
                 "Yocto/meta-tegra); record the mode the image sets, e.g. in the contract note")
     return "power mode not readable (nvpmodel -q gave no mode)"
+
+
+def unpin_hint(available=None):
+    if jetson_clocks_available() if available is None else available:
+        return "undo with `sudo jetson_clocks --restore`"
+    return "undo by writing back the min_freq values you changed (or reboot)"
 
 
 def pin_clocks_fix(available=None):
