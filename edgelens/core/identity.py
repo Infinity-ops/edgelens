@@ -102,6 +102,10 @@ def capture_environment(hw_sw=None):
         providers, usable = [], []
     return {
         "board": hw.get("model"),
+        # module / SoC from the device tree (custom carriers name the board
+        # themselves); NOT part of environment_id, so ids stay stable
+        "module": hw.get("module"),
+        "soc": hw.get("soc"),
         "is_jetson": hw.get("is_jetson"),
         "l4t": sw.get("jetpack_l4t"),
         "cuda": sw.get("cuda"),

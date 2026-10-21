@@ -289,15 +289,21 @@ def check_assumption(result, key, spec):
         if not board:
             return _row(key, label, want, None, NOT_VERIFIED, "the result has no board "
                         "information", spec=spec)
-        ok = want.lower() in board.lower()
-        return _row(key, label, want, board, HOLDS if ok else VIOLATED,
-                    None if ok else f"measured on '{board}'", "environment", spec)
+        # The model string is the carrier's own on custom boards ("Taipur
+        # Orin"); the module name comes from the part number in the device
+        # tree ("Jetson AGX Orin 32GB"). Either may carry the wanted name.
+        module = env.get("module")
+        shown = f"{board} ({module})" if module and module not in board else board
+        ok = want.lower() in board.lower() or bool(module and want.lower() in module.lower())
+        return _row(key, label, want, shown, HOLDS if ok else VIOLATED,
+                    None if ok else f"measured on '{shown}'", "environment", spec)
 
     if key == "power_mode":
         pm = env.get("power_mode") or {}
         if not pm or (pm.get("name") is None and pm.get("id") is None):
+            from .hardware.platform_hints import power_mode_unreadable_reason
             return _row(key, label, want, None, NOT_VERIFIED,
-                        "power mode not readable (nvpmodel -q); not a Jetson?", spec=spec)
+                        power_mode_unreadable_reason(bool(env.get("is_jetson"))), spec=spec)
         got = pm.get("name") if isinstance(want, str) else pm.get("id")
         shown = pm.get("name") if pm.get("name") is not None else pm.get("id")
         if got is None:
@@ -323,8 +329,11 @@ def check_assumption(result, key, spec):
                         " and ".join(n for n, v in (("CPU", cpu), ("GPU", gpu)) if v is None),
                         spec=spec)
         ok = cpu == want and gpu == want
+        from .hardware.platform_hints import jetson_clocks_available, pin_clocks_fix
+        pin = ("run `sudo jetson_clocks` before measuring" if jetson_clocks_available()
+               else "pin clocks before measuring: " + pin_clocks_fix())
         return _row(key, label, want, measured, HOLDS if ok else VIOLATED,
-                    None if ok else ("run `sudo jetson_clocks` before measuring" if want else
+                    None if ok else (pin if want else
                                      "clocks were pinned; restore with jetson_clocks --restore"),
                     "environment", spec)
 

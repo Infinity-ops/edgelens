@@ -403,6 +403,10 @@ def _print_telemetry_sources():
     pw = src["power_ina3221"]
     if pw["total_w"] is not None:
         status, value = "[green]ok[/green]", f"{pw['total_w']:.2f} W ({pw['method']})"
+        if pw["method"] == "sum_of_rails" and pw.get("rails_w"):
+            # say WHAT was added up: tegrastats may print fewer rails (AGX Orin
+            # on a Yocto image: 3 shown, 4 summed)
+            value += " = " + " + ".join(f"{k} {v:.2f}" for k, v in pw["rails_w"].items())
     elif pw.get("permission_denied"):
         status, value = "[yellow]found, root-only[/yellow]", "fix under Benchmark readiness"
     elif pw["rails_found"]:

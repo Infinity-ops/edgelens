@@ -27,7 +27,8 @@ def _check(name, status, value, advice=None, fix=None):
 
 
 def assess(is_jetson, power_mode, cpu_pinned, gpu_pinned, providers, power_probe,
-           unloadable=(), gpu_reason=None, gpu_kind=None, gpu_cached_at=None, storage=None):
+           unloadable=(), gpu_reason=None, gpu_kind=None, gpu_cached_at=None, storage=None,
+           clock_unset=None, jetson_clocks=True):
     """Return a list of readiness checks.
 
     is_jetson    bool
@@ -47,7 +48,9 @@ def assess(is_jetson, power_mode, cpu_pinned, gpu_pinned, providers, power_probe
                 "Results are only comparable within the same power mode; "
                 "`compare` warns when it differs."))
         else:
-            checks.append(_check("Power mode", INFO, "not detected"))
+            from .platform_hints import power_mode_unreadable_reason
+            checks.append(_check("Power mode", INFO, "not detected",
+                                 power_mode_unreadable_reason(True)))
 
         if cpu_pinned is False or gpu_pinned is False:
             unpinned = [n for n, v in (("CPU", cpu_pinned), ("GPU", gpu_pinned)) if v is False]
@@ -56,11 +59,19 @@ def assess(is_jetson, power_mode, cpu_pinned, gpu_pinned, providers, power_probe
                 "Clock scaling inflates the latency tail (Nano: p99 148 ms unpinned "
                 "vs 9.4 ms pinned). Pin for benchmarks; undo with "
                 "`sudo jetson_clocks --restore`.",
-                fix="sudo jetson_clocks --store && sudo jetson_clocks"))
+                fix=_pin_fix(jetson_clocks)))
         elif cpu_pinned and gpu_pinned:
             checks.append(_check("Clocks pinned", OK, "yes (CPU and GPU)"))
         else:
             checks.append(_check("Clocks pinned", INFO, "unknown"))
+
+    if clock_unset:
+        checks.append(_check(
+            "System clock", WARN, f"never set ({clock_unset})",
+            "No RTC time and no NTP: result timestamps, run ids and evidence files carry this "
+            "date (ids stay unique). Comparing runs by date across reboots means nothing.",
+            fix="date -s 'YYYY-MM-DD HH:MM'   (until reboot), or enable NTP / chrony / "
+                "systemd-timesyncd in the image"))
 
     if not providers:
         checks.append(_check(
@@ -165,4 +176,21 @@ def gather(is_jetson, power_probe):
                   cpu_pinned=cpu, gpu_pinned=gpu,
                   providers=providers, power_probe=power_probe,
                   unloadable=unloadable_providers(), gpu_reason=reason, gpu_kind=kind,
-                  gpu_cached_at=cached_at, storage=kernel_storage_errors())
+                  gpu_cached_at=cached_at, storage=kernel_storage_errors(),
+                  clock_unset=_clock_unset(), jetson_clocks=_has_jetson_clocks())
+
+
+def _clock_unset():
+    from .platform_hints import clock_unset
+    return clock_unset()
+
+
+def _has_jetson_clocks():
+    from .platform_hints import jetson_clocks_available
+    return jetson_clocks_available()
+
+
+def _pin_fix(jetson_clocks):
+    from .platform_hints import pin_clocks_fix
+    return ("sudo jetson_clocks --store && sudo jetson_clocks" if jetson_clocks
+            else pin_clocks_fix(available=False))

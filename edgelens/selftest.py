@@ -255,7 +255,8 @@ def check_c_markers(n):
     cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
     if not cc:
         return [_row("c_marker_cost", SKIP, None, "us", LIMITS["c_marker_overhead_us"],
-                     "no C compiler found (install gcc to check the C header)")]
+                     "no C compiler found (" + _install("gcc", "a C compiler") +
+                     " to check the C header)")]
     d = tempfile.mkdtemp(prefix="edgelens-selftest-")
     rows = []
     try:
@@ -380,13 +381,18 @@ def check_disturbance(duration_ms, iterations, rounds):
                  f"{m_on:.4f} ms with ({rounds} alternating rounds)")]
 
 
+def _install(package, what=None):
+    from .hardware.platform_hints import install_hint
+    return install_hint(package, what)
+
+
 def check_chrony():
     st = clock.chrony_status()
     if not st.get("available"):
         return [_row("chrony", WARN, None, "", None,
                      f"{st.get('reason')}. Only needed for latency across machines "
                      f"(e.g. sensor on the PMC, prediction on the PMA).",
-                     fix="sudo apt install chrony   (and point both machines at the same "
+                     fix=_install("chrony") + "   (and point both machines at the same "
                          "server)")]
     bound_ms = st["error_bound_s"] * 1000
     parts = (f"offset {st['offset_s'] * 1000:+.3f} ms, root delay "
