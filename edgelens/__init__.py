@@ -14,7 +14,7 @@
             ...
 """
 
-__version__ = "0.2.0.dev2"
+__version__ = "0.2.0.dev3"
 
 from .core import SCHEMA_VERSION, Pipeline, Stage, Tracer, trace  # noqa: E402
 from .packs import WindowSource, get_pack, list_packs, register_pack  # noqa: E402

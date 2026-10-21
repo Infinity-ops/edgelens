@@ -17,6 +17,10 @@ mkdir -p "$OUT"
 QUICK="${EDGELENS_VALIDATE_QUICK:-0}"
 REPEATS=5; ITER=2000; [ "$QUICK" = "1" ] && { REPEATS=3; ITER=300; }
 STEP_TIMEOUT="${EDGELENS_STEP_TIMEOUT:-900}"   # no single step may run longer (s)
+# Portable to BusyBox userlands (Yocto/OE4Tegra images): `head -n N` instead
+# of `head -N`, and `timeout -k` only where the timeout in PATH accepts it
+# (GNU and recent BusyBox do; `--kill-after=` is GNU only).
+if timeout -k 1 1 true 2>/dev/null; then TIMEOUT_KILL="-k 15"; else TIMEOUT_KILL=""; fi
 export PYTHONFAULTHANDLER=1                     # a crash prints WHERE it happened
 log() { echo "== $*" | tee -a "$OUT/steps.log"; }
 crashed() {   # stop the whole run on a crash: everything after it would be noise
@@ -33,7 +37,7 @@ run() {
     "$@" >>"$OUT/steps.log" 2>&1
   else
     timed=1
-    timeout --kill-after=15 "$STEP_TIMEOUT" "$@" >>"$OUT/steps.log" 2>&1
+    timeout $TIMEOUT_KILL "$STEP_TIMEOUT" "$@" >>"$OUT/steps.log" 2>&1
   fi
   local rc=$? took=$(( SECONDS - t0 ))
   echo "   exit=$rc (${took}s)" | tee -a "$OUT/steps.log"
@@ -65,7 +69,7 @@ clocks_state() {   # pinned | free | mixed | unknown — read from sysfs, no roo
 # shellcheck disable=SC2024  # the log is the user's file: no sudo for the redirect
 clocks_pin() { sudo jetson_clocks >>"$OUT/steps.log" 2>&1; [ "$(clocks_state)" = pinned ]; }
 clocks_unpin() {   # back to the power mode's own DVFS limits
-  local mode; mode=$(nvpmodel -q 2>/dev/null | grep -E '^[0-9]+$' | tail -1)
+  local mode; mode=$(nvpmodel -q 2>/dev/null | grep -E '^[0-9]+$' | tail -n 1)
   # shellcheck disable=SC2024
   [ -n "$mode" ] && sudo nvpmodel -m "$mode" >>"$OUT/steps.log" 2>&1
   [ "$(clocks_state)" = free ] && return 0
@@ -75,7 +79,7 @@ clocks_unpin() {   # back to the power mode's own DVFS limits
   done
   for d in /sys/devices/gpu.0/devfreq/* /sys/devices/platform/*gpu*/devfreq/* /sys/devices/platform/bus@0/*gpu*/devfreq/*; do
     [ -f "$d/available_frequencies" ] || continue
-    sudo sh -c "tr ' ' '\n' < '$d/available_frequencies' | grep -v '^$' | sort -n | head -1 > '$d/min_freq'" 2>>"$OUT/steps.log"
+    sudo sh -c "tr ' ' '\n' < '$d/available_frequencies' | grep -v '^$' | sort -n | head -n 1 > '$d/min_freq'" 2>>"$OUT/steps.log"
   done
   [ "$(clocks_state)" = free ]
 }
@@ -105,7 +109,7 @@ EOF
 expect() {
   local allowed="$1"; shift
   log "$* (allowed exit: $allowed)"
-  local tmp; tmp="$(mktemp)"; timeout --kill-after=15 "$STEP_TIMEOUT" "$@" >"$tmp" 2>&1; local rc=$?
+  local tmp; tmp="$(mktemp)"; timeout $TIMEOUT_KILL "$STEP_TIMEOUT" "$@" >"$tmp" 2>&1; local rc=$?
   cat "$tmp" >>"$OUT/steps.log"; echo "   exit=$rc" | tee -a "$OUT/steps.log"
   if grep -q "Traceback (most recent call last)" "$tmp"; then rm -f "$tmp"; return 1; fi
   rm -f "$tmp"
@@ -129,9 +133,9 @@ log "raw platform sources (what the parsers are written against)"
   echo "--- cpufreq"; grep -H . /sys/devices/system/cpu/cpu*/cpufreq/scaling_{min,max,cur}_freq
   echo "--- UNIX datagram queue (markers)"; cat /proc/sys/net/unix/max_dgram_qlen
   echo "--- time sync"; (chronyc -c tracking || timedatectl show) 2>&1
-  echo "--- compilers"; (cc --version; c++ --version) 2>&1 | head -4
+  echo "--- compilers"; (cc --version; c++ --version) 2>&1 | head -n 4
   echo "--- python"; python3 --version; python3 -c "import edgelens; print('edgelens', edgelens.__version__)"
-  echo "--- one tegrastats line"; timeout 3 tegrastats --interval 500 | head -1
+  echo "--- one tegrastats line"; timeout 3 tegrastats --interval 500 | head -n 1
 } >"$OUT/platform_raw.txt" 2>&1
 
 : >"$OUT/SUMMARY.txt"
@@ -171,11 +175,11 @@ if [ "$PRE" != 0 ] && [ "$PRE" != 3 ]; then
   echo "!! Preflight failed: the onnxruntime installation is broken (details and the fix:" | tee -a "$OUT/SUMMARY.txt"
   echo "!! tail $OUT/steps.log, or run 'edgelens doctor'). Fix it, then rerun this script." | tee -a "$OUT/SUMMARY.txt"
   # only the check's own findings (steps.log also holds the "==" lines already on screen)
-  grep -E "^(PROBLEM|FIX|onnxruntime CUDA probe):|Traceback|Error" "$OUT/steps.log" | tail -8
+  grep -E "^(PROBLEM|FIX|onnxruntime CUDA probe):|Traceback|Error" "$OUT/steps.log" | tail -n 8
   exit 2
 elif [ "$PRE" = 3 ]; then
   echo "WARN  preflight — GPU providers unusable (see steps.log: 'CUDA probe'); continuing CPU-only, GPU rows are SKIP/unavailable. After a fix: edgelens doctor --no-cache" >>"$OUT/SUMMARY.txt"
-  log "GPU providers unusable — continuing CPU-only: $(grep 'CUDA probe' "$OUT/steps.log" | tail -1)"
+  log "GPU providers unusable — continuing CPU-only: $(grep 'CUDA probe' "$OUT/steps.log" | tail -n 1)"
 else
   echo "PASS  preflight — one onnxruntime install, CUDA provider loads or is absent cleanly" >>"$OUT/SUMMARY.txt"
 fi

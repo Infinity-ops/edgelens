@@ -86,6 +86,9 @@ def _tensorrt_cell(sw):
     )
 
 
+TINY_STAGE_MS = 0.005     # per-stage % change is not shown below this
+
+
 def _print_gc(gcb):
     """One line on Python GC during the timed loop; yellow when it hit a deadline."""
     worst = max(gcb.get("pauses") or [], key=lambda p: p["dur_ms"], default=None)
@@ -187,7 +190,12 @@ def _print_benchmark(result):
     pipe = result.get("pipeline") or {}
     roles = {s["name"]: s.get("role", "") for s in pipe.get("stages", [])}
     stats = result.get("stage_stats_ms") or {}
-    table = Table(title=f"EdgeLens Benchmark ({result['mode']} mode, {pipe.get('pack', 'custom')} "
+    pack = pipe.get("pack", "custom")
+    if pack == "vision" and str(result.get("pipeline_source", "")).startswith("onnxruntime:"):
+        # --model always uses the six-stage template; it says nothing about
+        # the model (an LSTM on time series was labelled "vision pack")
+        pack = "vision-template"
+    table = Table(title=f"EdgeLens Benchmark ({result['mode']} mode, {pack} "
                         f"pack, {result['pipeline_source']})")
     table.add_column("Stage")
     table.add_column("Role", style="dim")
@@ -771,6 +779,10 @@ def compare(
             stage_table.add_row(stage, _ms(d["before_ms"]), _ms(d["after_ms"]), d["status"])
             continue
         change = f"{d['pct_change']:+.1f}%" if d["pct_change"] is not None else "n/a"
+        if max(d["before_ms"] or 0.0, d["after_ms"] or 0.0) < TINY_STAGE_MS:
+            # 0.001 -> 0.002 ms printed as "+100%" on the Orin: that is the
+            # display rounding, not a change. The verdict never used it.
+            change = "~ (below 5 µs)"
         stage_table.add_row(stage, f"{d['before_ms']:.3f}", f"{d['after_ms']:.3f}", change)
     console.print(stage_table)
 
