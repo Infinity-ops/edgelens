@@ -276,7 +276,10 @@ def test_soak_pipeline_detects_a_real_leak(tmp_path):
         keep.append(bytearray(400_000))
         time.sleep(0.002)
     p.add_stage("model", model)
-    r = sk.run_soak_pipeline(p, duration_s=7.0, window_s=1.0, period_ms=20,
+    # 9 s, not 7: a window costs its 1 s plus set-up (telemetry, the process
+    # scan for background load). 7 s gave 6 windows here but 5 on an AGX Orin
+    # in 4 runs of 5, and the test needs >= 6. 9 s gives >= 6 up to 1.5 s/window.
+    r = sk.run_soak_pipeline(p, duration_s=9.0, window_s=1.0, period_ms=20,
                              jsonl_path=str(tmp_path / "s.jsonl"))
     s = r["soak"]
     assert s["windows"] >= 6

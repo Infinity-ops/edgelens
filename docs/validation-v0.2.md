@@ -196,6 +196,15 @@ Each run writes `edgelens_validation_<board>_<date>/SUMMARY.txt` and a
 | **I1 periodic** | latency and energy per period at 1 Hz; duty-cycle penalty checked |
 | **I1 trade-off** (sudo) | pinned vs unpinned at 1 Hz: latency gained AND energy per period it costs |
 | **I2 leak** | the deliberate leak demo is detected by `soak` |
+
+What a soak can and cannot see in process memory (RSS): a leak shows only
+once the memory the process already holds is used up. A program that freed a
+lot before the soak (or in the warm-up window) refills those pages first, and
+RSS stays flat while it does. Measured on an AGX Orin: soaks started after
+another run in the same process stayed flat at 166 MB for 5 windows and then
+jumped +20 MB — "no leak" was the honest answer for what RSS showed. Start a
+soak in a fresh process, and run it long enough that the leak outgrows the
+process's free memory (EdgeLens also needs >= 8 MB and >= 5% of growth).
 | **I2 soak** | 30-minute DEM2 run at 1 Hz: drift, throttling, memory, JSONL streamed |
 | I2 soak requirements | the soak result passes `validate`: p99 <= 3 s, no misses, drift <= 10%, memory growth <= 20 MB/h, no throttled window |
 | **E1 contract PASS** | a contract generated from this board's state: every assumption holds, every guarantee met. The script first waits up to 2 min (`EDGELENS_QUIET_WAIT_S`) for background load < 20%; if the board stays busy it names the busiest processes (INFO line) and allows that load + 15% |
