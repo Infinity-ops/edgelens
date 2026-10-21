@@ -429,16 +429,41 @@ class TelemetryRecorder:
 
     @staticmethod
     def _all_cpu():
-        """{pid: (name, cpu seconds)} of every process — twice per run, not per sample."""
+        """{pid: (name, cpu seconds, create_time)} of every process — twice per
+        run, not per sample. create_time (not the name) tells a reused PID from
+        the same process: kernel workers rename themselves after the work
+        they are doing ("kworker/4:2-events" -> "kworker/4:2-mm_percpu_wq")."""
         out = {}
-        for p in psutil.process_iter(["name", "cpu_times"]):
+        for p in psutil.process_iter(["name", "cpu_times", "create_time"]):
             try:
                 t = p.info["cpu_times"]
                 if t is not None:
-                    out[p.pid] = (p.info["name"] or "?", t.user + t.system)
+                    out[p.pid] = (p.info["name"] or "?", t.user + t.system,
+                                  p.info.get("create_time"))
             except (psutil.Error, OSError, KeyError):
                 continue
         return out
+
+    @staticmethod
+    def _window_cpu(before, now, window_start_wall, elapsed):
+        """CPU seconds a process used inside the window, or None to skip it.
+
+        Same process (same create_time): the difference. A process that
+        started inside the window: all of its CPU time. Anything else (a
+        process that existed before the window but was not in the first
+        snapshot, or one whose start time can't be read) is skipped rather
+        than charged with its whole lifetime — that was the bug that put a
+        kworker at "5 cores" on a laptop. Same process is decided by
+        create_time; psutil derives it from boot time + start ticks, so a 1 s
+        tolerance absorbs rounding."""
+        _name, cpu, created = now
+        if before is not None:
+            b_cpu, b_created = before[1], (before[2] if len(before) > 2 else None)
+            if created is None or b_created is None or abs(created - b_created) < 1.0:
+                return max(0.0, cpu - b_cpu)
+        if created is not None and created >= window_start_wall - 1.0:
+            return cpu if cpu <= elapsed * (psutil.cpu_count() or 1) else None
+        return None
 
     def _bg_start(self):
         self._own = {pid: [None, None] for pid in self._own}
@@ -448,6 +473,7 @@ class TelemetryRecorder:
             self._procs0 = self._all_cpu()
         except Exception:
             self._procs0 = None
+        self._bg_wall0 = time.time()
         self._sys0 = (self._sys_busy(), _now_ns())
 
     def _bg_stop(self):
@@ -471,12 +497,13 @@ class TelemetryRecorder:
             try:
                 now = self._all_cpu()
                 mine = set(self._own) | {os.getpid()}       # same rule as the total
-                for pid, (name, cpu) in now.items():
+                wall0 = getattr(self, "_bg_wall0", time.time() - elapsed)
+                for pid, cur in now.items():
                     if pid in mine:
                         continue
-                    before = self._procs0.get(pid)
-                    used = cpu - (before[1] if before and before[0] == name else 0.0)
-                    if before is None and used > elapsed:      # older than the window
+                    name = cur[0]
+                    used = self._window_cpu(self._procs0.get(pid), cur, wall0, elapsed)
+                    if used is None:
                         continue
                     if used / elapsed >= 0.01:
                         top.append({"pid": pid, "name": name, "cores": round(used / elapsed, 3)})
