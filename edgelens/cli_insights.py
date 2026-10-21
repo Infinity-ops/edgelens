@@ -375,7 +375,10 @@ def print_soak(result):
         return "-" if v is None else f"{v:+.2f} MB/h" + ("" if sig else " (not significant)")
     t.add_row("Process memory (RSS)", rate(m.get("process_rss_mb_per_h"),
                                            m.get("process_rss_mb_per_h_significant"))
-              + (" [red]LEAK SUSPECTED[/red]" if m.get("leak_suspected") else ""))
+              + (" [red]LEAK SUSPECTED[/red]" if m.get("leak_suspected") else "")
+              + (f" [yellow]growing by {m.get('process_rss_mb_grown')} MB over the run — too "
+                 f"little to call a leak (warm-up looks the same); run longer[/yellow]"
+                 if m.get("rss_growing_inconclusive") else ""))
     if m.get("nvmap_used_mb_last") is not None:
         t.add_row("GPU memory (NvMap)", rate(m.get("gpu_nvmap_mb_per_h"),
                                              m.get("gpu_nvmap_mb_per_h_significant"))

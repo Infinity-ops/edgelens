@@ -48,6 +48,14 @@ from .core.clock import now_ns
 DEFAULT_WINDOW_S = 60.0
 DRIFT_PCT = 10.0
 LEAK_MIN_MB_PER_H = 5.0
+# A slope alone is not a leak: a healthy pipeline's RSS rises in small steps
+# while the allocator and caches settle, and over a short soak that steady
+# rise is "significant". Found on an AGX Orin: a 5-minute soak of a pipeline
+# without a leak grew 0.9 MB (75.5 -> 76.4 MB) and was reported as
+# "+11.64 MB/h LEAK SUSPECTED". A leak must also have GROWN by this much
+# over the analysed windows (and by LEAK_MIN_GROWTH_PCT of the process):
+LEAK_MIN_GROWTH_MB = 8.0
+LEAK_MIN_GROWTH_PCT = 5.0
 MAX_KEEP_SAMPLES = 2_000_000
 
 
@@ -355,6 +363,10 @@ def analyze(rows, limits=None):
         t = _trend(rows, key, skip)
         mem[name] = t.get("slope_per_h")
         mem[name + "_significant"] = t["significant"]
+        if t.get("start") is not None and t.get("end") is not None:
+            # growth along the fitted trend over the analysed windows
+            mem[name.replace("_per_h", "_grown")] = round(float(t["end"] - t["start"]), 2)
+            mem[name.replace("_per_h", "_trend_start")] = round(float(t["start"]), 2)
     last = rows[-1] if rows else {}
     mem["rss_mb_last"] = last.get("rss_mb")
     mem["mem_available_mb_last"] = last.get("mem_available_mb")
@@ -367,13 +379,23 @@ def analyze(rows, limits=None):
     else:
         mem["hours_until_out_of_memory"] = None
     rss = mem.get("process_rss_mb_per_h")
-    mem["leak_suspected"] = bool(rss is not None and mem["process_rss_mb_per_h_significant"]
-                                 and rss >= max(LEAK_MIN_MB_PER_H,
-                                                0.01 * (last.get("rss_mb") or 0)))
+    rising = bool(rss is not None and mem["process_rss_mb_per_h_significant"]
+                  and rss >= max(LEAK_MIN_MB_PER_H, 0.01 * (last.get("rss_mb") or 0)))
+    grown = mem.get("process_rss_mb_grown") or 0.0
+    base = mem.get("process_rss_mb_trend_start") or 0.0
+    enough = grown >= max(LEAK_MIN_GROWTH_MB, LEAK_MIN_GROWTH_PCT / 100.0 * base)
+    mem["leak_suspected"] = bool(rising and enough)
+    # rising, but by too little to tell a slow leak from warm-up: say so
+    mem["rss_growing_inconclusive"] = bool(rising and not enough)
+    mem["leak_rule"] = (f"significant slope >= {LEAK_MIN_MB_PER_H} MB/h (and >= 1% of RSS per "
+                        f"hour) AND grown >= {LEAK_MIN_GROWTH_MB} MB and >= "
+                        f"{LEAK_MIN_GROWTH_PCT}% over the analysed windows")
     nv = mem.get("gpu_nvmap_mb_per_h")
     mem["gpu_memory_growth_suspected"] = bool(nv is not None
                                               and mem["gpu_nvmap_mb_per_h_significant"]
-                                              and nv >= LEAK_MIN_MB_PER_H)
+                                              and nv >= LEAK_MIN_MB_PER_H
+                                              and (mem.get("gpu_nvmap_mb_grown") or 0.0)
+                                              >= LEAK_MIN_GROWTH_MB)
     swap0 = next((r.get("swap_used_mb") for r in rows if r.get("swap_used_mb") is not None), None)
     mem["swap_grew_mb"] = (round(last["swap_used_mb"] - swap0, 1)
                            if swap0 is not None and last.get("swap_used_mb") is not None else None)

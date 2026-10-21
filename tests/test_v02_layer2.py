@@ -341,3 +341,30 @@ def test_validation_script_run_helper_handles_shell_functions(tmp_path):
                          universal_newlines=True)
     assert "rc=0" in res.stdout, res.stdout
     assert "helper ran" in (tmp_path / "o" / "steps.log").read_text()
+
+
+def test_short_soak_warm_up_growth_is_not_a_leak():
+    """AGX Orin, 5-minute soak of a pipeline WITHOUT a leak: RSS rose in small
+    warm-up steps (75.5 -> 76.4 MB, a significant slope of ~+11.6 MB/h) and
+    was reported as LEAK SUSPECTED. Real growth was 0.9 MB."""
+    steps = [74.74, 75.53, 75.79, 75.79, 75.79, 75.79, 75.79, 75.79, 75.92, 76.05,
+             76.05, 76.18, 76.18, 76.18, 76.18, 76.31, 76.44, 76.44, 76.44, 76.44]
+    rows = _rows(n=20, rss=lambda i: steps[i])
+    for i, r in enumerate(rows):                      # 15 s windows, as on the Orin
+        r["t_start_s"], r["t_end_s"] = i * 15.0, (i + 1) * 15.0
+    m = sk.analyze(rows)["memory"]
+    assert m["process_rss_mb_per_h_significant"] and m["process_rss_mb_per_h"] > 5
+    assert not m["leak_suspected"], m
+    assert m["rss_growing_inconclusive"] and m["process_rss_mb_grown"] < 2
+
+
+def test_orin_leak_demo_is_still_a_leak():
+    """The same Orin, examples/soak_leak_demo.py: ~1 MB/s for 3 minutes."""
+    rss = [83.27, 99.0, 114.46, 129.8, 145.26, 160.86, 176.33, 191.93, 207.26, 222.73,
+           238.19, 252.22]
+    rows = _rows(n=12, rss=lambda i: rss[i])
+    for i, r in enumerate(rows):
+        r["t_start_s"], r["t_end_s"] = i * 15.0, (i + 1) * 15.0
+    m = sk.analyze(rows)["memory"]
+    assert m["leak_suspected"] and not m["rss_growing_inconclusive"]
+    assert m["process_rss_mb_per_h"] == pytest.approx(3682, rel=0.05)
