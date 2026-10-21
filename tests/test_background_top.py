@@ -44,7 +44,7 @@ def test_old_snapshots_without_create_time_fall_back_to_the_difference():
     assert abs(used(("p", 2.0), ("p", 2.5, None)) - 0.5) < 1e-9
 
 
-def test_busy_loop_is_the_top_process():
+def test_busy_loop_is_listed_at_one_core():
     import subprocess, sys, time
     hog = subprocess.Popen([sys.executable, "-c", "while True: pass"])
     try:
@@ -56,5 +56,6 @@ def test_busy_loop_is_the_top_process():
     finally:
         hog.kill()
         hog.wait()
-    assert bg["top"] and bg["top"][0]["pid"] == hog.pid, bg["top"]
+    row = [r for r in bg["top"] if r["pid"] == hog.pid]     # listed, ~1 core;
+    assert row and row[0]["cores"] > 0.6, bg["top"]          # first only on an idle box
     assert all(row["cores"] <= (__import__("psutil").cpu_count() or 1) for row in bg["top"])

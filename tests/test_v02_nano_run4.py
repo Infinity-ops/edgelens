@@ -70,7 +70,10 @@ def test_background_load_names_the_busiest_process():
     finally:
         hog.kill()
         hog.wait()
-    assert bg["top"] and bg["top"][0]["pid"] == hog.pid and bg["top"][0]["cores"] > 0.6
+    # The busy loop must be listed at ~1 core. Not necessarily FIRST: on a
+    # dev machine a browser can genuinely use more during the test.
+    row = [r for r in bg["top"] if r["pid"] == hog.pid]
+    assert row and row[0]["cores"] > 0.6, bg["top"]
     row = ct.check_assumption({"telemetry": {"background": dict(bg, cpu_pct=99.0)}},
                               "max_background_cpu_pct", {"value": 10.0})
     assert row["status"] == ct.VIOLATED and f"pid {hog.pid}" in row["reason"]
