@@ -182,8 +182,18 @@ class ProcessSampler:
         def mean(k):
             return round(sum(x[k] for x in s) / len(s), 2)
 
-        rss = [x["rss_mb"] for x in s]
-        ts = [x["t_s"] for x in s]
+        # A process that exits by itself frees memory while it shuts down
+        # (Python's finalizer returning large buffers to the OS). A sample in
+        # that moment is real, but it is not the running process: an ~80 MB
+        # child was reported as "17 -> 9 MB", and the trailing drop bends the
+        # growth slope down. Leave falling trailing samples of an exited
+        # process out of start/end/slope; report them as rss_mb_at_exit.
+        running = s
+        if self.exited_mono_ns is not None:
+            while len(running) >= 3 and running[-1]["rss_mb"] < 0.9 * running[-2]["rss_mb"]:
+                running = running[:-1]
+        rss = [x["rss_mb"] for x in running]
+        ts = [x["t_s"] for x in running]
         span_s = (self.raw[-1][0] - self.raw[0][0]) / 1e9
         base.update({
             "duration_s": round(span_s, 2),
@@ -192,6 +202,7 @@ class ProcessSampler:
             "cpu_cores_used_mean": round(mean("cpu_percent") / 100.0, 2),
             "rss_mb_start": rss[0], "rss_mb_end": rss[-1], "rss_mb_peak": max(rss),
             "rss_growth_mb_per_min": _slope_per_min(ts, rss),
+            "rss_mb_at_exit": s[-1]["rss_mb"] if len(running) < len(s) else None,
             "threads_min": min(x["threads"] for x in s),
             "threads_max": max(x["threads"] for x in s),
             "ctx_voluntary_per_s_mean": mean("ctx_voluntary_per_s"),

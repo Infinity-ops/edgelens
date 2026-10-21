@@ -92,8 +92,10 @@ def print_process(result):
     t.add_column("Metric")
     t.add_column("Value")
     t.add_row("CPU (% of one core)", f"mean {p['cpu_percent_mean']} · peak {p['cpu_percent_peak']}")
+    at_exit = (f" · {p['rss_mb_at_exit']} MB while shutting down"
+               if p.get("rss_mb_at_exit") is not None else "")
     t.add_row("Resident memory", f"{p['rss_mb_start']} → {p['rss_mb_end']} MB "
-                                  f"(peak {p['rss_mb_peak']})")
+                                  f"(peak {p['rss_mb_peak']}){at_exit}")
     growth = p.get("rss_growth_mb_per_min")
     t.add_row("Memory growth", "n/a (too few samples)" if growth is None
               else f"{growth:+.2f} MB/min")
