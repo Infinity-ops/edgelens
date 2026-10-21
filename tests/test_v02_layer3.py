@@ -95,7 +95,11 @@ def test_all_assumptions_hold_and_the_verdict_is_the_guarantees(jetson_run):
 
 # E1 "done when": each assumption, deliberately violated, gives INCONCLUSIVE.
 VIOLATIONS = {
-    "board": lambda r: r["environment"].update(board="NVIDIA Jetson Nano Developer Kit"),
+    # board AND module: on a real Jetson the result also carries the module
+    # read from the device tree ("Jetson AGX Orin 32GB"), which the board
+    # assumption matches too — a fake Nano must not keep the Orin's module
+    "board": lambda r: r["environment"].update(board="NVIDIA Jetson Nano Developer Kit",
+                                               module="Jetson Nano (devkit)"),
     "power_mode": lambda r: r["environment"].update(power_mode={"id": 1, "name": "MODE_15W"}),
     "clocks_pinned": lambda r: r["environment"].update(gpu_clocks_locked=False),
     "input_period_ms": lambda r: r["requirements"].update(period_ms=10.0),
@@ -125,7 +129,9 @@ def test_each_violated_assumption_gives_inconclusive(jetson_run, key):
 
 
 @pytest.mark.parametrize("key,remove", [
-    ("power_mode", lambda r: r["environment"].update(power_mode=None)),
+    # power_mode_status too: an AGX Orin whose nvpmodel says "power mode is not
+    # set" records that, and the contract then (rightly) says VIOLATED
+    ("power_mode", lambda r: r["environment"].update(power_mode=None, power_mode_status=None)),
     ("clocks_pinned", lambda r: r["environment"].update(cpu_clocks_locked=None)),
     ("max_background_cpu_pct", lambda r: r["telemetry"].pop("background")),
     ("max_start_temp_c", lambda r: (r["telemetry"].pop("start_temp_c"),
@@ -468,9 +474,11 @@ def test_ci_gate_passes_and_publishes_the_evidence(tmp_path):
 
 
 def test_ci_gate_inconclusive_when_the_board_is_not_the_assumed_one(tmp_path):
-    res, text, out = _gate(tmp_path, "contract: ci-smoke\nassumes:\n  board: AGX Orin\n"
+    # a board no test machine is: "AGX Orin" HOLDS when the suite runs on an
+    # AGX Orin (found on one), and the gate then rightly measures and passes
+    res, text, out = _gate(tmp_path, "contract: ci-smoke\nassumes:\n  board: AGX Thor\n"
                            "guarantees:\n  p99_ms: {limit: 20, id: R-1}\n", "orin")
-    assert res.returncode == 2, res.stdout        # stopped before measuring: not an Orin
+    assert res.returncode == 2, res.stdout        # stopped before measuring: not that board
     assert "INCONCLUSIVE" in text and "board" in text.lower()
     assert not (out / "run.json").exists()
 

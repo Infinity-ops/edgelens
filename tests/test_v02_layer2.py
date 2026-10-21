@@ -199,8 +199,10 @@ def test_cli_periodic_and_compare_tradeoff(tmp_path):
         assert saved["periodic"]["periods"][0]["period_ms"] == 30.0
     res = runner.invoke(app, ["compare", str(tmp_path / "a.json"), str(tmp_path / "b.json")])
     assert "Trade-off" in res.output
+    # a limit every board meets (30 ms at 100 W = 3000 mJ): 100 mJ FAILED on an
+    # AGX Orin, rightly — it idles at ~5.7 W, ~170 mJ per 30 ms period
     res = runner.invoke(app, ["validate", str(tmp_path / "a.json"), "--max-energy-per-period-mj",
-                              "100"])
+                              "3000"])
     assert res.exit_code in (0, 2)          # 2 without a power sensor: NOT_MEASURED, never PASS
 
 

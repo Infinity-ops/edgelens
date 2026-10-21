@@ -351,7 +351,9 @@ print(r["iterations"], m["received"], m["lost"], r["latency"])
 sys.exit(0 if r["iterations"] == 300 and m["lost"] == 0 else 1)
 EOF
 else
-  skip "S1 C++ markers" "no C++ compiler (sudo apt install g++)"
+  if command -v apt-get >/dev/null 2>&1; then CXX_HINT="sudo apt install g++"
+  else CXX_HINT="no apt on this image: add a C++ compiler to the image (Yocto: packagegroup-core-buildessential)"; fi
+  skip "S1 C++ markers" "no C++ compiler ($CXX_HINT)"
 fi
 run edgelens record --deadline-ms 50 --save "$OUT/py.json" -- python3 examples/markers/python_app.py 200
 py "$OUT/py.json" <<'EOF' >>"$OUT/steps.log" 2>&1 && echo "PASS  S1 Python markers — 200 iterations, 0 lost" >>"$OUT/SUMMARY.txt" || echo "FAIL  S1 Python markers (see steps.log)" >>"$OUT/SUMMARY.txt"
