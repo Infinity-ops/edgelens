@@ -560,6 +560,7 @@ class TelemetryRecorder:
             self._stop_event.wait(self.interval_s)
 
     def stop(self):
+        self._stop_mono_ns = _now_ns()
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
@@ -575,6 +576,31 @@ class TelemetryRecorder:
         except Exception:
             self._bg = None
         return self.summarize()
+
+    def _starvation(self, n, costs, cpu_costs):
+        """Too few samples for the recording's length, or None.
+
+        The sampler is a thread: every sysfs read releases Python's GIL, and a
+        pipeline that runs pure Python never hands it back before the 5 ms
+        switch interval. Found on an AGX Orin: a ~1 s pure-Python benchmark got
+        2 samples, the first finishing at the very end (sandbox: 0.98 ms CPU but
+        34.8 ms wall per sample). Pipelines in onnxruntime / numpy release the
+        GIL and are not affected. Reported, not hidden: telemetry figures from
+        a starved recording describe a few moments, not the run."""
+        start, stop = self.start_mono_ns, getattr(self, "_stop_mono_ns", None)
+        if start is None or stop is None or not self.interval_s:
+            return None
+        elapsed = (stop - start) / 1e9
+        expected = elapsed / self.interval_s
+        if expected < 5 or n >= 0.5 * expected:
+            return None
+        wall = statistics.mean(costs) if costs else None
+        cpu = statistics.mean(cpu_costs) if cpu_costs else None
+        return {"samples": n, "expected": int(expected), "recording_s": round(elapsed, 2),
+                "sampler_wall_ms_mean": round(wall, 3) if wall is not None else None,
+                "sampler_cpu_ms_mean": round(cpu, 3) if cpu is not None else None,
+                "likely_cause": ("the pipeline holds Python's GIL (pure-Python work); the "
+                                 "sampler thread waits for it on every sensor read")}
 
     def series(self):
         """Compact timestamped series. t_s is relative to the recording start
@@ -653,6 +679,7 @@ class TelemetryRecorder:
             # per sample, and the wall time a sample took (incl. GIL waits).
             "sampler_cpu_ms_mean": round(statistics.mean(cpu_costs), 3) if cpu_costs else None,
             "sampler_wall_ms_mean": round(statistics.mean(costs), 3) if costs else None,
+            "starved": self._starvation(n, costs, cpu_costs),
             "cpu_percent_mean": mean(cpu_vals),
             "cpu_percent_peak": peak(cpu_vals),
             "gpu_percent_mean": mean(gpu_vals),

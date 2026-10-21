@@ -249,7 +249,11 @@ def _print_benchmark(result):
     if not en.get("available") and pw.get("reason") == "permission_denied":
         console.print(f"[yellow]Power: sensor is root-only, not measured. Fix: "
                       f"{pw.get('fix')}  (details: edgelens doctor)[/yellow]")
-    if en.get("available"):
+    if en.get("available") and en.get("low_confidence"):
+        # a number from one or two readings is not a measurement: don't print it
+        # (seen: "0.00 mJ/iteration · 1000000.0 iterations/J" from 2 samples)
+        console.print(f"[yellow]Energy: not measured — {en['low_confidence']}[/yellow]")
+    elif en.get("available"):
         line = (f"[bold]Power:[/bold] {en['power_w_mean']} W mean · "
                 f"[bold]Energy:[/bold] {en['energy_per_iteration_j']*1000:.2f} mJ/iteration · "
                 f"{en['iterations_per_joule']} iterations/J [dim]({en['method']})[/dim]")
@@ -257,8 +261,6 @@ def _print_benchmark(result):
             line += (f" · dynamic {en['dynamic_energy_per_iteration_j']*1000:.2f} mJ/it "
                      f"over {en['idle_power_w']} W idle")
         console.print(line)
-        if en.get("low_confidence"):
-            console.print(f"[yellow]Energy: {en['low_confidence']}[/yellow]")
 
     tel = result.get("telemetry", {})
     if tel:
@@ -269,6 +271,13 @@ def _print_benchmark(result):
             f"GPU mean {tel.get('gpu_percent_mean')}% / peak {tel.get('gpu_percent_peak')}% · "
             f"peak temp {tel.get('max_temp_c')}C[/dim]"
         )
+        st = tel.get("starved")
+        if st:
+            console.print(
+                f"[yellow]Telemetry starved: {st['samples']} sample(s) in {st['recording_s']} s "
+                f"(expected ~{st['expected']}); one sample took {st['sampler_wall_ms_mean']} ms "
+                f"wall for {st['sampler_cpu_ms_mean']} ms CPU — {st['likely_cause']}. CPU, GPU, "
+                f"temperature and power above describe a few moments, not the run.[/yellow]")
     ident = result.get("identity") or {}
     if ident:
         console.print(f"[dim]environment_id {ident.get('environment_id')} · experiment_id "
