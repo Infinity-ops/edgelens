@@ -18,8 +18,41 @@ QUICK="${EDGELENS_VALIDATE_QUICK:-0}"
 REPEATS=5; ITER=2000; [ "$QUICK" = "1" ] && { REPEATS=3; ITER=300; }
 STEP_TIMEOUT="${EDGELENS_STEP_TIMEOUT:-900}"   # no single step may run longer (s)
 # Portable to BusyBox userlands (Yocto/OE4Tegra images): `head -n N` instead
-# of `head -N`, and `timeout -k` only where the timeout in PATH accepts it
-# (GNU and recent BusyBox do; `--kill-after=` is GNU only).
+# of `head -N`; `timeout -k` only where the installed timeout accepts it
+# (`--kill-after=` is GNU only); and a fallback when there is no `timeout`
+# at all (an AGX Orin Yocto image: "timeout: command not found", which the
+# preflight then misreported as a broken onnxruntime).
+if ! command -v timeout >/dev/null 2>&1; then
+  # GNU-compatible enough for this script: exit 124 on timeout, 128+N when the
+  # command dies of signal N, stdin/stdout passed through. Python, because
+  # the shell's own job control can't wait with a time limit portably.
+  _EL_TIMEOUT_PY='import subprocess, sys
+secs, grace, cmd = float(sys.argv[1]), float(sys.argv[2]), sys.argv[3:]
+try:
+    p = subprocess.Popen(cmd)
+except OSError as e:
+    sys.stderr.write("timeout: %s: %s\n" % (cmd[0], e.strerror)); sys.exit(127)
+def code(rc):
+    return 128 - rc if rc < 0 else rc
+try:
+    sys.exit(code(p.wait(timeout=secs)))
+except subprocess.TimeoutExpired:
+    p.terminate()
+    try:
+        p.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        p.kill(); p.wait()
+    sys.exit(124)
+except KeyboardInterrupt:
+    p.terminate(); p.wait(); sys.exit(130)'
+  timeout() {
+    local grace=5
+    if [ "$1" = "-k" ]; then grace="$2"; shift 2; fi
+    local secs="$1"; shift
+    python3 -c "$_EL_TIMEOUT_PY" "$secs" "$grace" "$@"
+  }
+  echo "note: no 'timeout' command on this system; using a Python fallback" >&2
+fi
 if timeout -k 1 1 true 2>/dev/null; then TIMEOUT_KILL="-k 15"; else TIMEOUT_KILL=""; fi
 export PYTHONFAULTHANDLER=1                     # a crash prints WHERE it happened
 log() { echo "== $*" | tee -a "$OUT/steps.log"; }
@@ -171,7 +204,12 @@ print("onnxruntime CUDA probe:", kind, cuda_probe()[1] or "")
 sys.exit(2 if problems else (3 if kind in ("crash", "hang") else 0))
 EOF
 PRE=$?
-if [ "$PRE" != 0 ] && [ "$PRE" != 3 ]; then
+if [ "$PRE" = 124 ] || [ "$PRE" = 126 ] || [ "$PRE" = 127 ]; then
+  # not an onnxruntime finding: the check itself could not run
+  echo "!! Preflight could not run (exit $PRE: $( [ "$PRE" = 124 ] && echo 'timed out after 300 s' || echo 'command not found or not executable')). See: tail $OUT/steps.log" | tee -a "$OUT/SUMMARY.txt"
+  tail -n 3 "$OUT/steps.log"
+  exit 2
+elif [ "$PRE" != 0 ] && [ "$PRE" != 3 ]; then
   echo "!! Preflight failed: the onnxruntime installation is broken (details and the fix:" | tee -a "$OUT/SUMMARY.txt"
   echo "!! tail $OUT/steps.log, or run 'edgelens doctor'). Fix it, then rerun this script." | tee -a "$OUT/SUMMARY.txt"
   # only the check's own findings (steps.log also holds the "==" lines already on screen)
