@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — 0.2.0.dev4 (Layers 0–3 of the v0.2 roadmap)
+
+### Fixed — found on an AGX Orin 32GB (Yocto/OE4Tegra)
+
+- soak: a 5-minute run WITHOUT a leak (+0.9 MB warm-up) was reported as LEAK
+  SUSPECTED. A leak now also needs >= 8 MB and >= 5% real growth; below
+  that, "growing — too little to call a leak; run longer".
+- benchmark: "Telemetry starved" warning when a pure-Python pipeline keeps
+  the sampler from running; energy from < 3 power samples is "not measured".
+- doctor/selftest/contracts: unset system clock warning; power mode, clock
+  pinning and install advice for images without nvpmodel, jetson_clocks or
+  apt; the summed power rails are listed; board assumptions match the
+  module name (e.g. "Jetson AGX Orin 32GB").
+- validate_on_jetson.sh runs with BusyBox head/tail/timeout (needs bash).
+- doctor/contracts: "power mode is not set" (nvpmodel without a mode) is
+  reported as such; a contract requiring a mode is VIOLATED, not "not verified".
+- validate_on_jetson.sh runs without a `timeout` command (BusyBox images) and no
+  longer reports that as a broken onnxruntime.
+- tests: six tests no longer assume a non-Orin host or an idle machine.
+
 ### Added — Layer 3: evidence and workflow
 
 - **Assumption contracts (E1):** `validate --contract c.yaml` checks
@@ -342,16 +362,3 @@ Jetson hardware — see docs/jetson.md for the rows still pending.
 - `doctor` shows the module and SoC from the part number
   (e.g. `Jetson AGX Orin 32GB · tegra234`) and says why L4T is missing
   instead of "not detected".
-
-### Fixed — found on an AGX Orin 32GB (Yocto/OE4Tegra)
-
-- soak: a 5-minute run WITHOUT a leak (+0.9 MB warm-up) was reported as LEAK
-  SUSPECTED. A leak now also needs >= 8 MB and >= 5% real growth; below
-  that, "growing — too little to call a leak; run longer".
-- benchmark: "Telemetry starved" warning when a pure-Python pipeline keeps
-  the sampler from running; energy from < 3 power samples is "not measured".
-- doctor/selftest/contracts: unset system clock warning; power mode, clock
-  pinning and install advice for images without nvpmodel, jetson_clocks or
-  apt; the summed power rails are listed; board assumptions match the
-  module name (e.g. "Jetson AGX Orin 32GB").
-- validate_on_jetson.sh runs with BusyBox head/tail/timeout (needs bash).
