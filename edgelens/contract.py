@@ -87,8 +87,14 @@ def _suggest(key, known):
 def _check_keys(where, obj, known):
     for k in obj:
         if k not in known:
+            hint = ""
+            if " " in str(k) or obj.get(k) is None:
+                # `note: shared board, clocks left as configured` inside { }: the
+                # comma ended the value and started a "key" (seen on an Orin)
+                hint = (" If this is part of a value: a comma inside { ... } starts a new key; "
+                        "put that value in quotes, e.g. note: \"a, b\".")
             raise ContractError(f"Unknown key '{k}' in {where}.{_suggest(k, known)} "
-                                f"Known: {', '.join(known)}")
+                                f"Known: {', '.join(known)}.{hint}")
 
 
 def _spec(section, key, raw, extra=()):

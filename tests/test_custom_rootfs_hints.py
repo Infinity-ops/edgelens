@@ -116,3 +116,12 @@ def test_unpin_advice_without_jetson_clocks():
                               jetson_clocks=False)
     c = [c for c in checks if c["name"] == "Clocks pinned"][0]
     assert "jetson_clocks" not in c["advice"] and "min_freq" in c["advice"]
+
+
+def test_contract_comma_in_flow_mapping_hint():
+    import pytest
+    with pytest.raises(contract.ContractError) as e:
+        contract.parse({"contract": "x", "guarantees": {"p99_ms": 10},
+                        "assumes": {"clocks_pinned": {"value": False, "note": "shared board",
+                                                      "clocks left as configured": None}}})
+    assert "put that value in quotes" in str(e.value)
