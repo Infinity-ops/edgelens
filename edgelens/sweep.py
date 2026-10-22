@@ -130,6 +130,30 @@ def load_inputs(path, onnx_pipe):
     return [{name: out[name][i] for name in out} for i in range(n)]
 
 
+def load_real_samples(path, onnx_pipe, n):
+    """(samples, indices): n samples spread evenly over a real-input file
+    (.npy / .npz / raw .bin, see edgelens.benchmark.real_inputs), so a short
+    evaluation covers the whole recording rather than its first n windows."""
+    from .benchmark.real_inputs import InputError, RealInputs
+    try:
+        ri = RealInputs(path, onnx_pipe.inputs)
+    except InputError as e:
+        raise ValueError(str(e)) from e
+    m = min(n or ri.n, ri.n)
+    idx = np.unique(np.linspace(0, ri.n - 1, m).round().astype(int))
+    return [ri.sample(int(k)) for k in idx], idx, ri.n
+
+
+def quality_of(outputs, output_names, labels):
+    """RMSE / accuracy of one backend's outputs against labels (first output)."""
+    from .benchmark.real_inputs import Predictions
+    first = outputs[output_names[0]]
+    pr = Predictions(len(labels))
+    for k in range(len(labels)):
+        pr.record(k, [first[k]])
+    return pr.quality(labels)
+
+
 def export_inputs(path, samples):
     names = list(samples[0])
     np.savez(path, **{name: np.stack([s[name] for s in samples]) for name in names})
@@ -271,8 +295,13 @@ def compare_outputs(ref, cand, atol=1e-5, rtol=1e-4, decision="auto", threshold=
 def run_sweep(model, backends, reference="cpu", iterations=300, input_shapes=None,
               inputs_path=None, eval_samples=50, export_inputs_path=None, external=None,
               atol=1e-5, rtol=1e-4, decision="auto", threshold=None, min_agreement=1.0,
-              deadline_ms=None, trt_cache=None, save_stem=None, progress=None):
-    """Returns (summary, {backend: result_document})."""
+              deadline_ms=None, trt_cache=None, save_stem=None, progress=None,
+              threads=None, labels_path=None):
+    """Returns (summary, {backend: result_document}).
+
+    threads: onnxruntime intra-op threads for every backend (None = default).
+    labels_path: one label per sample of inputs_path; adds each backend's RMSE
+    (or accuracy) against ground truth to its row and result."""
     from .benchmark.onnx_pipeline import OnnxStagePipeline
     from .core.harness import run_harness
     from .core.pipeline import Pipeline
@@ -281,6 +310,9 @@ def run_sweep(model, backends, reference="cpu", iterations=300, input_shapes=Non
     order = [reference] + [b for b in backends if b != reference]
     rows, results = [], {}
     ref_out, samples, output_names, inputs_source = None, None, None, None
+    labels = None
+    if labels_path and not inputs_path:
+        raise ValueError("--labels needs --inputs: labels belong to real input samples.")
 
     for name in order:
         provider, opts = backend_spec(name, trt_cache)
@@ -297,7 +329,8 @@ def run_sweep(model, backends, reference="cpu", iterations=300, input_shapes=Non
         t0 = time.perf_counter()
         try:
             onnx = OnnxStagePipeline(model, provider=provider, input_shapes=input_shapes,
-                                     provider_options=opts or None)
+                                     provider_options=opts or None, threads=threads,
+                                     inputs=inputs_path, inputs_order="spread")
         except RuntimeError as e:
             row.update(status="unavailable", reason=str(e).splitlines()[0][:300])
             rows.append(row)
@@ -308,8 +341,14 @@ def run_sweep(model, backends, reference="cpu", iterations=300, input_shapes=Non
         row["session_init_s"] = round(time.perf_counter() - t0, 3)
         if samples is None:
             if inputs_path:
-                samples = load_inputs(inputs_path, onnx)[:eval_samples or None]
-                inputs_source = f"file:{inputs_path}"
+                samples, idx, total = load_real_samples(inputs_path, onnx, eval_samples)
+                inputs_source = f"file:{inputs_path} ({len(samples)} of {total} samples, spread)"
+                if labels_path:
+                    from .benchmark.real_inputs import InputError, load_labels
+                    try:
+                        labels = load_labels(labels_path, total)[idx]
+                    except InputError as e:
+                        raise ValueError(str(e)) from e
             else:
                 samples = synthetic_inputs(onnx, eval_samples)
                 inputs_source = "synthetic (seeded random)"
@@ -333,28 +372,38 @@ def run_sweep(model, backends, reference="cpu", iterations=300, input_shapes=Non
         else:
             eq = compare_outputs(ref_out, outputs, atol, rtol, decision, threshold, min_agreement)
         eq.update(reference_backend=reference, inputs=inputs_source, samples=len(samples))
+        quality = quality_of(outputs, output_names, labels) if labels is not None else None
+        if quality is not None:
+            quality["labels"] = labels_path
 
         say(f"{name}: timing {iterations} iterations...")
         pipe = Pipeline.from_stage_fns(onnx.stage_fns(), name=f"onnx-{name}", pack="vision",
                                        model_inputs=onnx.input_summary(),
                                        provider=onnx.provider, provider_options=opts,
-                                       provider_fallbacks=onnx.provider_fallbacks)
+                                       provider_fallbacks=onnx.provider_fallbacks,
+                                       **onnx.config())
         res = run_harness(pipe, iterations=iterations, warmup=10, deadline_ms=deadline_ms,
                           pipeline_source=f"onnxruntime:{name} ({model})", model_path=model)
         res["backend"] = {"name": name, "provider": provider, "options": opts,
                           "session_init_s": row["session_init_s"]}
         res["equivalence"] = eq
+        if quality is not None:
+            res["quality"] = quality
         results[name] = res
         rows.append(_summary_row(row, res, eq))
+        if quality is not None:
+            rows[-1].update(rmse=quality.get("rmse"), accuracy=quality.get("accuracy"))
         if save_stem:
             _write(f"{save_stem}.{name}.json", res)
 
     for spec in external or []:
         rows.append(_external_row(spec, ref_out, output_names, samples, reference, atol, rtol,
-                                  decision, threshold, min_agreement, inputs_source))
+                                  decision, threshold, min_agreement, inputs_source,
+                                  labels=labels))
 
     summary = {"kind": "edgelens-sweep", "model": str(model), "reference": reference,
                "inputs": inputs_source, "samples": len(samples) if samples else 0,
+               "labels": labels_path, "threads": threads or "default",
                "iterations": iterations,
                "tolerance": {"atol": atol, "rtol": rtol}, "decision": decision,
                "threshold": threshold, "min_agreement": min_agreement, "backends": rows}
@@ -380,7 +429,7 @@ def _summary_row(row, res, eq):
 
 
 def _external_row(spec, ref_out, output_names, samples, reference, atol, rtol, decision,
-                  threshold, min_agreement, inputs_source):
+                  threshold, min_agreement, inputs_source, labels=None):
     name, outputs_path, timing_path = spec
     row = {"backend": name, "provider": "external", "options": {}}
     try:
@@ -393,6 +442,9 @@ def _external_row(spec, ref_out, output_names, samples, reference, atol, rtol, d
                decision_agreement=eq["decision_agreement"],
                decisions_flipped=eq["decisions_flipped"], equivalence=eq,
                outputs_file=str(outputs_path))
+    if labels is not None:
+        q = quality_of(cand, output_names, labels)
+        row.update(rmse=q.get("rmse"), accuracy=q.get("accuracy"), quality=q)
     if timing_path:
         try:
             t = json.loads(Path(timing_path).read_text())

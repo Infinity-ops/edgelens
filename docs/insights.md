@@ -25,7 +25,10 @@ edgelens sweep --model lstm.onnx --backends cpu,cuda,tensorrt,tensorrt-fp16,dla
 
 Use **real inputs** (`--inputs data.npz`, one array per model input, first
 dimension = sample): agreement on random data says little about real
-decisions, and the report says so.
+decisions, and the report says so. With `--labels y.npy` (one per sample)
+each backend is also scored against the ground truth (RMSE or accuracy,
+"vs labels" column): agreeing with the CPU is not the same as being right.
+`--threads N` sets onnxruntime's intra-op threads for every backend.
 
 **External runtimes (EDDL, C++):** `--export-inputs inputs.npz` writes the
 evaluation inputs; run them through your runtime, save its outputs as `.npz`
@@ -83,7 +86,8 @@ rebuilds the analysis). Findings:
 | --- | --- |
 | LATENCY_DRIFT | p50/p99 trend significant (t-test on the slope) AND >= 10% start to end |
 | THERMAL_THROTTLING | a cooling device that limits frequency active (fans, Tegra voltage floors such as CORE-floor / DFLL-floor and voltage-temperature scaling such as vdd-gpu-vts are not throttling and are ignored), or the CPU/GPU clock cap (scaling_max_freq / devfreq max_freq) below 95% of the first window's — reasons listed per window. A clock that is merely low because the board is idle is not throttling |
-| MEMORY_LEAK | process RSS grows significantly (t-test on the slope) by at least max(5 MB/h, 1% of RSS per hour) |
+| MEMORY_LEAK | the process's **private** memory (RssAnon) grows significantly (t-test on the slope) by at least max(5 MB/h, 1% of RSS per hour). Memory-mapped files (RssFile: a model or a data file being paged in) are reported as "Memory-mapped files" and are not a leak; without RssAnon (non-Linux) RSS is used |
+| LATENCY_LEVELS | window p50s fall into two levels at least 2x apart (each seen in 2+ windows): the table names both levels, how many windows were slow, how often it switched, and the CPU clock per level — usually DVFS or another process, not the model |
 | GPU_MEMORY_GROWTH | Jetson NvMap (the GPU's share of unified memory) grows — invisible in RSS |
 | OUT_OF_MEMORY_RISK | available memory falls; projected to run out within 24 h |
 | SWAP_IN_USE | swap grew during the run |

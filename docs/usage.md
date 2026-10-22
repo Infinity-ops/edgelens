@@ -16,6 +16,29 @@ Every model input is fed with its declared dtype. Dynamic dimensions of
 non-image inputs are never guessed: EdgeLens asks for `--input-shape`
 rather than benchmarking a workload that doesn't exist.
 
+### Real inputs, accuracy and threads
+
+Synthetic inputs time a model; they say nothing about what it answers. Give
+it the windows you already prepared, and their labels:
+
+```bash
+edgelens benchmark --model lstm.onnx --inputs x.bin --labels y.bin \
+    --threads 4 --iterations 2437 --deadline-ms 1000 --save lstm.json
+edgelens validate lstm.json --p99-ms 50 --max-rmse 0.19
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--inputs` | `.npy` (memory-mapped), `.npz` (one array per input name) or raw little-endian `.bin/.raw/.f32` in the model's dtype. One sample per iteration, first dimension = sample; `[N, 100, 150]` feeds a `[1, 100, 150]` input. Fed **as given** (no normalisation). The file's SHA-256 is in the result, so `compare` can tell a data change from a setup change |
+| `--labels` | one label per sample (`.npy`, raw float32 `.bin`, `.csv/.txt`). Single-value output: RMSE, MAE, worst error and RMSE per label level. Integer labels and a vector output: accuracy (argmax). Requirements: `max_rmse`, `min_accuracy` |
+| `--inputs-order` | `sequential` (recording order: soaks, deployment) or `spread` (a fixed stride that visits every sample once per pass, so a short run already covers every label level) |
+| `--threads` | onnxruntime intra-op threads (default: one per core, all spinning). Recorded in the result; on the AGX Orin it changed CPU load and energy far more than latency |
+
+The quality block says whether the run made a **full pass** over the data;
+an RMSE over 200 of 2437 windows is printed with a warning. The same options
+work for `periodic`, `soak` and `contract run`; `sweep` takes `--labels`
+and `--threads` and adds a "vs labels" column per backend.
+
 ## 2. Your own pipeline, EdgeLens drives the loop (harness mode)
 
 ```python

@@ -88,6 +88,35 @@ def _tensorrt_cell(sw):
 
 TINY_STAGE_MS = 0.005     # per-stage % change is not shown below this
 
+# --model with real data (edgelens.benchmark.real_inputs); shared by benchmark,
+# periodic, soak and contract run
+INPUTS_HELP = ("--model only: real input samples (.npy, .npz, or raw float32 .bin), first "
+               "dimension = sample; fed as given, one per iteration. For raw CSV recordings "
+               "use `edgelens replay`.")
+LABELS_HELP = ("With --inputs: one ground-truth value per sample (.npy, raw float32 .bin, "
+               ".csv). Adds accuracy (RMSE, MAE, per level; or accuracy for classes) to the "
+               "result, which `validate --max-rmse` and contracts check.")
+THREADS_HELP = ("--model only: onnxruntime intra-op threads (default: one per core). On an "
+                "AGX Orin 4 of 8 gave the same latency at half the CPU.")
+ORDER_HELP = ("With --inputs: sequential (recording order) or spread (every sample once per "
+              "pass, scattered, so a short run sees the whole recording).")
+
+
+def _print_quality(q):
+    if not q:
+        return
+    part = (f"{q['samples_predicted']} of {q['samples']} samples"
+            + ("" if q.get("full_pass") else " [yellow](not a full pass: --iterations "
+               f"{q['samples']} or --inputs-order spread)[/yellow]"))
+    if q.get("rmse") is not None:
+        console.print(f"[bold]Accuracy:[/bold] RMSE {q['rmse']} · MAE {q['mae']} · worst "
+                      f"|error| {q['max_abs_error']} over {part}")
+        for lv in q.get("per_level") or []:
+            console.print(f"[dim]  label {lv['label']:g}: {lv['samples']} samples, RMSE "
+                          f"{lv['rmse']}, mean prediction {lv['mean_prediction']}[/dim]")
+    elif q.get("accuracy") is not None:
+        console.print(f"[bold]Accuracy:[/bold] {q['accuracy'] * 100:.2f}% over {part}")
+
 
 def _print_gc(gcb):
     """One line on Python GC during the timed loop; yellow when it hit a deadline."""
@@ -239,6 +268,7 @@ def _print_benchmark(result):
     gcb = result.get("gc")
     if gcb:
         _print_gc(gcb)
+    _print_quality(result.get("quality"))
     bl = result.get("backlog")
     if bl:
         console.print(f"[dim]Backlog at {bl['period_ms']} ms period ({bl['method']}): "
@@ -521,6 +551,10 @@ def benchmark(
                                 "the timed loop: normal (as in your app; pauses are "
                                 "recorded), freeze (gc.freeze() after warmup, like a tuned "
                                 "real-time app) or off (lower bound only)."),
+    inputs: str = typer.Option(None, "--inputs", help=INPUTS_HELP),
+    labels: str = typer.Option(None, "--labels", help=LABELS_HELP),
+    threads: int = typer.Option(None, "--threads", help=THREADS_HELP),
+    inputs_order: str = typer.Option("sequential", "--inputs-order", help=ORDER_HELP),
 ):
     """Run a benchmark; measure per-stage latency, tail, deadlines, power and energy."""
     from .core.gcwatch import GC_MODES
@@ -552,6 +586,7 @@ def benchmark(
                     input_shapes=parse_input_shapes(input_shape),
                     deadline_ms=deadline_ms, period_ms=period_ms, pace=pace,
                     idle_baseline_s=idle_baseline or None, gc_mode=gc_mode,
+                    inputs=inputs, labels=labels, threads=threads, inputs_order=inputs_order,
                 )
             except RuntimeError as e:
                 console.print(f"[red]{e}[/red]")
@@ -748,13 +783,25 @@ def compare(
             "These runs were taken in DIFFERENT environments, so differences below may "
             "come from the environment, not from your change:\n" + lines,
             title="⚠️  Environment mismatch", style="yellow", border_style="yellow"))
-    if result.get("requirements_differences"):
-        lines = "\n".join(f"  {d['label']}: {d['before']} -> {d['after']}"
-                          for d in result["requirements_differences"])
+    diffs = result.get("requirements_differences") or []
+    req = [d for d in diffs if d.get("kind") not in ("setup", "data")]
+    setup = [d for d in diffs if d.get("kind") == "setup"]
+    data = [d for d in diffs if d.get("kind") == "data"]
+    if req:
+        lines = "\n".join(f"  {d['label']}: {d['before']} -> {d['after']}" for d in req)
         console.print(Panel(
             "These runs measured DIFFERENT requirements, so deadline/miss figures are "
             "not comparable:\n" + lines,
             title="ℹ️  Different experiments", style="cyan", border_style="cyan"))
+    if data:
+        lines = "\n".join(f"  {d['label']}: {d['before']} -> {d['after']}" for d in data)
+        console.print(Panel("The runs used DIFFERENT input data: a latency or accuracy change "
+                            "may come from the data, not the change you made.\n" + lines,
+                            title="ℹ️  Different data", style="cyan", border_style="cyan"))
+    if setup:
+        lines = "\n".join(f"  {d['label']}: {d['before']} -> {d['after']}" for d in setup)
+        console.print(f"[cyan]Setup changed between the runs (what this comparison shows the "
+                      f"effect of):[/cyan]\n[cyan]{lines}[/cyan]")
     if env["comparable"] is None:
         console.print("[dim]Environment not recorded in one or both files (pre-v0.1.0); "
                       "cannot check that the runs are comparable.[/dim]")
@@ -937,7 +984,9 @@ def validate(
     max_missed_events: int = typer.Option(None, "--max-missed-events",
                                           help="Max events that never raised the alarm."),
     max_rmse: float = typer.Option(None, "--max-rmse", help="Max output error vs ground "
-                                   "truth (replay / detect)."),
+                                   "truth (replay / detect, or --model --inputs --labels)."),
+    min_accuracy: float = typer.Option(None, "--min-accuracy", help="Min class accuracy "
+                                       "(0..1) vs --labels (--model --inputs --labels)."),
     contract: str = typer.Option(None, "--contract", help="Assumption contract (.yaml / "
                                  ".json): requirements AND the conditions they hold under. "
                                  "A violated assumption gives INCONCLUSIVE, never PASS. "
@@ -961,7 +1010,8 @@ def validate(
         max_throttled_windows=max_throttled_windows,
         max_energy_per_period_mj=max_energy_per_period_mj,
         max_time_to_detect_s=max_time_to_detect_s, max_false_alarms_per_h=max_false_alarms_per_h,
-        max_missed_events=max_missed_events, max_rmse=max_rmse).items() if v is not None}
+        max_missed_events=max_missed_events, max_rmse=max_rmse,
+        min_accuracy=min_accuracy).items() if v is not None}
     if contract:
         from .cli_evidence import validate_with_contract
         if flags:
@@ -981,7 +1031,8 @@ def validate(
             "max_energy_per_period_mj": max_energy_per_period_mj,
             "max_time_to_detect_s": max_time_to_detect_s,
             "max_false_alarms_per_h": max_false_alarms_per_h,
-            "max_missed_events": max_missed_events, "max_rmse": max_rmse}
+            "max_missed_events": max_missed_events, "max_rmse": max_rmse,
+            "min_accuracy": min_accuracy}
     try:
         verdict = run_validate(data, reqs)
     except ValueError as e:

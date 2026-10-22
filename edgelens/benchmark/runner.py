@@ -30,7 +30,8 @@ def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced"
                   model_path=None, provider=None, stage_fns=None, pipeline_path=None,
                   telemetry_interval_s=0.1, input_shapes=None, pipeline=None,
                   deadline_ms=None, period_ms=None, pace=False, idle_baseline_s=None,
-                  source=None, gc_mode="normal"):
+                  source=None, gc_mode="normal", inputs=None, labels=None, threads=None,
+                  inputs_order=None):
     """Run a benchmark and return a result document
     (see edgelens.core.result for the shape).
 
@@ -58,13 +59,16 @@ def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced"
         return result
 
     pipe, source_label, model = _resolve_pipeline(given, model_path, provider, stage_fns,
-                                                  pipeline_path, input_shapes, pipeline)
+                                                  pipeline_path, input_shapes, pipeline,
+                                                  inputs=inputs, labels=labels, threads=threads,
+                                                  inputs_order=inputs_order)
     try:
-        return pipe.run(iterations=iterations, warmup=warmup, source=source,
-                        deadline_ms=deadline_ms, period_ms=period_ms, pace=pace,
-                        telemetry_interval_s=telemetry_interval_s,
-                        idle_baseline_s=idle_baseline_s, pipeline_source=source_label,
-                        gc_mode=gc_mode)
+        result = pipe.run(iterations=iterations, warmup=warmup, source=source,
+                          deadline_ms=deadline_ms, period_ms=period_ms, pace=pace,
+                          telemetry_interval_s=telemetry_interval_s,
+                          idle_baseline_s=idle_baseline_s, pipeline_source=source_label,
+                          gc_mode=gc_mode)
+        return attach_quality(result, pipe)
     except StageError as e:
         raise RuntimeError(str(e)) from e
     except ValueError as e:
@@ -72,13 +76,16 @@ def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced"
 
 
 def _resolve_pipeline(given, model_path, provider, stage_fns, pipeline_path, input_shapes,
-                      pipeline):
+                      pipeline, inputs=None, labels=None, threads=None, inputs_order=None):
     if len(given) > 1:
         raise RuntimeError(
             f"Ambiguous pipeline source: got {', '.join(given)} together. "
             f"Pass exactly one of --model, --pipeline, or stage_fns=... / pipeline=... "
             f"from Python."
         )
+    if model_path is None and any(v for v in (inputs, labels, threads)):
+        raise RuntimeError("--inputs, --labels and --threads apply to --model runs; a --pipeline "
+                           "script feeds and configures its own model.")
     if pipeline is not None:
         return pipeline, f"pipeline:{pipeline.name}", None
     if stage_fns is not None:
@@ -92,11 +99,15 @@ def _resolve_pipeline(given, model_path, provider, stage_fns, pipeline_path, inp
         return pipe, f"custom pipeline ({pipeline_path})", None
     if model_path is not None:
         from .onnx_pipeline import OnnxStagePipeline
-        onnx = OnnxStagePipeline(model_path, provider=provider, input_shapes=input_shapes)
+        onnx = OnnxStagePipeline(model_path, provider=provider, input_shapes=input_shapes,
+                                 inputs=inputs, labels=labels, threads=threads,
+                                 inputs_order=inputs_order or "sequential")
         pipe = Pipeline.from_stage_fns(onnx.stage_fns(), name="onnx", pack="vision",
                                        model_inputs=onnx.input_summary(),
                                        provider=onnx.provider,
-                                       provider_fallbacks=onnx.provider_fallbacks)
+                                       provider_fallbacks=onnx.provider_fallbacks,
+                                       **onnx.config())
+        pipe._onnx = onnx                  # attach_quality() reads its predictions
         # identity needs the model hash: run() attaches identity, re-attach with it below
         pipe._model_path = model_path
         return pipe, f"onnxruntime:{onnx.provider} ({model_path})", model_path
@@ -110,6 +121,16 @@ def _resolve_pipeline(given, model_path, provider, stage_fns, pipeline_path, inp
         "EdgeLens does not fabricate hardware-mode results from a placeholder "
         "pipeline — see ROADMAP.md."
     )
+
+
+def attach_quality(result, pipe):
+    """result["quality"]: accuracy against --labels over the samples the run
+    predicted (warm-up included: those are real predictions too)."""
+    onnx = getattr(pipe, "_onnx", None)
+    q = onnx.quality() if onnx is not None else None
+    if q is not None:
+        result["quality"] = q
+    return result
 
 
 def _demo_result(iterations, scenario, deadline_ms):

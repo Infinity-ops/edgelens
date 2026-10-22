@@ -94,7 +94,8 @@ The same keys as the `edgelens validate` flags: `p50_ms`, `p95_ms`, `p99_ms`,
 `p99_9_ms`, `max_latency_ms`, `max_miss_ratio`, `min_fps`, `max_power_w`,
 `max_energy_mj`, `max_output_error`, `min_decision_agreement`, `max_temp_c`,
 `max_latency_drift_pct`, `max_mem_growth_mb_per_h`, `max_throttled_windows`,
-`max_energy_per_period_mj`. Each takes a number, or
+`max_energy_per_period_mj`, `max_rmse`, `min_accuracy` (with `--inputs` and
+`--labels`). Each takes a number, or
 `{limit: N, id: REQ-ID, note: text}`. `max_miss_ratio` also takes
 `deadline_ms`: misses counted against another deadline are NOT MEASURED.
 

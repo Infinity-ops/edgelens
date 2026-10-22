@@ -403,7 +403,20 @@ def pick_provider(prefer=None):
     return usable[0]
 
 
-def _session_with(model_path, provider, options=None):
+def session_options(threads=None):
+    """onnxruntime SessionOptions for a thread count, or None for its default
+    (one intra-op thread per core). Found on an AGX Orin: a 2 ms LSTM ran as
+    fast on 4 threads as on the default 8, at half the CPU and 18% less energy
+    per inference; at one window per second 4 threads cut p99 by 32%."""
+    if not threads:
+        return None
+    so = ort.SessionOptions()
+    so.intra_op_num_threads = int(threads)
+    so.inter_op_num_threads = 1
+    return so
+
+
+def _session_with(model_path, provider, options=None, sess_options=None):
     """(session, fallback_message). onnxruntime does not fail when a provider
     can't be enabled: it silently falls back to CPU (and prints an 'EP Error'
     banner). Return the session plus what it printed, so the caller can
@@ -414,7 +427,8 @@ def _session_with(model_path, provider, options=None):
     captured = io.StringIO()
     providers = [(provider, dict(options))] if options else [provider]
     with contextlib.redirect_stdout(captured):
-        session = ort.InferenceSession(model_path, providers=providers)
+        session = ort.InferenceSession(model_path, sess_options=sess_options,
+                                       providers=providers)
     return session, captured.getvalue().strip()
 
 
@@ -522,7 +536,11 @@ class OnnxStagePipeline:
     GPU_PROVIDERS = ("CUDAExecutionProvider", "TensorrtExecutionProvider")
 
     def __init__(self, model_path, provider=None, input_shape=None, input_shapes=None,
-                 provider_options=None):
+                 provider_options=None, inputs=None, labels=None, threads=None,
+                 inputs_order="sequential"):
+        """inputs / labels: file paths (see edgelens.benchmark.real_inputs);
+        threads: onnxruntime intra-op threads (None = its default)."""
+        inputs_path = inputs          # `inputs` is reused below for the model's inputs
         if ort is None:
             raise RuntimeError(
                 "onnxruntime is not installed. Install it with:\n"
@@ -564,12 +582,21 @@ class OnnxStagePipeline:
                           + [p for p in usable if p not in DEFAULT_PREFERENCE])
             strict = False
 
+        if threads is not None and int(threads) < 1:
+            raise RuntimeError("--threads must be 1 or more (leave it out for onnxruntime's "
+                               "default of one thread per core).")
+        self.threads = int(threads) if threads else None
+        sess_opts = session_options(self.threads)
         self.session = None
         for cand in candidates:
             try:
                 opts = provider_options if (provider_options and cand == provider) else None
-                session, banner = (_session_with(model_path, cand, opts) if opts
-                                   else _session_with(model_path, cand))
+                extra = {}
+                if opts:
+                    extra["options"] = opts
+                if sess_opts is not None:
+                    extra["sess_options"] = sess_opts
+                session, banner = _session_with(model_path, cand, **extra)
             except Exception as e:
                 raise RuntimeError(f"onnxruntime could not load '{model_path}': {e}") from e
             active = session.get_providers()
@@ -628,6 +655,23 @@ class OnnxStagePipeline:
             # capture bottleneck (found on real hardware).
             self._static_inputs[inp.name] = _synthetic_tensor(shape, dtype, rng)
 
+        from .real_inputs import InputError, Predictions, RealInputs, SampleOrder, load_labels
+        self.real = self.labels = self.preds = self.order = None
+        self.labels_path = labels
+        self._i = 0
+        self._k = None
+        try:
+            if inputs_path:
+                self.real = RealInputs(inputs_path, self.inputs)
+                self.order = SampleOrder(self.real.n, inputs_order)
+                self.preds = Predictions(self.real.n)
+                if labels:
+                    self.labels = load_labels(labels, self.real.n)
+            elif labels:
+                raise InputError("--labels needs --inputs: labels belong to real input samples.")
+        except InputError as e:
+            raise RuntimeError(str(e)) from e
+
         # Backward-compatible attributes (first input).
         self.input_name = self.inputs[0][0]
         self.input_shape = self.inputs[0][1]
@@ -644,17 +688,45 @@ class OnnxStagePipeline:
     def input_summary(self):
         return [{"name": n, "shape": list(s), "dtype": np.dtype(d).name} for n, s, d in self.inputs]
 
+    def config(self):
+        """What describes this run beyond the model: recorded in the result's
+        pipeline config (and so in experiment_id) and compared by `compare`."""
+        c = {"threads": self.threads or "default"}
+        if self.real is not None:
+            c["inputs"] = dict(self.real.describe(), order=self.order.order)
+            if self.labels is not None:
+                c["labels"] = self.labels_path
+        else:
+            c["inputs"] = "synthetic"
+        return c
+
+    def quality(self):
+        """Accuracy against the labels over the samples predicted so far."""
+        if self.labels is None or self.preds is None:
+            return None
+        return self.preds.quality(self.labels, self.labels_path)
+
     # ---- stage functions (each does real, timeable work) ----
 
     def capture(self):
-        """Synthetic source: references pre-generated tensors (near-zero
-        cost). Real capture latency can't be honestly approximated by a
+        """Real inputs: the next sample, copied out of the file (what a
+        receiver holds). Synthetic: references pre-generated tensors (near-zero
+        cost); real capture latency can't be honestly approximated by a
         default — use --pipeline with your real source for that."""
-        self._raw = self._static_inputs
+        if self.real is not None:
+            self._k = self.order.index(self._i)
+            self._i += 1
+            self._raw = self.real.sample(self._k)
+        else:
+            self._raw = self._static_inputs
 
     def preprocess(self):
-        """Minimal, honest preprocessing: min-max normalise float inputs;
+        """Real inputs pass through unchanged (they are model inputs already,
+        usually scaled). Synthetic: min-max normalise float inputs;
         integer/bool inputs pass through unchanged."""
+        if self.real is not None:
+            self._prepped = self._raw
+            return
         out = {}
         for name, arr in self._raw.items():
             if np.issubdtype(arr.dtype, np.floating):
@@ -692,9 +764,12 @@ class OnnxStagePipeline:
         # CPU provider: outputs are already host-side from inference(). ~0 ms.
 
     def postprocess(self):
-        """Minimal, honest postprocessing: touch every output tensor."""
+        """Minimal, honest postprocessing: touch every output tensor; with real
+        inputs, keep this sample's prediction (preallocated, no allocation)."""
         for out in self._outputs:
             _ = np.asarray(out).sum()
+        if self.preds is not None:
+            self.preds.record(self._k, self._outputs)
 
     def stage_fns(self):
         return {

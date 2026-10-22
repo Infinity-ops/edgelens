@@ -19,7 +19,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .benchmark.onnx_pipeline import parse_input_shapes
-from .cli import _exit_on_write_error, _ms, _print_integrity_issues, _write_or_exit, app, console
+from .cli import (INPUTS_HELP, LABELS_HELP, ORDER_HELP, THREADS_HELP, _exit_on_write_error, _ms,
+                  _print_integrity_issues, _print_quality, _write_or_exit, app, console)
 
 
 def _fmt(v, nd=3, unit=""):
@@ -76,6 +77,9 @@ def sweep(
                                       "engines every run."),
     save: str = typer.Option("edgelens_sweep.json", "--save", help="Summary JSON; each "
                              "backend's full result goes next to it as NAME.<backend>.json."),
+    labels: str = typer.Option(None, "--labels", help="With --inputs: one ground-truth value "
+                               "per sample; adds each backend's RMSE (or accuracy)."),
+    threads: int = typer.Option(None, "--threads", help=THREADS_HELP),
 ):
     """Which backend? Latency, energy AND whether the answer changed, for the
     same model on CPU / CUDA / TensorRT (FP32, FP16, INT8) / DLA and external
@@ -105,7 +109,8 @@ def sweep(
                 eval_samples=eval_samples, export_inputs_path=export_inputs, external=ext,
                 atol=atol, rtol=rtol, decision=decision, threshold=threshold,
                 min_agreement=min_agreement, deadline_ms=deadline_ms, trt_cache=cache,
-                save_stem=_stem(save), progress=lambda m: status.update(m))
+                save_stem=_stem(save), progress=lambda m: status.update(m), threads=threads,
+                labels_path=labels)
     except (RuntimeError, ValueError, OSError) as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
@@ -122,14 +127,18 @@ def print_sweep(summary):
     t = Table(title=f"EdgeLens sweep — {Path(summary['model']).name} "
                     f"(reference: {summary['reference']}, {summary['samples']} input samples, "
                     f"{summary['inputs']})")
-    for col in ("Backend", "Start-up", "p50", "p99", "Energy/inf", "Max |error|",
-                "Decisions agree", "Verdict"):
+    acc = any(r.get("rmse") is not None or r.get("accuracy") is not None
+              for r in summary["backends"])
+    cols = ["Backend", "Start-up", "p50", "p99", "Energy/inf", "Max |error|",
+            "Decisions agree", "Verdict"] + (["vs labels"] if acc else [])
+    for col in cols:
         t.add_column(col)
     style = {"EQUIVALENT": "green", "NUMERIC_DRIFT": "yellow", "DECISIONS_DIFFER": "red"}
     for r in summary["backends"]:
         if r.get("status") != "ok":
             t.add_row(r["backend"], "-", "-", "-", "-", "-", "-",
-                      f"[dim]{r.get('status')}: {r.get('reason', '')[:70]}[/dim]")
+                      f"[dim]{r.get('status')}: {r.get('reason', '')[:70]}[/dim]",
+                      *(["-"] if acc else []))
             continue
         agree = r.get("decision_agreement")
         agree_s = "-" if agree is None else (
@@ -140,7 +149,10 @@ def print_sweep(summary):
                   _ms(r.get("p50_ms")), _ms(r.get("p99_ms")),
                   _fmt(r.get("energy_mj"), 3, " mJ"),
                   "0" if r.get("max_abs_error") == 0 else f"{r.get('max_abs_error', 0):.3g}",
-                  agree_s, f"[{style.get(v, 'white')}]{v}[/{style.get(v, 'white')}]")
+                  agree_s, f"[{style.get(v, 'white')}]{v}[/{style.get(v, 'white')}]",
+                  *([f"RMSE {r['rmse']}" if r.get("rmse") is not None else
+                     f"{r['accuracy'] * 100:.2f}%" if r.get("accuracy") is not None else "-"]
+                    if acc else []))
     console.print(t)
     tol = summary["tolerance"]
     console.print(f"[dim]EQUIVALENT = every value within atol {tol['atol']:g} / rtol "
@@ -155,7 +167,8 @@ def print_sweep(summary):
 
 # ---------------------------------------------------------------- periodic (I1)
 
-def _build_pipe(model, pipeline, provider, input_shape):
+def _build_pipe(model, pipeline, provider, input_shape, inputs=None, labels=None, threads=None,
+                inputs_order=None):
     from .benchmark.runner import _resolve_pipeline
     given = [n for n, v in (("pipeline_path", pipeline), ("model_path", model)) if v]
     if len(given) != 1:
@@ -163,7 +176,8 @@ def _build_pipe(model, pipeline, provider, input_shape):
         raise typer.Exit(2)
     try:
         return _resolve_pipeline(given, model, provider, None, pipeline,
-                                 parse_input_shapes(input_shape), None)
+                                 parse_input_shapes(input_shape), None, inputs=inputs,
+                                 labels=labels, threads=threads, inputs_order=inputs_order)
     except RuntimeError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
@@ -187,12 +201,17 @@ def periodic(
     deadline_ms: float = typer.Option(None, "--deadline-ms", help="Deadline (default: the "
                                       "period)."),
     save: str = typer.Option("edgelens_periodic.json", "--save", help="Output JSON path."),
+    inputs: str = typer.Option(None, "--inputs", help=INPUTS_HELP),
+    labels: str = typer.Option(None, "--labels", help=LABELS_HELP),
+    threads: int = typer.Option(None, "--threads", help=THREADS_HELP),
+    inputs_order: str = typer.Option("sequential", "--inputs-order", help=ORDER_HELP),
 ):
     """Latency and energy at the REAL inference rate. Benchmarks run back to
     back; a 1 Hz model wakes a sleeping board every second and pays for it."""
     from . import periodic as per
     periods = list(period_ms or [1000.0])
-    pipe, source, model_path = _build_pipe(model, pipeline, provider, input_shape)
+    pipe, source, model_path = _build_pipe(model, pipeline, provider, input_shape, inputs, labels,
+                                           threads, inputs_order)
     total = sum(periods) * (iterations + 1) / 1000.0
     console.print(f"[dim]This takes about {total + idle_baseline + 5:.0f} s "
                   f"({len(periods)} period(s) x {iterations} inferences).[/dim]")
@@ -210,7 +229,10 @@ def periodic(
     except (RuntimeError, ValueError) as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
+    from .benchmark.runner import attach_quality
+    attach_quality(result, pipe)
     print_periodic(result)
+    _print_quality(result.get("quality"))
     _write_or_exit(Path(save), json.dumps(result, indent=2))
     console.print(f"[green]Saved →[/green] {save}")
 
@@ -292,6 +314,10 @@ def soak(
                                "existing .jsonl (e.g. after a crash)."),
     save: str = typer.Option("edgelens_soak.json", "--save", help="Result JSON; windows "
                              "stream to the same name with .jsonl."),
+    inputs: str = typer.Option(None, "--inputs", help=INPUTS_HELP),
+    labels: str = typer.Option(None, "--labels", help=LABELS_HELP),
+    threads: int = typer.Option(None, "--threads", help=THREADS_HELP),
+    inputs_order: str = typer.Option("sequential", "--inputs-order", help=ORDER_HELP),
 ):
     """Long runs: latency drift, thermal throttling, memory growth (process
     and Jetson GPU memory), swap and time-to-out-of-memory, window by window,
@@ -333,7 +359,8 @@ def soak(
                   f"analysis).[/dim]")
     try:
         if driven:
-            pipe, source, model_path = _build_pipe(model, pipeline, provider, input_shape)
+            pipe, source, model_path = _build_pipe(model, pipeline, provider, input_shape,
+                                                   inputs, labels, threads, inputs_order)
             result = sk.run_soak_pipeline(pipe, seconds, window_s=window, period_ms=period_ms,
                                           deadline_ms=deadline_ms, jsonl_path=jsonl,
                                           pipeline_source=source, model_path=model_path,
@@ -345,7 +372,11 @@ def soak(
     except (RuntimeError, ValueError) as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
+    if driven:
+        from .benchmark.runner import attach_quality
+        attach_quality(result, pipe)
     print_soak(result)
+    _print_quality(result.get("quality"))
     _write_or_exit(Path(save), json.dumps(result, indent=2))
     console.print(f"[green]Saved →[/green] {save}  [dim](windows: {jsonl})[/dim]")
 
@@ -358,13 +389,22 @@ def print_soak(result):
     for k in ("p50", "p99"):
         d = s["drift"][k]
         if d.get("change_pct") is None:
-            t.add_row(f"Latency {k} drift", "[dim]not enough windows (needs 4+)[/dim]")
+            t.add_row(f"Latency {k} drift", f"[dim]{d.get('note') or 'not enough windows (needs 4+)'}[/dim]")
             continue
         verdict = ("[red]DRIFTING[/red]" if d["drifting"] else
                    "[green]stable[/green]" if not d["significant"] else "[yellow]small trend[/yellow]")
         t.add_row(f"Latency {k} drift",
                   f"{d['start']:.3f} → {d['end']:.3f} ms ({d['change_pct']:+.1f}%, "
                   f"{'significant' if d['significant'] else 'not significant'}) {verdict}")
+    lv = s.get("latency_levels")
+    if lv:
+        clock = ""
+        if lv.get("cpu_freq_mhz_low_level") and lv.get("cpu_freq_mhz_high_level"):
+            clock = (f"; CPU clock {lv['cpu_freq_mhz_low_level']:.0f} MHz in the fast windows, "
+                     f"{lv['cpu_freq_mhz_high_level']:.0f} MHz in the slow ones")
+        t.add_row("Latency levels", f"[yellow]two: p50 ~{lv['low_p50_ms']} ms in "
+                  f"{lv['windows_low']} windows, ~{lv['high_p50_ms']} ms in {lv['windows_high']} "
+                  f"({lv['switches']} switches){clock}[/yellow]")
     th = s["throttling"]
     t.add_row("Thermal throttling", f"[red]{th['throttled_windows']} window(s)[/red]"
               if th["throttled_windows"] else "[green]none detected[/green]")
@@ -373,12 +413,25 @@ def print_soak(result):
 
     def rate(v, sig):
         return "-" if v is None else f"{v:+.2f} MB/h" + ("" if sig else " (not significant)")
-    t.add_row("Process memory (RSS)", rate(m.get("process_rss_mb_per_h"),
-                                           m.get("process_rss_mb_per_h_significant"))
-              + (" [red]LEAK SUSPECTED[/red]" if m.get("leak_suspected") else "")
-              + (f" [yellow]growing by {m.get('process_rss_mb_grown')} MB over the run — too "
-                 f"little to call a leak (warm-up looks the same); run longer[/yellow]"
-                 if m.get("rss_growing_inconclusive") else ""))
+    verdict = ((" [red]LEAK SUSPECTED[/red]" if m.get("leak_suspected") else "")
+               + (f" [yellow]growing by {m.get('leak_grown_mb', m.get('process_rss_mb_grown'))} "
+                  f"MB over the run — too little to call a leak (warm-up looks the same); run "
+                  f"longer[/yellow]" if m.get("rss_growing_inconclusive") else ""))
+    if m.get("process_anon_mb_per_h") is not None:
+        # the leak verdict is on private memory; RSS also counts mapped files
+        t.add_row("Process memory (private)", rate(m.get("process_anon_mb_per_h"),
+                                                   m.get("process_anon_mb_per_h_significant"))
+                  + verdict)
+        t.add_row("Process memory (RSS)", rate(m.get("process_rss_mb_per_h"),
+                                               m.get("process_rss_mb_per_h_significant")))
+        if m.get("file_backed_growth"):
+            t.add_row("Memory-mapped files", f"{m.get('process_file_mb_per_h'):+.2f} MB/h "
+                      f"[cyan](+{m.get('process_file_mb_grown')} MB: file pages read for the "
+                      f"first time, e.g. a memory-mapped input file — cache, not a leak)[/cyan]")
+    else:
+        t.add_row("Process memory (RSS)", rate(m.get("process_rss_mb_per_h"),
+                                               m.get("process_rss_mb_per_h_significant"))
+                  + verdict)
     if m.get("nvmap_used_mb_last") is not None:
         t.add_row("GPU memory (NvMap)", rate(m.get("gpu_nvmap_mb_per_h"),
                                              m.get("gpu_nvmap_mb_per_h_significant"))

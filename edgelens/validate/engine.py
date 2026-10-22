@@ -39,7 +39,9 @@ REQUIREMENT_KEYS = ("p50_ms", "p95_ms", "p99_ms", "p99_9_ms", "max_latency_ms",
                     "max_throttled_windows", "max_energy_per_period_mj",
                     # v0.2 Layer 4: decisions in time (edgelens replay / detect)
                     "max_time_to_detect_s", "max_false_alarms_per_h", "max_missed_events",
-                    "max_rmse")
+                    "max_rmse",
+                    # --model --inputs --labels: accuracy on real samples
+                    "min_accuracy")
 
 
 def _row(key, label, limit, measured, unit, status, reason=None, direction="max"):
@@ -156,7 +158,8 @@ def _check(result, key, limit):
                             "needs at least 4 windows with iterations")
             measured = abs(d["change_pct"])
         elif key == "max_mem_growth_mb_per_h":
-            m = (soak.get("memory") or {}).get("process_rss_mb_per_h")
+            mm = soak.get("memory") or {}
+            m = mm.get("leak_mb_per_h", mm.get("process_rss_mb_per_h"))
             if m is None:
                 return _row(key, label, limit, None, unit, NOT_MEASURED,
                             "needs at least 4 windows")
@@ -179,6 +182,14 @@ def _check(result, key, limit):
     if key in _DECISION:
         return _check_decision(result, key, limit)
 
+    if key == "min_accuracy":
+        q = result.get("quality") or {}
+        if q.get("accuracy") is None:
+            return _row(key, "Accuracy vs labels", limit, None, "", NOT_MEASURED,
+                        "no class accuracy in this run: benchmark --model with --inputs and "
+                        "integer --labels (a model with one output per class)", direction="min")
+        return _check_quality(result, key, limit)
+
     raise ValueError(f"Unknown requirement '{key}'. Known: {', '.join(REQUIREMENT_KEYS)}")
 
 
@@ -188,18 +199,39 @@ _DECISION = {"max_time_to_detect_s": ("Time to detect (event -> alarm)", "s"),
              "max_rmse": ("Output error vs ground truth (RMSE)", "")}
 
 
+def _check_quality(result, key, limit):
+    """Accuracy of a --model run on real inputs against --labels."""
+    q = result.get("quality") or {}
+    note = (None if q.get("full_pass") else
+            f"over {q.get('samples_predicted')} of {q.get('samples')} samples (not a full pass)")
+    if key == "max_rmse":
+        row = _row(key, "Output error vs labels (RMSE)", limit, q["rmse"], None,
+                   _compare(q["rmse"], limit, "max"))
+    else:
+        row = _row(key, "Accuracy vs labels", limit, q["accuracy"], "",
+                   _compare(q["accuracy"], limit, "min"), direction="min")
+    row["detail"] = note or f"all {q.get('samples')} samples, labels {q.get('labels')}"
+    return row
+
+
 def _check_decision(result, key, limit):
     """Decision metrics of a replay (one recording) or of `edgelens detect`
     (aggregate over recordings: the worst time to detect)."""
+    q = result.get("quality") or {}
+    if key == "max_rmse" and q.get("rmse") is not None and not result.get("decision"):
+        return _check_quality(result, key, limit)
     label, unit = _DECISION[key]
     unit = None if unit == "" else unit
     dec = result.get("decision") or {}
     agg = (dec.get("aggregate") or {}).get("output")
     one = dec.get("output")
     if not agg and not one:
-        return _row(key, label, limit, None, unit, NOT_MEASURED,
-                    "no decisions in this run: use `edgelens replay` with a spec that has a "
-                    "decision rule (and ground truth in the data)")
+        why = ("no decisions in this run: use `edgelens replay` with a spec that has a "
+               "decision rule (and ground truth in the data)")
+        if key == "max_rmse":
+            why = ("no ground truth in this run: benchmark --model with --inputs and --labels, "
+                   "or `edgelens replay` on data with ground truth")
+        return _row(key, label, limit, None, unit, NOT_MEASURED, why)
     if key == "max_time_to_detect_s":
         if agg:
             ttd = (agg.get("time_to_detect_s") or {}).get("max")

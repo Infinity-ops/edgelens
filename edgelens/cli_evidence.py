@@ -21,7 +21,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from . import contract as ct
-from .cli import _print_integrity_issues, _sibling, _write_or_exit, app, console
+from .cli import (INPUTS_HELP, LABELS_HELP, ORDER_HELP, THREADS_HELP, _print_integrity_issues,
+                  _print_quality, _sibling, _write_or_exit, app, console)
 from .validate.engine import exit_code as validate_exit_code
 
 contract_app = typer.Typer(help="Assumption contracts: requirements AND the conditions they "
@@ -263,6 +264,10 @@ def contract_run(
                                     "will be INCONCLUSIVE)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Only print the plan and the "
                                  "pre-run check."),
+    inputs: str = typer.Option(None, "--inputs", help=INPUTS_HELP),
+    labels: str = typer.Option(None, "--labels", help=LABELS_HELP),
+    threads: int = typer.Option(None, "--threads", help=THREADS_HELP),
+    inputs_order: str = typer.Option("sequential", "--inputs-order", help=ORDER_HELP),
 ):
     """Measure exactly what the contract needs (period, iterations, duration, deadline,
     idle baseline), then validate against it. Checks the assumptions it can BEFORE the
@@ -306,7 +311,8 @@ def contract_run(
                             border_style="yellow"))
         raise typer.Exit(2)
 
-    pipe, source, model_path = _build_pipe(model, pipeline, provider, input_shape)
+    pipe, source, model_path = _build_pipe(model, pipeline, provider, input_shape, inputs, labels,
+                                           threads, inputs_order)
     try:
         if p["kind"] == "soak":
             from . import soak as sk
@@ -340,6 +346,9 @@ def contract_run(
     except (RuntimeError, ValueError) as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
+    from .benchmark.runner import attach_quality
+    attach_quality(result, pipe)
+    _print_quality(result.get("quality"))
     result.setdefault("contract_run", {}).update(plan={k: v for k, v in p.items()
                                                        if k != "warnings"},
                                                  contract=c["contract"], contract_sha256=sha)
