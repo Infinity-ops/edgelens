@@ -255,7 +255,27 @@ class WindowLog:
         self._f.close()
 
 
-def window_row(i, t0_ns, t1_ns, window_result, telemetry, probe_w, mem, rss_mb):
+def process_memory(pid):
+    """{"rss_anon_mb", "rss_file_mb"} from /proc/<pid>/status (Linux), or {}.
+
+    RSS counts pages of memory-mapped FILES too. Found on an AGX Orin: a soak
+    that read a 146 MB memory-mapped input file one 60 KB window per second
+    grew RSS by 107 MB in 30 minutes and was reported as a leak; those pages
+    are file cache. The leak check uses private (anonymous) memory."""
+    out = {}
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                key, _, val = line.partition(":")
+                if key in ("RssAnon", "RssFile"):
+                    out["rss_anon_mb" if key == "RssAnon" else "rss_file_mb"] = \
+                        round(int(val.split()[0]) / 1024.0, 2)
+    except (OSError, ValueError, IndexError):
+        return {}
+    return out
+
+
+def window_row(i, t0_ns, t1_ns, window_result, telemetry, probe_w, mem, rss_mb, split=None):
     """One window, from the window's FULL statistics (a window result's
     latency_series is capped; its latency/deadline blocks cover every sample)."""
     st = window_result.get("latency") or {"n": 0}
@@ -274,6 +294,7 @@ def window_row(i, t0_ns, t1_ns, window_result, telemetry, probe_w, mem, rss_mb):
            "background_cpu_pct": ((telemetry or {}).get("background") or {}).get("cpu_pct"),
            "start_temp_c": (telemetry or {}).get("start_temp_c"),
            "rss_mb": rss_mb}
+    row.update(split or {})                  # rss_anon_mb / rss_file_mb when known
     if row["energy_j"] is not None and n:
         row["energy_per_iteration_mj"] = round(row["energy_j"] * 1000.0 / n, 3)
     row.update(probe_w or {})
@@ -319,6 +340,45 @@ def _trend(rows, key, warmup_skip):
             "significant": bool(sig)}
 
 
+LEVEL_RATIO = 2.0      # two latency levels at least this far apart (high/low p50)
+
+
+def latency_levels(rows, skip=0):
+    """Windows whose p50 falls into two clearly separate levels, or None.
+
+    Drift is a trend; this is a switch. Found on an AGX Orin: in a 30-minute
+    soak at one window per second, 22 one-minute windows ran at p50 ~7 ms and
+    8 ran entirely at ~31 ms, scattered through the run; the trend test only
+    said "+39%, not significant". Splits at the largest gap between sorted
+    window p50s; reports the CPU clock of each level when it was recorded."""
+    pts = [(r["window"], r["p50_ms"], r.get("cpu_freq_mhz_mean"))
+           for r in rows[skip:] if r.get("p50_ms")]
+    if len(pts) < 6:
+        return None
+    vals = sorted(p for _, p, _ in pts)
+    ratios = [vals[k + 1] / vals[k] for k in range(len(vals) - 1) if vals[k] > 0]
+    if not ratios:
+        return None
+    k = int(np.argmax(ratios))
+    if ratios[k] < LEVEL_RATIO:
+        return None
+    cut = vals[k]
+    low = [p for p in pts if p[1] <= cut]
+    high = [p for p in pts if p[1] > cut]
+    if len(low) < 2 or len(high) < 2:
+        return None              # one or two outliers are a tail, not a level
+
+    def freq(group):
+        f = [x[2] for x in group if x[2]]
+        return round(float(np.mean(f)), 1) if f else None
+    switches = sum(1 for a, b in zip(pts, pts[1:]) if (a[1] > cut) != (b[1] > cut))
+    return {"low_p50_ms": round(float(np.median([p[1] for p in low])), 3),
+            "high_p50_ms": round(float(np.median([p[1] for p in high])), 3),
+            "windows_low": len(low), "windows_high": len(high),
+            "high_windows": [w for w, _, _ in high], "switches": switches,
+            "cpu_freq_mhz_low_level": freq(low), "cpu_freq_mhz_high_level": freq(high)}
+
+
 def analyze(rows, limits=None):
     rows = [r for r in rows if r.get("kind") == "window"]
     skip = 1 if len(rows) >= 6 else 0
@@ -329,6 +389,12 @@ def analyze(rows, limits=None):
         d["drifting"] = bool(d["significant"] and d["change_pct"] is not None
                              and abs(d["change_pct"]) >= DRIFT_PCT)
     out["drift"] = drift
+    out["latency_levels"] = latency_levels(rows, skip)
+    short = [r.get("iterations") for r in rows[skip:] if r.get("iterations")]
+    if short and drift["p99"].get("change_pct") is None and min(short) < 100:
+        drift["p99"]["note"] = (f"p99 needs >= 100 iterations per window; these windows had "
+                                f"{min(short)}-{max(short)}. Use a longer --window "
+                                f"(e.g. --window 120 at 1 Hz).")
     temps = [r["max_temp_c"] for r in rows if r.get("max_temp_c")]
     out["max_temp_c"] = max(temps) if temps else None
 
@@ -358,7 +424,9 @@ def analyze(rows, limits=None):
 
     # memory
     mem = {}
-    for key, name in (("rss_mb", "process_rss_mb_per_h"), ("nvmap_used_mb", "gpu_nvmap_mb_per_h"),
+    for key, name in (("rss_mb", "process_rss_mb_per_h"), ("rss_anon_mb", "process_anon_mb_per_h"),
+                      ("rss_file_mb", "process_file_mb_per_h"),
+                      ("nvmap_used_mb", "gpu_nvmap_mb_per_h"),
                       ("mem_available_mb", "available_mb_per_h"), ("swap_used_mb", "swap_mb_per_h")):
         t = _trend(rows, key, skip)
         mem[name] = t.get("slope_per_h")
@@ -378,11 +446,21 @@ def analyze(rows, limits=None):
         mem["hours_until_out_of_memory"] = round(last["mem_available_mb"] / -av_slope, 2)
     else:
         mem["hours_until_out_of_memory"] = None
-    rss = mem.get("process_rss_mb_per_h")
-    rising = bool(rss is not None and mem["process_rss_mb_per_h_significant"]
-                  and rss >= max(LEAK_MIN_MB_PER_H, 0.01 * (last.get("rss_mb") or 0)))
-    grown = mem.get("process_rss_mb_grown") or 0.0
-    base = mem.get("process_rss_mb_trend_start") or 0.0
+    # private memory when the rows have it (file-backed pages are cache, not a leak)
+    basis = "anon" if mem.get("process_anon_mb_per_h") is not None else "rss"
+    mem["leak_basis"] = ("private (anonymous) memory" if basis == "anon" else
+                         "resident memory (RSS; includes memory-mapped files)")
+    rss = mem.get(f"process_{basis}_mb_per_h")
+    mem["leak_mb_per_h"] = rss
+    last_level = last.get("rss_anon_mb" if basis == "anon" else "rss_mb") or 0
+    rising = bool(rss is not None and mem[f"process_{basis}_mb_per_h_significant"]
+                  and rss >= max(LEAK_MIN_MB_PER_H, 0.01 * last_level))
+    grown = mem.get(f"process_{basis}_mb_grown") or 0.0
+    base = mem.get(f"process_{basis}_mb_trend_start") or 0.0
+    mem["leak_grown_mb"] = grown
+    fgrow = mem.get("process_file_mb_grown") or 0.0
+    mem["file_backed_growth"] = bool(basis == "anon" and mem.get("process_file_mb_per_h_significant")
+                                     and fgrow >= LEAK_MIN_GROWTH_MB)
     enough = grown >= max(LEAK_MIN_GROWTH_MB, LEAK_MIN_GROWTH_PCT / 100.0 * base)
     mem["leak_suspected"] = bool(rising and enough)
     # rising, but by too little to tell a slow leak from warm-up: say so
@@ -536,7 +614,8 @@ def run_soak_pipeline(pipe, duration_s, window_s=DEFAULT_WINDOW_S, period_ms=Non
             acc.add(e2e, stages, n_total=res["iterations"])
             last_tel = res.get("telemetry") or {}
             row = window_row(i, t0 - t_origin, t1 - t_origin, res, last_tel, probe.window(),
-                             meminfo(), round(me.memory_info().rss / 1e6, 2))
+                             meminfo(), round(me.memory_info().rss / 1e6, 2),
+                             process_memory(os.getpid()))
             rows.append(row)
             log.write(row)
             say(_progress_line(row, duration_s))
@@ -644,7 +723,8 @@ def run_soak_observed(duration_s, window_s=DEFAULT_WINDOW_S, cmd=None, pid=None,
             if sampler is not None and sampler.raw:
                 rss = round(sampler.raw[-1][2] / 1e6, 2)
             row = window_row(i, t0 - t_origin, t1 - t_origin, wr, last_tel,
-                             probe.window(), meminfo(), rss)
+                             probe.window(), meminfo(), rss,
+                             process_memory(sampler.pid) if sampler is not None else None)
             rows.append(row)
             log.write(row)
             say(_progress_line(row, duration_s))

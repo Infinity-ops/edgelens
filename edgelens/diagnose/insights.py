@@ -67,6 +67,23 @@ def findings(result):
                               "usually follows heat or memory growth.",
                               dict(d)))
                 break
+        lv = s.get("latency_levels")
+        if lv:
+            clock = ""
+            if lv.get("cpu_freq_mhz_low_level") and lv.get("cpu_freq_mhz_high_level"):
+                clock = (f" The CPU clock averaged {lv['cpu_freq_mhz_low_level']:.0f} MHz in the "
+                         f"fast windows and {lv['cpu_freq_mhz_high_level']:.0f} MHz in the slow "
+                         f"ones.")
+            out.append(_f("LATENCY_LEVELS", 0.7,
+                          f"Latency switches between two levels: p50 ~{lv['low_p50_ms']} ms in "
+                          f"{lv['windows_low']} windows and ~{lv['high_p50_ms']} ms in "
+                          f"{lv['windows_high']}, {lv['switches']} switches. That is a state that "
+                          f"changes during the run, not a trend.{clock}",
+                          "Check the CPU clock and idle states per window (unpinned clocks, a "
+                          "governor that parks cores), other processes starting, or thread "
+                          "placement; pinning clocks or fewer inference threads usually "
+                          "removes the slow level. A deadline must hold at the slow level.",
+                          dict(lv)))
         th = s["throttling"]
         if th["throttled_windows"]:
             out.append(_f("THERMAL_THROTTLING", 0.9,
@@ -80,11 +97,14 @@ def findings(result):
         m = s["memory"]
         if m.get("leak_suspected"):
             out.append(_f("MEMORY_LEAK", 0.9,
-                          f"Process memory grows {m['process_rss_mb_per_h']:+.1f} MB/h "
+                          f"Process memory grows "
+                          f"{m.get('leak_mb_per_h', m['process_rss_mb_per_h']):+.1f} MB/h "
                           f"(significant trend; now {m.get('rss_mb_last')} MB).",
                           "Find what accumulates per iteration (lists, caches, tensors kept "
                           "alive); `edgelens soak` again after the fix shows the slope.",
-                          {"rss_mb_per_h": m["process_rss_mb_per_h"]}))
+                          {"rss_mb_per_h": m["process_rss_mb_per_h"],
+                           "leak_mb_per_h": m.get("leak_mb_per_h"),
+                           "basis": m.get("leak_basis")}))
         if m.get("gpu_memory_growth_suspected"):
             out.append(_f("GPU_MEMORY_GROWTH", 0.85,
                           f"Jetson GPU memory (NvMap) grows {m['gpu_nvmap_mb_per_h']:+.1f} MB/h — "

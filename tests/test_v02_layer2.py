@@ -373,3 +373,56 @@ def test_orin_leak_demo_is_still_a_leak():
     m = sk.analyze(rows)["memory"]
     assert m["leak_suspected"] and not m["rss_growing_inconclusive"]
     assert m["process_rss_mb_per_h"] == pytest.approx(3682, rel=0.05)
+
+
+def test_mapped_file_growth_is_not_a_leak():
+    """AGX Orin, 30-minute soak reading a 146 MB memory-mapped input file one
+    60 KB window per second: RSS 84 -> 191 MB was reported as a 221 MB/h leak.
+    The growth was file-backed pages; private memory stayed flat."""
+    def extra(i):
+        return {"rss_anon_mb": 70.0 + (0.05 if i % 2 else 0.0), "rss_file_mb": 14.0 + 3.6 * i}
+    rows = _rows(n=30, rss=lambda i: 84.0 + 3.6 * i, extra=extra)
+    m = sk.analyze(rows)["memory"]
+    assert m["process_rss_mb_per_h"] > 200 and m["process_rss_mb_per_h_significant"]
+    assert m["leak_basis"].startswith("private")
+    assert not m["leak_suspected"] and m["file_backed_growth"]
+
+
+def test_private_memory_leak_is_still_found():
+    def extra(i):
+        return {"rss_anon_mb": 70.0 + 10 * i, "rss_file_mb": 14.0}
+    m = sk.analyze(_rows(n=10, rss=lambda i: 84.0 + 10 * i, extra=extra))["memory"]
+    assert m["leak_suspected"] and m["leak_mb_per_h"] == pytest.approx(600, rel=0.01)
+
+
+def test_process_memory_reads_proc_status():
+    import os
+    pm = sk.process_memory(os.getpid())
+    if os.path.exists("/proc/self/status"):
+        assert pm["rss_anon_mb"] > 0 and "rss_file_mb" in pm
+    assert sk.process_memory(999999999) == {}
+
+
+def test_latency_switching_between_two_levels_is_named():
+    """AGX Orin, 30 one-minute soak windows at 1 Hz: p50 ~7 ms, but 8 windows
+    entirely at ~31 ms. The drift test alone said '+39%, not significant'."""
+    p50 = [6.87, 30.88, 7.43, 8.05, 7.02, 6.02, 6.18, 6.50, 7.05, 7.06, 7.10, 13.11, 30.75,
+           6.54, 7.12, 6.77, 6.85, 31.54, 31.19, 30.72, 6.71, 6.64, 7.55, 6.97, 7.63, 30.98,
+           7.28, 31.12, 6.24, 6.43]
+    rows = _rows(n=30, p50=lambda i: p50[i])
+    for i, r in enumerate(rows):
+        r["iterations"] = 61
+        r["p99_ms"] = None                 # < 100 iterations: no p99 per window
+        r["cpu_freq_mhz_mean"] = 700.0 if p50[i] > 20 else 1700.0
+    s = sk.analyze(rows)
+    lv = s["latency_levels"]
+    assert lv and lv["windows_high"] == 7 and 6 < lv["low_p50_ms"] < 8 and lv["high_p50_ms"] > 30
+    assert lv["cpu_freq_mhz_high_level"] == 700.0
+    assert "p99 needs >= 100 iterations per window" in s["drift"]["p99"]["note"]
+    from edgelens.diagnose.insights import findings
+    assert any(f["type"] == "LATENCY_LEVELS" for f in findings({"soak": s}))
+
+
+def test_steady_latency_has_no_levels():
+    rng = np.random.default_rng(1)
+    assert sk.analyze(_rows(n=20, p50=lambda i: 7.0 + rng.normal(0, 0.3)))["latency_levels"] is None
