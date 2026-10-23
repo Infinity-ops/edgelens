@@ -186,8 +186,9 @@ def _check(result, key, limit):
         q = result.get("quality") or {}
         if q.get("accuracy") is None:
             return _row(key, "Accuracy vs labels", limit, None, "", NOT_MEASURED,
-                        "no class accuracy in this run: benchmark --model with --inputs and "
-                        "integer --labels (a model with one output per class)", direction="min")
+                        "no accuracy in this run: benchmark --model with --inputs and "
+                        "--labels that are class indices (a model with one output per "
+                        "class) or 0/1 (a single-score detector)", direction="min")
         return _check_quality(result, key, limit)
 
     raise ValueError(f"Unknown requirement '{key}'. Known: {', '.join(REQUIREMENT_KEYS)}")
@@ -208,7 +209,9 @@ def _check_quality(result, key, limit):
         row = _row(key, "Output error vs labels (RMSE)", limit, q["rmse"], None,
                    _compare(q["rmse"], limit, "max"))
     else:
-        row = _row(key, "Accuracy vs labels", limit, q["accuracy"], "",
+        row = _row(key, "Accuracy vs labels" + (f" (> {q['threshold']})" if q.get("threshold")
+                                                is not None else " (top-1)"),
+                   limit, q["accuracy"], "",
                    _compare(q["accuracy"], limit, "min"), direction="min")
     row["detail"] = note or f"all {q.get('samples')} samples, labels {q.get('labels')}"
     return row

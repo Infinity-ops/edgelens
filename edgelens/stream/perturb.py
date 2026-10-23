@@ -8,7 +8,7 @@ pipeline, swept over severity, scored with the same detection metrics.
 
     edgelens perturb spec.yaml test.csv --faults faults.yaml --save robustness.json
 
-faults.yaml (plain data, shareable between partners — the same file can drive
+faults.yaml (plain data, shareable between teams — the same file can drive
 another tool's fault campaign):
 
     seed: 1

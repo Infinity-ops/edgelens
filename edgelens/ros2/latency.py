@@ -9,8 +9,8 @@ Two different numbers, kept apart on purpose:
 
   chain latency   arrival of the OUTPUT message - arrival of the INPUT
                   message it was computed from, matched by identical
-                  header.stamp (DEM2 agreed that nodes keep the source
-                  timestamp). Both arrivals are taken on THIS machine on
+                  header.stamp (the usual ROS 2 convention: a node copies
+                  the source timestamp into its output). Both arrivals are taken on THIS machine on
                   CLOCK_MONOTONIC: no clock sync needed, valid across any
                   number of nodes and machines in between.
 
@@ -152,7 +152,7 @@ def summarize(src, dst, same_machine=False, source_bound_ms=None, clock_map=None
     if dst is not None and dst.recv_mono_ns and not matched:
         out["chain"]["note"] = ("No output message carried an input's header.stamp, so the "
                                 "chain can't be matched. The output node must copy the input "
-                                "stamp into its header (DEM2 convention).")
+                                "stamp into its header (the usual ROS 2 convention).")
     return out, chain, (age_dst or age_src)
 
 

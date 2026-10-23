@@ -147,7 +147,7 @@ def test_validate_max_rmse_reads_the_quality_block(data):
     bad = validate(r, {"max_rmse": rmse - 0.01})
     assert ok["verdict"] == "PASS" and bad["verdict"] == "FAIL"
     acc = validate(r, {"min_accuracy": 0.9})["checks"][0]
-    assert acc["status"] == "NOT_MEASURED" and "integer --labels" in acc["reason"]
+    assert acc["status"] == "NOT_MEASURED" and "class indices" in acc["reason"]
 
 
 def test_max_rmse_without_ground_truth_explains_both_routes():
@@ -172,3 +172,80 @@ def test_sweep_reports_accuracy_per_backend(data):
     ref = _reference_predictions(x)
     assert row["rmse"] == pytest.approx(float(np.sqrt(np.mean((ref - y) ** 2))), abs=1e-5)
     assert results["cpu"]["quality"]["samples"] == N and summary["threads"] == 1
+
+
+# ---- not only one regression value: the usual edge model types ----
+
+TINY = str(Path(__file__).parent / "fixtures" / "tiny_model.onnx")       # [1,3,32,32] -> [1,10]
+
+
+def test_image_classifier_top1_top5_and_per_class(tmp_path):
+    rng = np.random.default_rng(1)
+    x = rng.standard_normal((30, 3, 32, 32)).astype(np.float32)
+    s = ort.InferenceSession(TINY, providers=["CPUExecutionProvider"])
+    scores = np.stack([s.run(None, {"input": x[k:k + 1]})[0][0] for k in range(30)])
+    y = rng.integers(0, 10, 30)
+    np.save(tmp_path / "x.npy", x)
+    np.save(tmp_path / "y.npy", y)
+    q = run_benchmark(iterations=30, warmup=0, model_path=TINY, inputs=str(tmp_path / "x.npy"),
+                      labels=str(tmp_path / "y.npy"))["quality"]
+    top5 = np.argsort(-scores, 1)[:, :5]
+    assert q["task"] == "classification" and q["classes"] == 10 and q["output"] == "output"
+    assert q["accuracy"] == pytest.approx(np.mean(top5[:, 0] == y), abs=1e-5)
+    assert q["top5_accuracy"] == pytest.approx(np.mean((top5 == y[:, None]).any(1)), abs=1e-5)
+    assert sum(c["samples"] for c in q["per_class"]) == 30
+
+
+def test_binary_detector_gets_accuracy_precision_recall(data, tmp_path):
+    x, _, p = data
+    ref = _reference_predictions(x)
+    y = (np.arange(N) % 3 == 0).astype(np.float32)          # 0/1 labels
+    np.save(tmp_path / "yb.npy", y)
+    r = run_benchmark(iterations=N, warmup=0, model_path=MODEL, inputs=p["npy"],
+                      labels=str(tmp_path / "yb.npy"))
+    q = r["quality"]
+    pred, truth = ref > 0.5, y > 0.5
+    assert q["task"] == "binary" and q["rmse"] is not None
+    assert q["accuracy"] == pytest.approx(np.mean(pred == truth), abs=1e-5)
+    assert q["false_positives"] == int((pred & ~truth).sum())
+    assert q["false_negatives"] == int((~pred & truth).sum())
+    row = validate(r, {"min_accuracy": 0.0})["checks"][0]
+    assert row["status"] == "PASS" and "> 0.5" in row["label"]
+
+
+def test_multi_value_regression_and_large_class_sets():
+    pr = ri.Predictions(4)
+    truth = np.array([[1, 2, 3], [0, 0, 0], [1, 1, 1], [2, 2, 2]], float)
+    for k, row in enumerate(truth):
+        pr.record(k, [row[None] + [0.0, 0.1, 0.0]])          # output 2 off by 0.1
+    q = pr.quality(truth)
+    assert q["task"] == "regression" and q["outputs"] == 3
+    assert q["per_output_rmse"] == pytest.approx([0.0, 0.1, 0.0], abs=1e-6)
+    # 1000 classes: only the top-5 indices are kept per sample
+    big = ri.Predictions(3)
+    for k, c in enumerate([7, 500, 999]):
+        s = np.zeros(1000, np.float32)
+        s[c], s[(c + 1) % 1000] = 2.0, 1.0
+        big.record(k, [s[None]])
+    assert big.vec is None and big.top.shape == (3, 5)
+    q = big.quality(np.array([7, 501, 0]))
+    assert q["accuracy"] == pytest.approx(1 / 3, abs=1e-5) and q["top5_accuracy"] == 1.0
+
+
+def test_labels_that_cannot_fit_the_model_fail_before_the_run(data, tmp_path):
+    _, _, p = data
+    np.save(tmp_path / "y2.npy", np.zeros((N, 3)))           # 3 values, model gives 1
+    with pytest.raises(RuntimeError, match="must match"):
+        run_benchmark(iterations=2, model_path=MODEL, inputs=p["npy"],
+                      labels=str(tmp_path / "y2.npy"))
+    x = np.zeros((4, 3, 32, 32), np.float32)
+    np.save(tmp_path / "xi.npy", x)
+    np.save(tmp_path / "yf.npy", np.array([0.5, 1, 2, 3]))   # not class indices
+    with pytest.raises(RuntimeError, match="class indices 0..9"):
+        run_benchmark(iterations=2, model_path=TINY, inputs=str(tmp_path / "xi.npy"),
+                      labels=str(tmp_path / "yf.npy"))
+
+
+def test_raw_label_file_with_several_values_per_sample(tmp_path):
+    np.arange(12, dtype="<f4").tofile(tmp_path / "y.bin")
+    assert ri.load_labels(str(tmp_path / "y.bin"), 4).shape == (4, 3)

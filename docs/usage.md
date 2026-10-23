@@ -18,26 +18,47 @@ rather than benchmarking a workload that doesn't exist.
 
 ### Real inputs, accuracy and threads
 
-Synthetic inputs time a model; they say nothing about what it answers. Give
-it the windows you already prepared, and their labels:
+Synthetic inputs time a model; they say nothing about what it answers, and
+an accuracy measured on a workstation says nothing about the FP16 /
+TensorRT / quantised build on the device. Give it data you already prepared,
+and its labels:
 
 ```bash
-edgelens benchmark --model lstm.onnx --inputs x.bin --labels y.bin \
-    --threads 4 --iterations 2437 --deadline-ms 1000 --save lstm.json
-edgelens validate lstm.json --p99-ms 50 --max-rmse 0.19
+# image classifier: 500 preprocessed images, class index per image
+edgelens benchmark --model mobilenet.onnx --inputs val_images.npy --labels val_classes.npy \
+    --iterations 500 --save mobilenet.json
+edgelens validate mobilenet.json --p99-ms 20 --min-accuracy 0.70
+
+# time-series model: sensor windows in a raw float32 file, a target per window
+edgelens benchmark --model lstm.onnx --inputs windows.bin --labels targets.bin \
+    --threads 4 --inputs-order spread --iterations 300 --save lstm.json
+edgelens validate lstm.json --max-rmse 0.2
 ```
 
 | Option | Meaning |
 | --- | --- |
-| `--inputs` | `.npy` (memory-mapped), `.npz` (one array per input name) or raw little-endian `.bin/.raw/.f32` in the model's dtype. One sample per iteration, first dimension = sample; `[N, 100, 150]` feeds a `[1, 100, 150]` input. Fed **as given** (no normalisation). The file's SHA-256 is in the result, so `compare` can tell a data change from a setup change |
-| `--labels` | one label per sample (`.npy`, raw float32 `.bin`, `.csv/.txt`). Single-value output: RMSE, MAE, worst error and RMSE per label level. Integer labels and a vector output: accuracy (argmax). Requirements: `max_rmse`, `min_accuracy` |
-| `--inputs-order` | `sequential` (recording order: soaks, deployment) or `spread` (a fixed stride that visits every sample once per pass, so a short run already covers every label level) |
-| `--threads` | onnxruntime intra-op threads (default: one per core, all spinning). Recorded in the result; on the AGX Orin it changed CPU load and energy far more than latency |
+| `--inputs` | `.npy` (memory-mapped), `.npz` (one array per input name) or raw little-endian `.bin/.raw/.f32` in the model's input dtype. One sample per iteration, first dimension = sample; `[N, 3, 224, 224]` feeds a `[1, 3, 224, 224]` input. Fed **as given**: resize and normalise the data the way the model was trained. The file's SHA-256 is in the result, so `compare` can tell a data change from a setup change |
+| `--labels` | ground truth, one row per sample (`.npy`, raw float32 `.bin`, `.csv/.txt`), scored against the model's **first** output (see below) |
+| `--inputs-order` | `sequential` (file order: soaks, replaying a recording) or `spread` (a fixed stride that visits every sample once per pass, so a short run already covers the whole data set) |
+| `--threads` | onnxruntime intra-op threads (default: one per core, all busy). Recorded in the result; fewer threads often keep the latency and free CPU for the rest of the system |
 
-The quality block says whether the run made a **full pass** over the data;
-an RMSE over 200 of 2437 windows is printed with a warning. The same options
-work for `periodic`, `soak` and `contract run`; `sweep` takes `--labels`
-and `--threads` and adds a "vs labels" column per backend.
+What the labels give, decided from their shape and the model's first output:
+
+| Labels | Model output | Result | Requirement |
+| --- | --- | --- | --- |
+| `[N]` values | 1 value | RMSE, MAE, worst error; RMSE per label level when there are few distinct labels | `max_rmse` |
+| `[N]` of 0 / 1 | 1 score | the above plus accuracy, precision, recall, false alarms and misses at > 0.5 | `max_rmse`, `min_accuracy` |
+| `[N, k]` values | k values | RMSE overall and per output | `max_rmse` |
+| `[N]` class indices | C class scores | top-1, top-5 (C > 5) and per-class accuracy | `min_accuracy` (top-1) |
+
+Labels that can't fit the model (3 values per sample for a 1-value output,
+fractional "classes") are refused **before** the run. The result says whether
+the run made a **full pass** over the data; an accuracy over 200 of 2000
+samples is printed with a warning. Detection and segmentation metrics (mAP,
+IoU) are not computed: use `--pipeline` with your own post-processing.
+
+The same options work for `periodic`, `soak` and `contract run`; `sweep`
+takes `--labels` and `--threads` and scores every backend against the labels.
 
 ## 2. Your own pipeline, EdgeLens drives the loop (harness mode)
 

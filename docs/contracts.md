@@ -10,9 +10,9 @@ and nothing else running says nothing about the same board in its default
 power mode with the desktop open. An assumption contract writes both down:
 
 ```yaml
-contract: dem2-anomaly-detection
+contract: vibration-anomaly-detector
 version: "1.0"
-requirements_doc: EdgeAI-Trust D1.1
+requirements_doc: SRS-2.1
 min_duration: 30m            # less evidence -> INCONCLUSIVE
 min_iterations: 1000
 
@@ -25,16 +25,16 @@ assumes:                     # the conditions of the claim
   max_background_cpu_pct: 10
 
 guarantees:                  # what the system must do under them
-  p99_ms:          {limit: 3000, id: D1.1-R07}
-  max_miss_ratio:  {limit: 0, deadline_ms: 3000, id: D1.1-R08}
-  max_temp_c:      {limit: 85, id: D1.1-R14}
+  p99_ms:          {limit: 3000, id: SRS-R07}
+  max_miss_ratio:  {limit: 0, deadline_ms: 3000, id: SRS-R08}
+  max_temp_c:      {limit: 85, id: SRS-R14}
 ```
 
 ```bash
-edgelens contract init dem2.yaml                  # commented template
-edgelens contract check dem2.yaml                 # typos, types; how long a run it needs
-edgelens validate run.json --contract dem2.yaml --evidence evidence.md
-edgelens contract run dem2.yaml --pipeline dem2.py   # measure exactly what it needs, then validate
+edgelens contract init detector.yaml                  # commented template
+edgelens contract check detector.yaml                 # typos, types; how long a run it needs
+edgelens validate run.json --contract detector.yaml --evidence evidence.md
+edgelens contract run detector.yaml --pipeline pipeline.py   # measure exactly what it needs, then validate
 ```
 
 ## The verdict (assume–guarantee)
@@ -121,6 +121,7 @@ assumption and per requirement ID with expected, measured and status, the
 measurement-integrity issues and, on FAIL, the limiting stage and the
 diagnosis. `run.validation.json` holds the same as data.
 
-For DEM2 / D6.2: one contract per requirement group, `contract run` on the
-AGX Orin Industrial, and the `evidence.md` files are the PASS/FAIL evidence —
-with the conditions they hold under stated next to every number.
+For a project with a requirements document: one contract per requirement
+group, `contract run` on the target board, and the `evidence.md` files are
+the PASS/FAIL evidence, with the conditions they hold under stated next to
+every number.

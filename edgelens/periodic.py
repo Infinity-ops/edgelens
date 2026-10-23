@@ -4,8 +4,8 @@ edgelens.periodic
 "Your benchmark says 7 ms. At 1 Hz it's N ms."
 
 Benchmarks run inferences back to back, so clocks are high, caches warm and
-the GPU awake. A robot or an IoT node runs ONE inference per second (DEM2's
-LSTM) and idles in between — and between inferences the board saves power:
+the GPU awake. A robot or an IoT node runs ONE inference per second (a
+condition-monitoring LSTM, say) and idles in between — and between inferences the board saves power:
 CPU/GPU clocks ramp down (DVFS), the GPU may be power-gated (Jetson
 "railgate"), caches go cold. Each inference then pays a wake-up cost that a
 back-to-back benchmark never shows.
@@ -145,7 +145,7 @@ def run_periodic(pipe, periods_ms, iterations=30, warm_iterations=200, idle_base
         results.append(res)
 
     # The LONGEST period is the reference ("primary"): the real, slowest rate
-    # (DEM2: 1000 ms) — compare / validate / the trade-off use it.
+    # (e.g. 1000 ms) — compare / validate / the trade-off use it.
     primary_idx = max(range(len(rows)), key=lambda k: rows[k]["period_ms"])
     primary_result = results[primary_idx]
     sample_ms = telemetry_interval_s * 1000.0

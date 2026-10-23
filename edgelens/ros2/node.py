@@ -8,7 +8,7 @@ edgelens.ros2.latency.
 
 Needs a sourced ROS 2 installation (rclpy is not on PyPI):
     source /opt/ros/humble/setup.bash
-    edgelens ros2 latency --from /imr/imu --to /pm/prediction --duration 60
+    edgelens ros2 latency --from /sensor/imu --to /model/prediction --duration 60
 
 QoS: best-effort, depth 10 — compatible with both reliable and best-effort
 publishers, and it never slows a publisher down.

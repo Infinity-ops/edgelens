@@ -57,7 +57,7 @@ class TimeseriesPack(Pack):
         config["hop_period_ms"] = round(1000.0 * hop / sr, 4)
         config["window_duration_ms"] = round(1000.0 * win / sr, 4)
         # hop > window is valid (v0.2): predict less often than the sensor
-        # delivers, e.g. DEM2's 0.5 s of 100 Hz history once per second.
+        # delivers, e.g. 0.5 s of 100 Hz history once per second.
         # Overlap is then 0 and the samples between windows are not used.
         config["overlap_pct"] = round(max(0.0, 100.0 * (1 - hop / win)), 2)
         if hop > win:

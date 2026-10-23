@@ -26,11 +26,11 @@ edgelens sweep --model lstm.onnx --backends cpu,cuda,tensorrt,tensorrt-fp16,dla
 Use **real inputs** (`--inputs data.npz`, one array per model input, first
 dimension = sample): agreement on random data says little about real
 decisions, and the report says so. With `--labels y.npy` (one per sample)
-each backend is also scored against the ground truth (RMSE or accuracy,
-"vs labels" column): agreeing with the CPU is not the same as being right.
+each backend is also scored against the ground truth (RMSE, accuracy,
+top-5: see [usage.md](usage.md); "vs labels" column): agreeing with the CPU is not the same as being right.
 `--threads N` sets onnxruntime's intra-op threads for every backend.
 
-**External runtimes (EDDL, C++):** `--export-inputs inputs.npz` writes the
+**External runtimes (EDDL, TFLite, C++):** `--export-inputs inputs.npz` writes the
 evaluation inputs; run them through your runtime, save its outputs as `.npz`
 (one array per model output, same order), and add
 `--external eddl=eddl_out.npz,timing=eddl_record.json` — the timing file is an
@@ -74,8 +74,8 @@ Two periodic runs (e.g. without and with `sudo jetson_clocks`) in
 ## Long runs: `edgelens soak`
 
 ```bash
-edgelens soak --duration 30m --pipeline dem2.py --period-ms 1000 --save soak.json
-edgelens soak --duration 30m -- ./fortis --config dem2.yaml       # markers + process
+edgelens soak --duration 30m --pipeline pipeline.py --period-ms 1000 --save soak.json
+edgelens soak --duration 30m -- ./my_app --config app.yaml       # markers + process
 ```
 
 Every window (default 60 s) is appended to `soak.jsonl` and flushed: a crash

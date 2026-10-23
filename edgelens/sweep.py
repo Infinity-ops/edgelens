@@ -3,7 +3,7 @@ edgelens.sweep
 ----------------
 "Which backend?" — answered with speed, energy AND whether the answer
 changed. One model, several ONNX Runtime backends (CPU, CUDA, TensorRT FP32
-/ FP16 / INT8, DLA) plus external runtimes (EDDL, a C++ engine), all fed
+/ FP16 / INT8, DLA) plus external runtimes (EDDL, TFLite, a C++ engine), all fed
 the SAME inputs:
 
     edgelens sweep --model lstm.onnx --backends cpu,cuda,tensorrt,tensorrt-fp16
@@ -145,10 +145,10 @@ def load_real_samples(path, onnx_pipe, n):
 
 
 def quality_of(outputs, output_names, labels):
-    """RMSE / accuracy of one backend's outputs against labels (first output)."""
+    """Quality of one backend's first output against labels (see real_inputs)."""
     from .benchmark.real_inputs import Predictions
     first = outputs[output_names[0]]
-    pr = Predictions(len(labels))
+    pr = Predictions(len(labels), output_names[0])
     for k in range(len(labels)):
         pr.record(k, [first[k]])
     return pr.quality(labels)
@@ -392,7 +392,8 @@ def run_sweep(model, backends, reference="cpu", iterations=300, input_shapes=Non
         results[name] = res
         rows.append(_summary_row(row, res, eq))
         if quality is not None:
-            rows[-1].update(rmse=quality.get("rmse"), accuracy=quality.get("accuracy"))
+            rows[-1].update(rmse=quality.get("rmse"), accuracy=quality.get("accuracy"),
+                            top5_accuracy=quality.get("top5_accuracy"))
         if save_stem:
             _write(f"{save_stem}.{name}.json", res)
 
@@ -444,7 +445,8 @@ def _external_row(spec, ref_out, output_names, samples, reference, atol, rtol, d
                outputs_file=str(outputs_path))
     if labels is not None:
         q = quality_of(cand, output_names, labels)
-        row.update(rmse=q.get("rmse"), accuracy=q.get("accuracy"), quality=q)
+        row.update(rmse=q.get("rmse"), accuracy=q.get("accuracy"),
+                   top5_accuracy=q.get("top5_accuracy"), quality=q)
     if timing_path:
         try:
             t = json.loads(Path(timing_path).read_text())

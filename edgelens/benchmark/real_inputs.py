@@ -2,15 +2,15 @@
 edgelens.benchmark.real_inputs
 --------------------------------
 Real model inputs and labels for `--model` runs (benchmark, periodic, soak,
-contract run): the windows a partner already prepared, fed to the model one
-per iteration, and — with labels — how accurate the model was on them.
+contract run, sweep): samples you already prepared (images, sensor windows,
+feature vectors), fed to the model one per iteration, and, with labels, how
+accurate the model was on them on this board and backend.
 
-Why: `--model` used synthetic random inputs, which time a model but say
-nothing about it on real data; and a model handed over as ONNX + prepared
-windows (SML's motor-dropout LSTM: 2437 windows of 100 x 150, float32, plus a
-regression target) needed hand-written replay scripts. For raw recordings
+Why: synthetic random inputs time a model but say nothing about what it
+answers; and an accuracy number measured on a workstation says nothing about
+the quantised / TensorRT / FP16 build on the device. For raw recordings
 (CSV + a stream spec with windowing and scaling) use `edgelens replay`; this
-is for windows that are already model inputs.
+is for data that is already model input.
 
 Formats:
   .npy   one array, first dimension = sample (memory-mapped: a large file is
@@ -21,16 +21,20 @@ Formats:
          no header, single-input model; the number of samples is the file
          size / one input's size (must divide evenly)
 Each sample is the model input's shape, or that shape without its leading
-batch dimension of 1 ([N, 100, 150] feeds a [1, 100, 150] input).
+batch dimension of 1 ([N, 3, 224, 224] feeds a [1, 3, 224, 224] input).
+Inputs are fed exactly as given (no normalisation, no resizing): prepare them
+the way the model was trained.
 
-Labels (.npy, raw float32 .bin, or .csv/.txt, one per sample):
-  one value per sample and a single-value model output -> regression:
-  RMSE, MAE, worst error, and RMSE per label level when there are few
-  levels; an integer label per sample and a vector output -> classification
-  accuracy (argmax).
-
-Real inputs are fed exactly as given (no normalisation): partners' windows
-are usually scaled already.
+Labels (.npy, raw float32 .bin, or .csv/.txt), one row per sample, scored
+against the model's FIRST output:
+  [N]  + a single output value   regression: RMSE, MAE, worst error, RMSE
+                                 per label level (few distinct labels); with
+                                 0/1 labels also accuracy, precision, recall
+                                 at > 0.5 (binary detectors)
+  [N, k] + k output values       multi-value regression: RMSE overall and
+                                 per output
+  [N] class indices + C outputs  classification: top-1 (argmax), top-5
+                                 (C > 5) and per-class accuracy
 """
 
 import hashlib
@@ -150,6 +154,8 @@ def load_labels(path, n):
         y = np.load(path, allow_pickle=False)
     elif ext in RAW_EXTENSIONS:
         y = np.fromfile(path, dtype="<f4")
+        if len(y) != n and n and len(y) % n == 0:
+            y = y.reshape(n, -1)                  # raw [N, k] values, row-major
     elif ext in (".csv", ".txt"):
         y = np.loadtxt(path, delimiter="," if ext == ".csv" else None, ndmin=1)
     else:
@@ -157,6 +163,9 @@ def load_labels(path, n):
     y = np.asarray(y)
     if y.ndim > 1 and y.shape[1:] == (1,) * (y.ndim - 1):
         y = y.reshape(len(y))
+    if y.ndim > 2:
+        raise InputError(f"--labels: {path} has shape {y.shape}; use [N] (one value or class "
+                         f"per sample) or [N, k] (k values per sample).")
     if len(y) != n:
         raise InputError(f"--labels: {path} has {len(y)} labels but the inputs have {n} "
                          f"samples; there must be one label per sample, in the same order.")
@@ -188,43 +197,139 @@ class SampleOrder:
         return (i * self.stride) % self.n
 
 
-class Predictions:
-    """Preallocated: recording a prediction allocates nothing that lives on."""
+VECTOR_MAX = 64           # outputs up to this size are kept whole (regression vectors, small class sets)
+TOP_K = 5
+BINARY_THRESHOLD = 0.5
 
-    def __init__(self, n):
-        self.value = np.full(n, np.nan)
-        self.kind = None
+
+def _task(y, size):
+    """What the labels and the model's first output say the task is.
+
+      labels [N]     + 1 output value            -> regression (and, when every
+                                                    label is 0 or 1, binary
+                                                    accuracy at > 0.5 as well)
+      labels [N, k]  + k output values           -> multi-value regression
+      labels [N] integers + C > 1 output values  -> classification (argmax,
+                                                    top-5 when C > 5)
+    """
+    y = np.asarray(y)
+    if y.ndim == 2:
+        if y.shape[1] != size:
+            raise InputError(f"--labels have {y.shape[1]} values per sample but the model's "
+                             f"first output has {size}; they must match for multi-value "
+                             f"regression.")
+        return "regression"
+    if size == 1:
+        return "binary" if np.isin(np.unique(y), (0, 1)).all() else "regression"
+    if not np.all(np.mod(y, 1) == 0) or y.min() < 0 or y.max() >= size:
+        raise InputError(f"--labels: the model's first output has {size} values, so labels must "
+                         f"be class indices 0..{size - 1} (one per sample), or [N, {size}] "
+                         f"arrays for multi-value regression.")
+    return "classification"
+
+
+class Predictions:
+    """The model's first output per sample, preallocated (recording allocates
+    nothing that lives on). Outputs up to VECTOR_MAX values are kept whole;
+    larger ones (e.g. 1000 ImageNet classes) keep their top-5 class indices."""
+
+    def __init__(self, n, output_name=None):
+        self.n, self.output = n, output_name
+        self.size = None
+        self.vec = None            # [n, size] float32
+        self.top = None            # [n, TOP_K] int32, best first
         self.count = 0
 
+    @property
+    def kind(self):                 # backward compatible: regression | classification
+        return None if self.size is None else ("regression" if self.size == 1 else
+                                               "classification")
+
     def record(self, k, outputs):
-        out = np.asarray(outputs[0])
-        if self.kind is None:
-            self.kind = "regression" if out.size == 1 else "classification"
-        self.value[k] = out.ravel()[0] if self.kind == "regression" else int(np.argmax(out))
+        out = np.asarray(outputs[0]).ravel()
+        if self.size is None:
+            self.size = out.size
+            if self.size <= VECTOR_MAX:
+                self.vec = np.full((self.n, self.size), np.nan, np.float32)
+            else:
+                self.top = np.full((self.n, TOP_K), -1, np.int32)
+        if self.vec is not None:
+            self.vec[k] = out
+        else:
+            idx = np.argpartition(-out, TOP_K)[:TOP_K]
+            self.top[k] = idx[np.argsort(-out[idx])]
         self.count += 1
 
+    def _done(self):
+        if self.vec is not None:
+            return np.isfinite(self.vec).all(axis=1)
+        if self.top is not None:
+            return self.top[:, 0] >= 0
+        return np.zeros(self.n, bool)
+
     def quality(self, labels, labels_path=None):
-        ok = np.isfinite(self.value)
+        y_all = np.asarray(labels)
+        ok = self._done()
         done = int(ok.sum())
-        out = {"labels": labels_path, "samples": int(len(labels)), "samples_predicted": done,
-               "full_pass": done == len(labels), "task": self.kind}
+        out = {"labels": labels_path, "output": self.output, "samples": int(len(y_all)),
+               "samples_predicted": done, "full_pass": done == len(y_all), "task": None}
         if not done:
             return out
-        p, y = self.value[ok], np.asarray(labels, dtype=float)[ok]
-        if self.kind == "classification":
-            out["accuracy"] = round(float(np.mean(p == y)), 5)
+        try:
+            task = _task(y_all, self.size)
+        except InputError as e:
+            out["error"] = str(e)
             return out
-        err = p - y
+        out["task"] = task
+        y = y_all[ok]
+        if task == "classification":
+            return self._classification(out, y, ok)
+        p = self.vec[ok].astype(float)
+        yv = y.astype(float).reshape(len(y), -1)
+        err = p - yv
         out.update(rmse=round(float(np.sqrt(np.mean(err ** 2))), 5),
                    mae=round(float(np.mean(np.abs(err))), 5),
                    max_abs_error=round(float(np.max(np.abs(err))), 5))
-        levels = np.unique(y)
+        if yv.shape[1] > 1:
+            out["outputs"] = yv.shape[1]
+            out["per_output_rmse"] = [round(float(v), 5) for v in np.sqrt(np.mean(err ** 2, 0))]
+            return out
+        p1, y1, e1 = p[:, 0], yv[:, 0], err[:, 0]
+        if task == "binary":
+            pred = p1 > BINARY_THRESHOLD
+            truth = y1 > BINARY_THRESHOLD
+            tp, fp = int((pred & truth).sum()), int((pred & ~truth).sum())
+            fn = int((~pred & truth).sum())
+            out.update(threshold=BINARY_THRESHOLD,
+                       accuracy=round(float(np.mean(pred == truth)), 5),
+                       precision=round(tp / (tp + fp), 5) if tp + fp else None,
+                       recall=round(tp / (tp + fn), 5) if tp + fn else None,
+                       false_positives=fp, false_negatives=fn)
+        levels = np.unique(y1)
         if len(levels) <= MAX_LEVELS:
             out["per_level"] = []
             for lv in levels:
-                m = y == lv
+                m = y1 == lv
                 out["per_level"].append({
                     "label": float(lv), "samples": int(m.sum()),
-                    "rmse": round(float(np.sqrt(np.mean(err[m] ** 2))), 5),
-                    "mean_prediction": round(float(p[m].mean()), 5)})
+                    "rmse": round(float(np.sqrt(np.mean(e1[m] ** 2))), 5),
+                    "mean_prediction": round(float(p1[m].mean()), 5)})
+        return out
+
+    def _classification(self, out, y, ok):
+        y = y.astype(int)
+        if self.vec is not None:
+            scores = self.vec[ok]
+            top = np.argsort(-scores, axis=1)[:, :TOP_K]
+        else:
+            top = self.top[ok]
+        out["classes"] = int(self.size)
+        out["accuracy"] = round(float(np.mean(top[:, 0] == y)), 5)
+        if self.size > TOP_K:
+            out["top5_accuracy"] = round(float(np.mean((top == y[:, None]).any(axis=1))), 5)
+        classes = np.unique(y)
+        if len(classes) <= MAX_LEVELS:
+            out["per_class"] = [{"class": int(c), "samples": int((y == c).sum()),
+                                 "accuracy": round(float(np.mean(top[y == c, 0] == c)), 5)}
+                                for c in classes]
         return out

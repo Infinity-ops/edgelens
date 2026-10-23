@@ -164,7 +164,7 @@ def record(
 ):
     """Collect inference markers from any application (C/C++ edgelens_mark.h,
     Python edgelens.mark) plus board telemetry. Optionally starts the
-    application:  edgelens record --deadline-ms 3000 -- ./fortis --config x.yaml"""
+    application:  edgelens record --deadline-ms 3000 -- ./my_app --config app.yaml"""
     cmd = list(ctx.args)
     try:
         Path(save).parent.mkdir(parents=True, exist_ok=True)
@@ -231,7 +231,7 @@ def watch(
 ):
     """Attach mode: profile a running application WITHOUT changing its code.
     Per-process CPU, memory, threads, context switches + board power and
-    temperature, on one timeline.  edgelens watch --name fortis --duration 60"""
+    temperature, on one timeline.  edgelens watch --name my_app --duration 60"""
     cmd = list(ctx.args)
     targets = sum(x is not None and x != [] for x in (pid, name, cmd or None))
     if targets != 1:
@@ -335,8 +335,8 @@ app.add_typer(ros2_app, name="ros2")
 
 @ros2_app.command("latency")
 def ros2_latency(
-    from_topic: str = typer.Option(..., "--from", help="Input topic, e.g. /imr/imu."),
-    to_topic: str = typer.Option(None, "--to", help="Output topic, e.g. /pm/prediction. Its "
+    from_topic: str = typer.Option(..., "--from", help="Input topic, e.g. /sensor/imu."),
+    to_topic: str = typer.Option(None, "--to", help="Output topic, e.g. /model/prediction. Its "
                                  "messages must carry the input's header.stamp."),
     duration: float = typer.Option(30.0, "--duration", help="Seconds to listen."),
     deadline_ms: float = typer.Option(None, "--deadline-ms", help="Latency deadline."),

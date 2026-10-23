@@ -32,7 +32,7 @@ def cadence(result):
     real = cfg.get("deployment_period_ms")
     how = "deployment period in the spec"
     if not real and not result.get("stream"):
-        # an application recorded with --period-ms (FORTIS, a ROS node)
+        # an application recorded with --period-ms (an inference runtime, a ROS node)
         real = (result.get("requirements") or {}).get("period_ms")
         how = "the run's period"
     if not real:

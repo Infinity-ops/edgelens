@@ -656,6 +656,7 @@ class OnnxStagePipeline:
             self._static_inputs[inp.name] = _synthetic_tensor(shape, dtype, rng)
 
         from .real_inputs import InputError, Predictions, RealInputs, SampleOrder, load_labels
+        from .real_inputs import _task as _label_task
         self.real = self.labels = self.preds = self.order = None
         self.labels_path = labels
         self._i = 0
@@ -664,9 +665,12 @@ class OnnxStagePipeline:
             if inputs_path:
                 self.real = RealInputs(inputs_path, self.inputs)
                 self.order = SampleOrder(self.real.n, inputs_order)
-                self.preds = Predictions(self.real.n)
+                self.preds = Predictions(self.real.n, self.session.get_outputs()[0].name)
                 if labels:
                     self.labels = load_labels(labels, self.real.n)
+                    oshape = self.session.get_outputs()[0].shape
+                    if all(isinstance(d, int) and d > 0 for d in oshape):
+                        _label_task(self.labels, int(np.prod(oshape)))   # fail before the run
             elif labels:
                 raise InputError("--labels needs --inputs: labels belong to real input samples.")
         except InputError as e:

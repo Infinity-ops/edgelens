@@ -1,7 +1,7 @@
 /*
  * edgelens_mark.h — EdgeLens inference markers for C and C++ (header-only).
  *
- * Measure spans inside any C/C++ application (FORTIS, a ROS 2 node, a
+ * Measure spans inside any C/C++ application (an inference runtime, a ROS 2 node, a
  * TensorRT service) and send them to an EdgeLens collector:
  *
  *     edgelens record --deadline-ms 3000 --save run.json -- ./my_app

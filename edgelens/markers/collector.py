@@ -137,7 +137,7 @@ class MarkerCollector:
             sock.close()
             raise CollectorError(f"Cannot listen on {self.path}: {e.strerror or e}") from e
         try:
-            # Let processes of other users (e.g. a root FORTIS service) send.
+            # Let processes of other users (e.g. an inference service running as root) send.
             os.chmod(self.path, 0o666)
         except OSError:
             pass

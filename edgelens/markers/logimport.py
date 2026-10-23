@@ -3,7 +3,7 @@ edgelens.markers.logimport
 ----------------------------
 Timing from logs an application already writes, when you can't add markers:
 
-    edgelens import-log fortis.log --regex 'LSTM inference took (?P<ms>[0-9.]+) ms'
+    edgelens import-log app.log --regex 'inference took (?P<ms>[0-9.]+) ms'
 
 Named groups the regex may use:
   duration (one required unless start/end given):

@@ -6,9 +6,9 @@ Assumption contracts: requirements as code (v0.2 Layer 3, E1).
 A contract says what a system guarantees AND under which conditions the
 guarantee is claimed:
 
-    contract: dem2-anomaly-detection
+    contract: vibration-anomaly-detector
     version: "1.0"
-    requirements_doc: EdgeAI-Trust D1.1
+    requirements_doc: SRS-2.1
     min_duration: 30m
     min_iterations: 1000
     assumes:
@@ -19,10 +19,10 @@ guarantee is claimed:
       max_start_temp_c: 50
       max_background_cpu_pct: 10
     guarantees:
-      p99_ms:          {limit: 3000, id: D1.1-R07}
-      max_miss_ratio:  {limit: 0, deadline_ms: 3000, id: D1.1-R08}
-      max_energy_per_period_mj: {limit: 15000, id: D1.1-R12}
-      max_temp_c:      {limit: 85, id: D1.1-R14}
+      p99_ms:          {limit: 3000, id: SRS-R07}
+      max_miss_ratio:  {limit: 0, deadline_ms: 3000, id: SRS-R08}
+      max_energy_per_period_mj: {limit: 15000, id: SRS-R12}
+      max_temp_c:      {limit: 85, id: SRS-R14}
 
 Verdict (assume-guarantee semantics: A -> G):
 
@@ -613,7 +613,7 @@ ICON = {PASS: "✅ PASS", FAIL: "❌ FAIL", NOT_MEASURED: "⚠️ NOT MEASURED",
 def evidence_markdown(verdict, result_path=None):
     """A Markdown evidence record: one row per requirement ID, the conditions
     it was measured under, and the run's identity. Paste-ready for a
-    deliverable (D6.2) or a CI job summary."""
+    report, a certification dossier or a CI job summary."""
     c = verdict.get("contract") or {}
     run = verdict.get("run") or {}
     L = []
@@ -700,7 +700,7 @@ TEMPLATE = """\
 contract: my-pipeline
 version: "1.0"
 description: Anomaly detection at 1 Hz on the target board
-requirements_doc: D1.1            # where the requirement IDs come from
+requirements_doc: SRS-2.1         # where the requirement IDs come from
 
 min_duration: 10m                 # less evidence than this -> INCONCLUSIVE
 min_iterations: 300

@@ -90,16 +90,19 @@ TINY_STAGE_MS = 0.005     # per-stage % change is not shown below this
 
 # --model with real data (edgelens.benchmark.real_inputs); shared by benchmark,
 # periodic, soak and contract run
-INPUTS_HELP = ("--model only: real input samples (.npy, .npz, or raw float32 .bin), first "
-               "dimension = sample; fed as given, one per iteration. For raw CSV recordings "
-               "use `edgelens replay`.")
-LABELS_HELP = ("With --inputs: one ground-truth value per sample (.npy, raw float32 .bin, "
-               ".csv). Adds accuracy (RMSE, MAE, per level; or accuracy for classes) to the "
-               "result, which `validate --max-rmse` and contracts check.")
-THREADS_HELP = ("--model only: onnxruntime intra-op threads (default: one per core). On an "
-                "AGX Orin 4 of 8 gave the same latency at half the CPU.")
-ORDER_HELP = ("With --inputs: sequential (recording order) or spread (every sample once per "
-              "pass, scattered, so a short run sees the whole recording).")
+INPUTS_HELP = ("--model only: real input samples (images, sensor windows, features) as "
+               ".npy, .npz (one array per input) or raw .bin in the model's input dtype; "
+               "first dimension = sample. Fed as given (no resizing or normalisation), one "
+               "per iteration. For raw CSV recordings use `edgelens replay`.")
+LABELS_HELP = ("With --inputs: ground truth, one row per sample (.npy, raw float32 .bin, "
+               ".csv), scored against the model's first output: values -> RMSE/MAE "
+               "(0/1 labels also accuracy, precision, recall); class indices -> top-1/top-5 "
+               "accuracy. Checked by `validate --max-rmse / --min-accuracy` and contracts.")
+THREADS_HELP = ("--model only: onnxruntime intra-op threads (default: one per core, all "
+                "busy). Fewer threads often keep the latency and free CPU for the rest of "
+                "the system; recorded in the result so `compare` shows the effect.")
+ORDER_HELP = ("With --inputs: sequential (file order) or spread (every sample once per "
+              "pass, scattered, so a short run already covers the whole data set).")
 
 
 def _print_quality(q):
@@ -108,14 +111,32 @@ def _print_quality(q):
     part = (f"{q['samples_predicted']} of {q['samples']} samples"
             + ("" if q.get("full_pass") else " [yellow](not a full pass: --iterations "
                f"{q['samples']} or --inputs-order spread)[/yellow]"))
-    if q.get("rmse") is not None:
-        console.print(f"[bold]Accuracy:[/bold] RMSE {q['rmse']} · MAE {q['mae']} · worst "
-                      f"|error| {q['max_abs_error']} over {part}")
-        for lv in q.get("per_level") or []:
-            console.print(f"[dim]  label {lv['label']:g}: {lv['samples']} samples, RMSE "
-                          f"{lv['rmse']}, mean prediction {lv['mean_prediction']}[/dim]")
-    elif q.get("accuracy") is not None:
-        console.print(f"[bold]Accuracy:[/bold] {q['accuracy'] * 100:.2f}% over {part}")
+    if q.get("error"):
+        console.print(f"[red]Accuracy not computed:[/red] {q['error']}")
+        return
+    if q.get("task") == "classification":
+        top5 = (f" · top-5 {q['top5_accuracy'] * 100:.2f}%"
+                if q.get("top5_accuracy") is not None else "")
+        console.print(f"[bold]Accuracy:[/bold] top-1 {q['accuracy'] * 100:.2f}%{top5} "
+                      f"({q['classes']} classes) over {part}")
+        for c in q.get("per_class") or []:
+            console.print(f"[dim]  class {c['class']}: {c['samples']} samples, "
+                          f"{c['accuracy'] * 100:.1f}%[/dim]")
+        return
+    if q.get("rmse") is None:
+        return
+    console.print(f"[bold]Accuracy:[/bold] RMSE {q['rmse']} · MAE {q['mae']} · worst "
+                  f"|error| {q['max_abs_error']} over {part}")
+    if q.get("per_output_rmse"):
+        console.print(f"[dim]  RMSE per output: {', '.join(map(str, q['per_output_rmse']))}[/dim]")
+    if q.get("task") == "binary":
+        pr = lambda v: "-" if v is None else f"{v * 100:.1f}%"   # noqa: E731
+        console.print(f"[bold]  At > {q['threshold']}:[/bold] accuracy {pr(q['accuracy'])} · "
+                      f"precision {pr(q['precision'])} · recall {pr(q['recall'])} · "
+                      f"{q['false_positives']} false alarm(s), {q['false_negatives']} missed")
+    for lv in q.get("per_level") or []:
+        console.print(f"[dim]  label {lv['label']:g}: {lv['samples']} samples, RMSE "
+                      f"{lv['rmse']}, mean prediction {lv['mean_prediction']}[/dim]")
 
 
 def _print_gc(gcb):
@@ -985,8 +1006,9 @@ def validate(
                                           help="Max events that never raised the alarm."),
     max_rmse: float = typer.Option(None, "--max-rmse", help="Max output error vs ground "
                                    "truth (replay / detect, or --model --inputs --labels)."),
-    min_accuracy: float = typer.Option(None, "--min-accuracy", help="Min class accuracy "
-                                       "(0..1) vs --labels (--model --inputs --labels)."),
+    min_accuracy: float = typer.Option(None, "--min-accuracy", help="Min accuracy (0..1) "
+                                       "vs --labels: top-1 for classifiers, > 0.5 for 0/1 "
+                                       "detectors (--model --inputs --labels)."),
     contract: str = typer.Option(None, "--contract", help="Assumption contract (.yaml / "
                                  ".json): requirements AND the conditions they hold under. "
                                  "A violated assumption gives INCONCLUSIVE, never PASS. "

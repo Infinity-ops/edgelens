@@ -56,7 +56,7 @@ def sweep(
                                      "for output equivalence."),
     export_inputs: str = typer.Option(None, "--export-inputs", help="Write the evaluation "
                                       "inputs to this .npz, to run them through an external "
-                                      "runtime (EDDL, C++)."),
+                                      "runtime (EDDL, TFLite, a C++ engine)."),
     external: List[str] = typer.Option(None, "--external", help="NAME=outputs.npz[,timing="
                                        "result.json]: outputs of an external runtime for the "
                                        "exported inputs. Repeatable."),
@@ -123,6 +123,19 @@ def sweep(
                   f"{_stem(save)}.<backend>.json — use them with validate / compare)[/dim]")
 
 
+def _vs_labels(r):
+    """Sweep row's score against the labels: accuracy first when there is one
+    (classifiers, 0/1 detectors), RMSE for regression."""
+    parts = []
+    if r.get("accuracy") is not None:
+        parts.append(f"{r['accuracy'] * 100:.2f}%")
+        if r.get("top5_accuracy") is not None:
+            parts.append(f"top-5 {r['top5_accuracy'] * 100:.2f}%")
+    if r.get("rmse") is not None:
+        parts.append(f"RMSE {r['rmse']}")
+    return " · ".join(parts) or "-"
+
+
 def print_sweep(summary):
     t = Table(title=f"EdgeLens sweep — {Path(summary['model']).name} "
                     f"(reference: {summary['reference']}, {summary['samples']} input samples, "
@@ -150,9 +163,7 @@ def print_sweep(summary):
                   _fmt(r.get("energy_mj"), 3, " mJ"),
                   "0" if r.get("max_abs_error") == 0 else f"{r.get('max_abs_error', 0):.3g}",
                   agree_s, f"[{style.get(v, 'white')}]{v}[/{style.get(v, 'white')}]",
-                  *([f"RMSE {r['rmse']}" if r.get("rmse") is not None else
-                     f"{r['accuracy'] * 100:.2f}%" if r.get("accuracy") is not None else "-"]
-                    if acc else []))
+                  *([_vs_labels(r)] if acc else []))
     console.print(t)
     tol = summary["tolerance"]
     console.print(f"[dim]EQUIVALENT = every value within atol {tol['atol']:g} / rtol "
@@ -161,8 +172,8 @@ def print_sweep(summary):
                   f"start-up includes TensorRT engine builds.[/dim]")
     if summary["inputs"].startswith("synthetic"):
         console.print("[yellow]Inputs were synthetic: decision agreement on random data says "
-                      "little about real decisions. Pass --inputs with recorded data (e.g. the "
-                      "merged DEM2 windows) for evidence that counts.[/yellow]")
+                      "little about real decisions. Pass --inputs with recorded data (e.g. windows from a "
+                      "field recording) for evidence that counts.[/yellow]")
 
 
 # ---------------------------------------------------------------- periodic (I1)
@@ -321,8 +332,8 @@ def soak(
 ):
     """Long runs: latency drift, thermal throttling, memory growth (process
     and Jetson GPU memory), swap and time-to-out-of-memory, window by window,
-    streamed to disk.   edgelens soak --duration 30m --pipeline dem2.py --period-ms 1000
-                        edgelens soak --duration 30m -- ./fortis --config x.yaml"""
+    streamed to disk.   edgelens soak --duration 30m --pipeline pipeline.py --period-ms 1000
+                        edgelens soak --duration 30m -- ./my_app --config app.yaml"""
     from . import soak as sk
     cmd = list(ctx.args)
     if report:

@@ -3,8 +3,8 @@ edgelens.soak
 ---------------
 Long runs (30 minutes, hours): what a 300-iteration benchmark can't show.
 
-    edgelens soak --duration 30m --pipeline dem2.py --period-ms 1000
-    edgelens soak --duration 30m -- ./fortis --config dem2.yaml     (markers + process)
+    edgelens soak --duration 30m --pipeline pipeline.py --period-ms 1000
+    edgelens soak --duration 30m -- ./my_app --config app.yaml     (markers + process)
 
 The run is cut into windows (default 60 s). After every window one JSON line
 is appended to <save>.jsonl and flushed to disk, so a crash, a power cut or
