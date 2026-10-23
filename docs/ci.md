@@ -7,7 +7,7 @@ before it is merged.
 The complete example repository is in
 [`examples/ci-jetson/`](../examples/ci-jetson/README.md): a GitHub Actions
 workflow for a self-hosted Jetson runner, an assumption contract
-([contracts.md](contracts.md)), the gate script and a DEM2-style pipeline.
+([contracts.md](contracts.md)), the gate script and a 1 Hz anomaly-detection pipeline.
 Copy the folder into a new private repository to start.
 
 How the gate works:

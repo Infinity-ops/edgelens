@@ -190,7 +190,7 @@ Each run writes `edgelens_validation_<board>_<date>/SUMMARY.txt` and a
 | T5 schema | the v0.1.0 file loads in diagnose / validate / compare without a crash |
 | S1 markers | C++ 300 and Python 200 iterations, 0 lost; import-log parses 300 lines |
 | S2 watch | process table + board power; a deliberate leak detected; markers picked up |
-| S4 bag | merged table with the IMU gap found; DEM2 pipeline within 3 s |
+| S4 bag | merged table with the IMU gap found; bag-replay pipeline within 3 s |
 | **I3 sweep** | every available backend timed and compared with CPU; **TensorRT FP16 drift quantified** (max \|error\|, decision agreement) |
 | I3 FP16 requirements | the FP16 result passes `validate`: decisions >= 99% equal, max \|error\| <= 0.05 |
 | **I1 periodic** | latency and energy per period at 1 Hz; duty-cycle penalty checked |
@@ -205,12 +205,12 @@ another run in the same process stayed flat at 166 MB for 5 windows and then
 jumped +20 MB — "no leak" was the honest answer for what RSS showed. Start a
 soak in a fresh process, and run it long enough that the leak outgrows the
 process's free memory (EdgeLens also needs >= 8 MB and >= 5% of growth).
-| **I2 soak** | 30-minute DEM2 run at 1 Hz: drift, throttling, memory, JSONL streamed |
+| **I2 soak** | 30-minute bag-replay run at 1 Hz: drift, throttling, memory, JSONL streamed |
 | I2 soak requirements | the soak result passes `validate`: p99 <= 3 s, no misses, drift <= 10%, memory growth <= 20 MB/h, no throttled window |
 | **E1 contract PASS** | a contract generated from this board's state: every assumption holds, every guarantee met. The script first waits up to 2 min (`EDGELENS_QUIET_WAIT_S`) for background load < 20%; if the board stays busy it names the busiest processes (INFO line) and allows that load + 15% |
 | **E1 violated: …** | board, power mode, clocks (contract-side and, with sudo, physically pinned), start temperature, unpaced input, background load (CPU hogs), provider: each gives INCONCLUSIVE with exactly that assumption VIOLATED |
 | **E1** | all of the above |
-| **E2 export / tracks** | two applications recorded at once + the DEM2 run: spans of several processes, iterations, CPU/GPU load, temperature, power |
+| **E2 export / tracks** | two applications recorded at once + the bag-replay run: spans of several processes, iterations, CPU/GPU load, temperature, power |
 | E2 by hand (TODO) | open the `.perfetto.json` at https://ui.perfetto.dev and look at every track |
 | **E3 CI gate** | `examples/ci-jetson/ci/perf_gate.sh` exits 0 and writes summary, evidence, timeline |
 | E3 by hand (TODO) | the example repository on GitHub with this board as a runner blocks a pull request |
@@ -236,7 +236,7 @@ Must come out the **same** on both: every gate PASS (except skipped ones),
 # Which backend? speed, energy AND whether the answer changed
 edgelens sweep --model tests/fixtures/lstm_anomaly.onnx --backends cpu,cuda,tensorrt,tensorrt-fp16
 #   -> table: p50 / p99 / energy per inference / max |error| / decisions agree / verdict
-#   real DEM2 data instead of synthetic inputs:  --inputs dem2_windows.npz
+#   real data instead of synthetic inputs:  --inputs windows.npz
 
 # The 1 Hz headline: "your benchmark says X ms; at 1 Hz it's Y ms"
 edgelens periodic --model tests/fixtures/lstm_anomaly.onnx --provider TensorrtExecutionProvider \
@@ -246,7 +246,7 @@ edgelens periodic ... --save pinned.json
 edgelens compare unpinned.json pinned.json      # trade-off: latency gained, mJ per period it costs
 
 # 30 minutes: drift, throttling, memory (process and Jetson GPU / NvMap), swap, time to OOM
-edgelens soak --duration 30m --pipeline examples/dem2_bag_replay.py --period-ms 1000 --save soak.json
+edgelens soak --duration 30m --pipeline examples/robot_bag_replay.py --period-ms 1000 --save soak.json
 edgelens soak --report soak.jsonl               # rebuild after a crash / power cut
 ```
 
@@ -255,7 +255,7 @@ edgelens soak --report soak.jsonl               # rebuild after a crash / power 
 ```bash
 # E1 — requirements with their conditions
 edgelens contract init my.yaml && edgelens contract check my.yaml
-edgelens contract run examples/ci-jetson/perf/dem2.contract.yaml --pipeline examples/ci-jetson/pipeline.py
+edgelens contract run examples/ci-jetson/perf/anomaly.contract.yaml --pipeline examples/ci-jetson/pipeline.py
 #   -> pre-run check (board, power mode, clocks, start temperature, background load),
 #      the run the contract needs, PASS / FAIL / INCONCLUSIVE + evidence.md
 edgelens validate run.json --contract my.yaml --evidence evidence.md     # any existing result

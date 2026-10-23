@@ -148,7 +148,7 @@ printf 'EL1 X sh 0 %d 0 %d %d - lstm' $$ 1000 2000000 | socat - UNIX-SENDTO:/tmp
 ## Attach mode: `edgelens watch`
 
 ```bash
-edgelens watch --name fortis --duration 1800 --save fortis.json   # a running process
+edgelens watch --name my_app --duration 1800 --save my_app.json   # a running process
 edgelens watch --pid 4242 --duration 60
 edgelens watch -- ./my_app --config x.yaml                          # start it
 ```
@@ -169,7 +169,7 @@ ticks, so each sample is good to about `1 / interval` percentage points
 ## Timing from logs: `edgelens import-log`
 
 ```bash
-edgelens import-log fortis.log --regex 'LSTM inference took (?P<ms>[0-9.]+) ms' --stage lstm
+edgelens import-log app.log --regex 'inference took (?P<ms>[0-9.]+) ms' --stage lstm
 edgelens import-log app.log --regex '(?P<stage>\w+) done in (?P<us>\d+) us'
 edgelens import-log app.log --regex 'span start=(?P<start_ns>\d+) end=(?P<end_ns>\d+)'
 ```
@@ -181,13 +181,13 @@ is marked weaker (`TIMING_FROM_LOG`): the application measured itself.
 
 ```bash
 source /opt/ros/humble/setup.bash
-edgelens ros2 latency --from /imr/imu --to /pm/prediction --duration 60 --deadline-ms 3000
+edgelens ros2 latency --from /sensor/imu --to /model/prediction --duration 60 --deadline-ms 3000
 ```
 
 - **Chain latency** — output arrival minus the arrival of the input with the
   same `header.stamp`. Both arrivals are on this machine's clock, so no
   clock sync is needed. Requires the output node to copy the input stamp
-  (the DEM2 convention).
+  (the usual ROS 2 convention).
 - **Data age** — arrival minus `header.stamp`: compares the sensor
   machine's clock with this one. Exact with `--same-machine`; across
   machines its uncertainty is the sum of both chrony error bounds

@@ -1,5 +1,5 @@
 """
-Predictive-maintenance pipeline for EdgeLens (Demo 2 style).
+Predictive-maintenance pipeline for EdgeLens (sensor window -> model -> alarm).
 
     edgelens benchmark --pipeline predictive_maintenance.py --iterations 2000 --save pm.json
     edgelens diagnose pm.json

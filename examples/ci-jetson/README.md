@@ -5,7 +5,7 @@ Jetson and **cannot be merged when it breaks its assumption contract**.
 
 ```
 .github/workflows/edgelens-perf.yml   the workflow (self-hosted Jetson runner)
-perf/dem2.contract.yaml               requirements + the conditions they hold under
+perf/anomaly.contract.yaml               requirements + the conditions they hold under
 ci/perf_gate.sh                       measure -> validate -> evidence (exit code = verdict)
 pipeline.py                           the pipeline under test (replace with yours)
 ```
@@ -29,7 +29,7 @@ What a run produces (job summary + the `edgelens-evidence-*` artifact):
 
 ```bash
 pip install "edgelens>=0.2"            # on a Jetson: without the [onnx] extra
-edgelens contract check perf/dem2.contract.yaml
+edgelens contract check perf/anomaly.contract.yaml
 bash ci/perf_gate.sh                   # off a Jetson: INCONCLUSIVE (board / power mode / clocks)
 ```
 
@@ -91,17 +91,17 @@ a private repository, or require approval for workflows from fork pull requests.
   `EDGELENS_TARGET: --model models/lstm.onnx --provider TensorrtExecutionProvider`
   (then add `provider: TensorrtExecutionProvider` to `assumes` — a silent fallback
   to CPU becomes INCONCLUSIVE instead of a misleading PASS).
-- **Your requirements:** edit `perf/dem2.contract.yaml` — guarantees use the
+- **Your requirements:** edit `perf/anomaly.contract.yaml` — guarantees use the
   same keys as `edgelens validate` flags; requirement IDs go into `id:`.
   `edgelens contract check` tells you how long a run it needs.
 - **Long runs** (drift, memory growth, throttling): add soak guarantees
   (`max_latency_drift_pct`, `max_mem_growth_mb_per_h`, `max_throttled_windows`) —
   `contract run` then runs `edgelens soak` for `min_duration`. Do that nightly
   (`on: schedule`), not on every pull request.
-- **A C++ application** (FORTIS, EDDL): record it with markers and validate the
+- **A C++ application** (your inference runtime, an EDDL program): record it with markers and validate the
   recording against the same contract:
 
   ```bash
-  edgelens record --period-ms 1000 --deadline-ms 3000 --duration 300 --save edgelens-out/run.json -- ./fortis --config dem2.yaml
-  edgelens validate edgelens-out/run.json --contract perf/dem2.contract.yaml --evidence edgelens-out/evidence.md
+  edgelens record --period-ms 1000 --deadline-ms 3000 --duration 300 --save edgelens-out/run.json -- ./my_app --config app.yaml
+  edgelens validate edgelens-out/run.json --contract perf/anomaly.contract.yaml --evidence edgelens-out/evidence.md
   ```

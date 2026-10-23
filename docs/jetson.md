@@ -60,10 +60,10 @@ the README only once their row below is filled from a real board, using
 | S1 markers | C++ and Python: received / lost at a realistic rate | _pending_ | _pending_ |
 | S2 attach | process table; deliberate leak detected | _pending_ | _pending_ |
 | S3 ROS 2 | chain latency vs markers in the node | _pending_ | _pending_ |
-| S4 bag replay | DEM2-shaped bag → 1 Hz pipeline, SLA check | _pending_ | _pending_ |
+| S4 bag replay | robot bag (IMU / odometry / commands) → 1 Hz pipeline, SLA check | _pending_ | _pending_ |
 | I3 sweep | LSTM: p50 / energy / max error / decision agreement per backend (CPU, CUDA, TRT, TRT-FP16, DLA) | _pending_ | _pending_ |
 | I1 periodic | 1 Hz vs back-to-back p50; energy per period; pinned vs unpinned trade-off | _pending_ | _pending_ |
-| I2 soak | 30 min DEM2 at 1 Hz: drift, throttling, memory growth; deliberate leak found | _pending_ | _pending_ |
+| I2 soak | 30 min bag replay at 1 Hz: drift, throttling, memory growth; deliberate leak found | _pending_ | _pending_ |
 | E1 contracts | PASS on a quiet board; each assumption deliberately violated → INCONCLUSIVE | _pending_ | _pending_ |
 | E2 timeline | two applications + board power on one Perfetto timeline, opened in ui.perfetto.dev | _pending_ | _pending_ |
 | E3 CI | example repository: self-hosted runner blocks a pull request that breaks the contract | _pending_ | _pending_ |

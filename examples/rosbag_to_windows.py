@@ -1,19 +1,19 @@
 """
 Turn a ROS bag into a merged, time-aligned table that EdgeLens can replay.
 
-Built for the DEM2 data description (SML): the Infineon recording is a ROS
-.bag with /imu, /odom and /cmd_vel_rc100; the predictive-maintenance model
+Typical case: a mobile-robot recording (.bag / .db3 / .mcap) with /imu,
+/odom and a velocity command topic, and a predictive-maintenance model that
 gets the last X readings of all sources, merged by timestamp.
 
     pip install "edgelens[rosbag]"           # rosbags: reads ROS 1 .bag and
                                               # ROS 2 .db3/.mcap, no ROS needed
-    python examples/rosbag_to_windows.py dem2.bag --out dem2_merged.npy
+    python examples/rosbag_to_windows.py robot.bag --out merged.npy
     # optional: --topics /imu /odom /cmd_vel_rc100 /battery  --base /imu
 
 Writes:
-    dem2_merged.npy         float64 [channels, rows]  (time on the last axis,
+    merged.npy              float64 [channels, rows]  (time on the last axis,
                             the layout edgelens.WindowSource replays)
-    dem2_merged.json        column names, per-topic rates, gaps, data age
+    merged.json             column names, per-topic rates, gaps, data age
 
 How the merge works (and why): one row per message of the BASE topic
 (default: the fastest one). Every other topic contributes its LATEST message
@@ -24,7 +24,7 @@ dropped. For each row and topic the AGE of the value used is kept
 (`age_ms:<topic>` columns), because a model fed a 400 ms old odometry value
 is not seeing what you think it is.
 
-Columns per message type (SML's selection; everything else falls back to all
+Columns per message type (the usual numeric fields; everything else falls back to all
 numeric fields, so a battery topic just works):
     sensor_msgs/Imu          orientation.xyzw, angular_velocity.xyz,
                              linear_acceleration.xyz
@@ -34,7 +34,7 @@ numeric fields, so a battery topic just works):
 
 Time: the bag's receive timestamp by default (always present) — the only
 mode in which "only already-arrived data" is guaranteed. --time header uses
-header.stamp where messages have one (DEM2 agreed on source timestamps), but
+header.stamp where messages have one (where nodes keep source timestamps), but
 then rows are aligned on the SENSOR clocks: a stamp before the row time does
 not prove the message had arrived, and topics without a header fall back to
 bag time, mixing two clocks. Use it to study source timing, not to emulate
@@ -203,7 +203,7 @@ def main(argv=None):
     ap.add_argument("--topics", nargs="+", default=list(DEFAULT_TOPICS))
     ap.add_argument("--base", default=None, help="timeline topic (default: the fastest)")
     ap.add_argument("--time", choices=("bag", "header"), default="bag")
-    ap.add_argument("--out", default="dem2_merged.npy")
+    ap.add_argument("--out", default="merged.npy")
     args = ap.parse_args(argv)
 
     data = read_topics(args.bag, args.topics, args.time)

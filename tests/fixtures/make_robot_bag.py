@@ -1,9 +1,9 @@
-"""Write a small synthetic ROS 1 bag shaped like the DEM2 Infineon recording:
+"""Write a small synthetic ROS 1 bag shaped like a mobile-robot recording:
 /imu (sensor_msgs/Imu, 100 Hz), /odom (nav_msgs/Odometry, 20 Hz),
 /cmd_vel_rc100 (geometry_msgs/Twist, 10 Hz, no header), and an optional
 /battery (sensor_msgs/BatteryState) for the generic-fields path.
 
-    python tests/fixtures/make_dem2_bag.py out.bag --seconds 5 [--imu-gap 1.0]
+    python tests/fixtures/make_robot_bag.py out.bag --seconds 5 [--imu-gap 1.0]
 
 --imu-gap drops IMU messages for 200 ms starting at that second, so tests can
 check that gaps are detected. Needs:  pip install "edgelens[rosbag]"

@@ -31,7 +31,7 @@ jobs:
     runs-on: [self-hosted, linux, ARM64, jetson]
     timeout-minutes: 45
     env:
-      EDGELENS_CONTRACT: perf/dem2.contract.yaml
+      EDGELENS_CONTRACT: perf/anomaly.contract.yaml
       EDGELENS_TARGET: --pipeline pipeline.py
       EDGELENS_OUT: edgelens-out
       EDGELENS_COOLDOWN_S: "300"        # wait up to 5 min for a hot board / leftover load

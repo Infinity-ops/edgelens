@@ -123,11 +123,14 @@ testing.
 ## Three ways in
 
 1. **Just a model** — `edgelens benchmark --model model.onnx --deadline-ms 33`
+   — on your own data, with accuracy on the board: `--inputs val_images/ --labels subfolders --image-prep imagenet` (or `.npy` / `.bin` arrays)
 2. **Your own pipeline, EdgeLens drives the loop** — `import edgelens as el`, define stages, `pipe.run(...)`
 3. **Keep your loop, add three lines** — `with el.trace(...) as t: ... with t.stage("inference"): ...`
 
 Full examples for all three, plus scenario packs (`vision`, `timeseries`,
-`custom`): [docs/usage.md](docs/usage.md).
+`custom`): [docs/usage.md](docs/usage.md). Which example fits your system:
+[examples/README.md](examples/README.md). A worked deployment:
+[predictive maintenance on an AGX Orin](docs/case-study-orin-predictive-maintenance.md).
 
 ## Commands
 
@@ -143,7 +146,8 @@ Full examples for all three, plus scenario packs (`vision`, `timeseries`,
 
 Useful `benchmark` flags: `--deadline-ms`, `--period-ms`, `--pace`,
 `--idle-baseline SECONDS` (measures idle power first, then reports the
-workload's dynamic energy), `--input-shape`, `--provider`.
+workload's dynamic energy), `--input-shape`, `--provider`, and with `--model`:
+`--inputs` / `--labels` (real data and accuracy), `--image-prep`, `--threads`.
 
 Exit codes: `compare` returns 0 (pass), 1 (regression), 2 (environments
 differ, with `--strict-env`); `validate` returns 0 (pass), 1 (fail),

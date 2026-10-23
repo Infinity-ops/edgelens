@@ -1,5 +1,5 @@
 """
-DEM2-style predictive-maintenance pipeline: a window of 16 sensor channels x 50
+Predictive-maintenance pipeline: a window of 16 sensor channels x 50
 samples -> features -> a small recurrent anomaly model -> alarm decision.
 
 Numpy only, so this example repository runs on any Jetson (and any laptop).
@@ -21,7 +21,7 @@ def build_pipeline():
     w_out = rng.standard_normal((HIDDEN, 1)).astype(np.float32) * 0.1
     mean, std = data.mean(axis=(0, 1)), data.std(axis=(0, 1)) + 1e-6
 
-    pipe = el.Pipeline("dem2-anomaly", pack="timeseries")
+    pipe = el.Pipeline("anomaly-1hz", pack="timeseries")
 
     def windows():
         i = 0

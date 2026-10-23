@@ -362,7 +362,7 @@ r = json.load(open(sys.argv[1])); m = r["markers"]
 print(r["iterations"], m["received"], m["lost"])
 sys.exit(0 if r["iterations"] == 200 and m["lost"] == 0 else 1)
 EOF
-printf 'start\n' >"$OUT/app.log"; for i in $(seq 1 300); do echo "[fortis] lstm inference took $((10 + i % 7)).5 ms" >>"$OUT/app.log"; done
+printf 'start\n' >"$OUT/app.log"; for i in $(seq 1 300); do echo "[app] lstm inference took $((10 + i % 7)).5 ms" >>"$OUT/app.log"; done
 gate "S1 import-log" "300 lines parsed" edgelens import-log "$OUT/app.log" --regex 'took (?P<ms>[0-9.]+) ms' --stage lstm --deadline-ms 20 --save "$OUT/log.json"
 
 # ------------------------------------------------------------------ S2 attach
@@ -386,14 +386,15 @@ gate "S2 watch + markers" "attach mode also picks up spans" edgelens watch --sav
 
 # ------------------------------------------------------------------ S4 bag replay
 if python3 -c "import rosbags" 2>/dev/null; then
-  run python3 tests/fixtures/make_dem2_bag.py "$OUT/dem2_synthetic.bag" --seconds 30 --imu-gap 10
-  gate "S4 bag merge" "merged table, IMU gap found" python3 examples/rosbag_to_windows.py "$OUT/dem2_synthetic.bag" --out "$OUT/dem2_merged.npy"
-  DEM2_MERGED="$OUT/dem2_merged.npy" run edgelens benchmark --pipeline examples/dem2_bag_replay.py --iterations "$ITER" --deadline-ms 3000 --save "$OUT/dem2.json"
-  gate "S4 DEM2 SLA" "every inference within 3 s" edgelens validate "$OUT/dem2.json" --p99-ms 3000 --max-miss-ratio 0
+  run python3 tests/fixtures/make_robot_bag.py "$OUT/bag_synthetic.bag" --seconds 30 --imu-gap 10
+  gate "S4 bag merge" "merged table, IMU gap found" python3 examples/rosbag_to_windows.py "$OUT/bag_synthetic.bag" --out "$OUT/bag_merged.npy"
+  BAG_MERGED="$OUT/bag_merged.npy" run edgelens benchmark --pipeline examples/robot_bag_replay.py --iterations "$ITER" --deadline-ms 3000 --save "$OUT/bag.json"
+  gate "S4 bag replay SLA" "every inference within 3 s" edgelens validate "$OUT/bag.json" --p99-ms 3000 --max-miss-ratio 0
   if [ "$QUICK" != "1" ]; then
-    DEM2_MERGED="$OUT/dem2_merged.npy" run edgelens benchmark --pipeline examples/dem2_bag_replay.py --iterations 60 --pace --period-ms 1000 --deadline-ms 3000 --save "$OUT/dem2_1hz.json"
+    BAG_MERGED="$OUT/bag_merged.npy" run edgelens benchmark --pipeline examples/robot_bag_replay.py --iterations 60 --pace --period-ms 1000 --deadline-ms 3000 --save "$OUT/bag_1hz.json"
   fi
-  [ -n "${DEM2_BAG:-}" ] && run python3 examples/rosbag_to_windows.py "$DEM2_BAG" --out "$OUT/dem2_real.npy"
+  BAG_FILE="${BAG_FILE:-${DEM2_BAG:-}}"   # your own bag (DEM2_BAG still read)
+  [ -n "$BAG_FILE" ] && run python3 examples/rosbag_to_windows.py "$BAG_FILE" --out "$OUT/bag_real.npy"
 else
   skip "S4 bag" 'pip install "edgelens[rosbag]"'
 fi
@@ -453,15 +454,15 @@ m = json.load(open(sys.argv[1]))["soak"]["memory"]
 print(m)
 sys.exit(0 if m["leak_suspected"] else 1)
 EOF
-if [ -f "$OUT/dem2_merged.npy" ]; then
+if [ -f "$OUT/bag_merged.npy" ]; then
   SOAK_T=$(( $(python3 -c "from edgelens.soak import parse_duration as p; print(int(p('$SOAK_D')))") + 300 ))
-  EDGELENS_STEP_TIMEOUT=$SOAK_T DEM2_MERGED="$OUT/dem2_merged.npy" STEP_TIMEOUT=$SOAK_T \
-    gate "I2 soak $SOAK_D" "DEM2 pipeline at 1 Hz: drift, throttling, memory, JSONL streamed" \
-    edgelens soak --duration "$SOAK_D" --window "$SOAK_W" --pipeline examples/dem2_bag_replay.py --period-ms 1000 --deadline-ms 3000 --save "$OUT/soak_dem2.json"
+  EDGELENS_STEP_TIMEOUT=$SOAK_T BAG_MERGED="$OUT/bag_merged.npy" STEP_TIMEOUT=$SOAK_T \
+    gate "I2 soak $SOAK_D" "bag-replay pipeline at 1 Hz: drift, throttling, memory, JSONL streamed" \
+    edgelens soak --duration "$SOAK_D" --window "$SOAK_W" --pipeline examples/robot_bag_replay.py --period-ms 1000 --deadline-ms 3000 --save "$OUT/soak_bag.json"
   gate "I2 soak requirements" "p99 <= 3 s, no misses, drift <= 10%, memory growth <= 20 MB/h, no throttled window" \
-    edgelens validate "$OUT/soak_dem2.json" --p99-ms 3000 --max-miss-ratio 0 --max-latency-drift-pct 10 --max-mem-growth-mb-per-h 20 --max-throttled-windows 0
+    edgelens validate "$OUT/soak_bag.json" --p99-ms 3000 --max-miss-ratio 0 --max-latency-drift-pct 10 --max-mem-growth-mb-per-h 20 --max-throttled-windows 0
 else
-  skip "I2 soak DEM2" "needs the S4 bag merge (pip install edgelens[rosbag])"
+  skip "I2 soak bag replay" "needs the S4 bag merge (pip install edgelens[rosbag])"
 fi
 
 # ------------------------------------------------------------------ Layer 3: E1 assumption contracts
@@ -566,7 +567,7 @@ e1_gate() {   # e1_gate <name> <validation.json> <assumption>
   else E1_OK=0; echo "FAIL  E1 violated: $1 — expected INCONCLUSIVE with '$3' VIOLATED (see steps.log)" >>"$OUT/SUMMARY.txt"; fi
 }
 
-# PASS path (also the E3 reference run): the DEM2-style pipeline under this board's contract
+# PASS path (also the E3 reference run): the 1 Hz anomaly pipeline under this board's contract
 gate "E1 contract PASS" "every assumption holds on this board, every guarantee met (needs a quiet board)" \
   edgelens contract run "$CON/base.json" --pipeline examples/ci-jetson/pipeline.py \
   --save "$OUT/e1_base.json" --evidence "$OUT/e1_base.evidence.md" --perfetto "$OUT/e1_base.perfetto.json"
@@ -627,7 +628,7 @@ else echo "FAIL  E1 — at least one violated assumption did not give INCONCLUSI
 
 # ------------------------------------------------------------------ Layer 3: E2 Perfetto timeline
 # Two applications at once into ONE recording (several processes, one clock),
-# then that recording + the DEM2 contract run (board power) on one timeline.
+# then that recording + the anomaly contract run (board power) on one timeline.
 SOCK="$(mktemp -u /tmp/edgelens-e2-XXXXXX.sock)"     # AF_UNIX paths max 107 bytes
 EDGELENS_SOCKET="$SOCK" edgelens record --duration 12 --deadline-ms 50 --save "$OUT/e2_two_apps.json" >>"$OUT/steps.log" 2>&1 &
 REC=$!; sleep 2
@@ -635,7 +636,7 @@ REC=$!; sleep 2
 EDGELENS_SOCKET="$SOCK" python3 examples/markers/python_app.py 200 >>"$OUT/steps.log" 2>&1
 wait "$REC"
 # the second file brings the board counters (power, temperature): any EdgeLens-driven run
-E2_BOARD=""; for f in "$OUT/e1_base.json" "$OUT/dem2_1hz.json" "$OUT/timeseries.json"; do [ -f "$f" ] && { E2_BOARD="$f"; break; }; done
+E2_BOARD=""; for f in "$OUT/e1_base.json" "$OUT/bag_1hz.json" "$OUT/timeseries.json"; do [ -f "$f" ] && { E2_BOARD="$f"; break; }; done
 E2_IN=""; for f in "$OUT/e2_two_apps.json" "$E2_BOARD"; do [ -n "$f" ] && [ -f "$f" ] && E2_IN="$E2_IN $f"; done
 # shellcheck disable=SC2086
 gate "E2 export" "Perfetto JSON written" edgelens export $E2_IN --perfetto "$OUT/e2_timeline.perfetto.json"

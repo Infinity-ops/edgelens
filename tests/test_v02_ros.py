@@ -110,7 +110,7 @@ rosbags = pytest.importorskip("rosbags")
 @pytest.fixture(scope="module")
 def dem2_bag(tmp_path_factory):
     sys.path.insert(0, str(ROOT / "tests" / "fixtures"))
-    from make_dem2_bag import write_bag
+    from make_robot_bag import write_bag
     path = tmp_path_factory.mktemp("bag") / "dem2.bag"
     write_bag(str(path), seconds=6, imu_gap_at=3.0, battery=True)
     return path
@@ -160,10 +160,10 @@ def test_dem2_replay_pipeline_runs_and_validates(dem2_bag, tmp_path, monkeypatch
     from edgelens.cli import app
     merged = tmp_path / "dem2_merged.npy"
     assert _run_example(dem2_bag, "--out", merged).returncode == 0
-    monkeypatch.setenv("DEM2_MERGED", str(merged))
+    monkeypatch.setenv("BAG_MERGED", str(merged))
     out = tmp_path / "dem2.json"
     res = CliRunner().invoke(app, ["benchmark", "--pipeline",
-                                   str(ROOT / "examples" / "dem2_bag_replay.py"),
+                                   str(ROOT / "examples" / "robot_bag_replay.py"),
                                    "--iterations", "120", "--deadline-ms", "3000",
                                    "--save", str(out)])
     assert res.exit_code == 0, res.output

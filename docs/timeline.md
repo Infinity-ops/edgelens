@@ -6,7 +6,7 @@
 
 ```bash
 edgelens export run.json --perfetto timeline.json
-edgelens export fortis.json lstm.json --perfetto dem2.json     # several files, one clock
+edgelens export app.json lstm.json --perfetto system.json     # several files, one clock
 ```
 
 Open https://ui.perfetto.dev → *Open trace file*. The file stays in your
@@ -28,15 +28,15 @@ marker spans, whether the GPU work was synchronized (`gpu_synced`).
 ## Several processes, several files
 
 Every EdgeLens timestamp is CLOCK_MONOTONIC. Files recorded on the same boot
-therefore line up exactly: record FORTIS (C++, markers) and the LSTM service
+therefore line up exactly: record a C++ runtime (markers) and a Python model service
 (Python, markers) with one `edgelens record` and you see the CAN decode, the
 inference and the board power on one screen:
 
 ```bash
-edgelens record --duration 60 --period-ms 1000 --save dem2.json &   # one collector
-./fortis --config dem2.yaml &                                        # both send markers
+edgelens record --duration 60 --period-ms 1000 --save system.json & # one collector
+./my_app --config app.yaml &                                         # both send markers
 python3 lstm_service.py
-edgelens export dem2.json --perfetto dem2.perfetto.json
+edgelens export system.json --perfetto system.perfetto.json
 ```
 
 Files recorded on the same boot but hours apart keep their real distance; the

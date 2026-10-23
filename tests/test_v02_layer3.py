@@ -442,10 +442,10 @@ CI = ROOT / "examples" / "ci-jetson"
 
 
 def test_ci_example_is_complete():
-    for f in (".github/workflows/edgelens-perf.yml", "perf/dem2.contract.yaml",
+    for f in (".github/workflows/edgelens-perf.yml", "perf/anomaly.contract.yaml",
               "ci/perf_gate.sh", "pipeline.py", "README.md"):
         assert (CI / f).exists(), f
-    c, _ = ct.load(CI / "perf" / "dem2.contract.yaml")
+    c, _ = ct.load(CI / "perf" / "anomaly.contract.yaml")
     assert c["assumes"]["clocks_pinned"]["value"] is True
     wf = (CI / ".github/workflows/edgelens-perf.yml").read_text()
     assert "self-hosted" in wf and "concurrency" in wf and "perf_gate.sh" in wf

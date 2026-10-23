@@ -1,5 +1,5 @@
 // A C++ "inference loop" instrumented with EdgeLens markers — the pattern
-// for FORTIS, an EDDL test program, or any C++ node.
+// for an inference runtime, an EDDL test program, or any C++ node.
 //
 //   g++ -O2 -std=c++11 -I"$(edgelens include)" examples/markers/cpp_app.cpp -o cpp_app
 //   edgelens record --deadline-ms 50 --period-ms 20 --save cpp.json -- ./cpp_app 500

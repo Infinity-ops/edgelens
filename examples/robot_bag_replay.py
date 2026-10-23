@@ -1,28 +1,29 @@
 """
-DEM2-style predictive maintenance, replayed from a ROS bag.
+Predictive maintenance on a mobile robot, replayed from a ROS bag.
 
-    python examples/rosbag_to_windows.py dem2.bag --out dem2_merged.npy
-    edgelens benchmark --pipeline examples/dem2_bag_replay.py --iterations 300 \\
-        --deadline-ms 3000 --save dem2.json
-    edgelens validate dem2.json --p99-ms 3000 --max-miss-ratio 0
+    python examples/rosbag_to_windows.py robot.bag --out merged.npy
+    BAG_MERGED=merged.npy edgelens benchmark --pipeline examples/robot_bag_replay.py \
+        --iterations 300 --deadline-ms 3000 --save replay.json
+    edgelens validate replay.json --p99-ms 3000 --max-miss-ratio 0
 
 Real-time check at the true 1 Hz rate (slow on purpose: 1 iteration/s):
-    edgelens benchmark --pipeline examples/dem2_bag_replay.py --iterations 120 \\
-        --pace --period-ms 1000 --deadline-ms 3000 --save dem2_1hz.json
+    BAG_MERGED=merged.npy edgelens benchmark --pipeline examples/robot_bag_replay.py \
+        --iterations 120 --pace --period-ms 1000 --deadline-ms 3000 --save replay_1hz.json
 
-Shape of the problem (SML's data description): the model receives the last
-X merged readings of /imu, /odom and /cmd_vel and predicts the robot's
-state. Here X = 50 rows of the 100 Hz IMU timeline (0.5 s of history) and a
-new prediction every 100 rows (1 Hz).
+Shape of the problem: the model receives the last X merged readings of
+/imu, /odom and /cmd_vel and predicts the robot's state. Here X = 50 rows of
+the 100 Hz IMU timeline (0.5 s of history) and a new prediction every 100
+rows (1 Hz). Adjust with the variables below for your robot.
 
 The model is a STAND-IN LSTM in NumPy (a bag-replay timing demo). For a real
 trained windowed model, describe its preprocessing in a stream spec and use
 `edgelens replay` / `edgelens detect` instead (docs/stream.md): that replays
 the exact training features and measures decisions against ground truth.
 
-Environment variables: DEM2_MERGED (default dem2_merged.npy), DEM2_WINDOW
-(rows, default 50), DEM2_HOP (rows, default 100), DEM2_RATE_HZ (base topic
-rate, default 100), DEM2_MAX_AGE_MS (freshness limit, default 200).
+Environment variables (the older DEM2_* names are still read): BAG_MERGED
+(default merged.npy), BAG_WINDOW (rows, default 50), BAG_HOP (rows, default
+100), BAG_RATE_HZ (base topic rate, default 100), BAG_MAX_AGE_MS (freshness
+limit, default 200).
 """
 
 import json
@@ -33,11 +34,17 @@ import numpy as np
 
 import edgelens as el
 
-MERGED = os.environ.get("DEM2_MERGED", "dem2_merged.npy")
-WINDOW = int(os.environ.get("DEM2_WINDOW", 50))
-HOP = int(os.environ.get("DEM2_HOP", 100))
-RATE_HZ = float(os.environ.get("DEM2_RATE_HZ", 100))
-MAX_AGE_MS = float(os.environ.get("DEM2_MAX_AGE_MS", 200))
+
+
+def _env(name, default):
+    return os.environ.get(f"BAG_{name}", os.environ.get(f"DEM2_{name}", default))
+
+
+MERGED = _env("MERGED", "merged.npy")
+WINDOW = int(_env("WINDOW", 50))
+HOP = int(_env("HOP", 100))
+RATE_HZ = float(_env("RATE_HZ", 100))
+MAX_AGE_MS = float(_env("MAX_AGE_MS", 200))
 HIDDEN = 32
 
 
@@ -66,7 +73,7 @@ def build_pipeline():
     mean = data[feat_idx].mean(axis=1, keepdims=True)
     std = data[feat_idx].std(axis=1, keepdims=True) + 1e-6
 
-    pipe = el.Pipeline("dem2-bag-replay", pack="timeseries", sample_rate_hz=RATE_HZ,
+    pipe = el.Pipeline("robot-bag-replay", pack="timeseries", sample_rate_hz=RATE_HZ,
                        window=WINDOW, hop=HOP)
     pipe.set_source(el.WindowSource(data, window=WINDOW, hop=HOP))
 

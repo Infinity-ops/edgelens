@@ -5,7 +5,7 @@
 #   too little evidence) — any non-zero code fails the CI job.
 #
 # Settings (environment variables, all optional):
-#   EDGELENS_CONTRACT   contract file            (perf/dem2.contract.yaml)
+#   EDGELENS_CONTRACT   contract file            (perf/anomaly.contract.yaml)
 #   EDGELENS_TARGET     what to measure          (--pipeline pipeline.py)
 #                       e.g. "--model model.onnx --provider TensorrtExecutionProvider"
 #   EDGELENS_OUT        output folder            (edgelens-out)
@@ -15,7 +15,7 @@
 #                       summary (informational, never blocks)
 #   PYTHON              interpreter with edgelens installed (python3)
 set -u
-CONTRACT="${EDGELENS_CONTRACT:-perf/dem2.contract.yaml}"
+CONTRACT="${EDGELENS_CONTRACT:-perf/anomaly.contract.yaml}"
 TARGET="${EDGELENS_TARGET:---pipeline pipeline.py}"
 OUT="${EDGELENS_OUT:-edgelens-out}"
 COOLDOWN="${EDGELENS_COOLDOWN_S:-0}"
