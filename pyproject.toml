@@ -58,6 +58,8 @@ fixtures = ["onnx>=1.14.0"]
 # (examples/rosbag_to_windows.py). Live ROS 2 (`edgelens ros2`) needs rclpy
 # from your ROS 2 installation instead; it is not on PyPI.
 rosbag = ["rosbags>=0.9.20"]
+# `--inputs images/`: decoding JPEG / PNG folders for vision models
+images = ["pillow>=9.1"]
 
 [project.urls]
 Homepage = "https://github.com/Infinity-ops/edgelens"

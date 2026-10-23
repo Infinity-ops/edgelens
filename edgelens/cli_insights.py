@@ -19,7 +19,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .benchmark.onnx_pipeline import parse_input_shapes
-from .cli import (INPUTS_HELP, LABELS_HELP, ORDER_HELP, THREADS_HELP, _exit_on_write_error, _ms,
+from .cli import (IMAGE_PREP_HELP, INPUTS_HELP, LABELS_HELP, ORDER_HELP, THREADS_HELP, _exit_on_write_error, _ms,
                   _print_integrity_issues, _print_quality, _write_or_exit, app, console)
 
 
@@ -49,8 +49,9 @@ def sweep(
                                   "reference for equivalence."),
     iterations: int = typer.Option(300, "--iterations", min=1, help="Timed iterations per "
                                    "backend."),
-    inputs: str = typer.Option(None, "--inputs", help="Real input data: .npz (one array per "
-                               "model input, first dim = sample) or .npy. Default: seeded "
+    inputs: str = typer.Option(None, "--inputs", help="Real input data: a folder of images "
+                               "(--image-prep), or .npy / raw .bin / .npz (one array per "
+                               "model input), first dim = sample. Default: seeded "
                                "synthetic inputs (weaker evidence for decisions)."),
     eval_samples: int = typer.Option(50, "--eval-samples", min=1, help="Input samples used "
                                      "for output equivalence."),
@@ -77,9 +78,9 @@ def sweep(
                                       "engines every run."),
     save: str = typer.Option("edgelens_sweep.json", "--save", help="Summary JSON; each "
                              "backend's full result goes next to it as NAME.<backend>.json."),
-    labels: str = typer.Option(None, "--labels", help="With --inputs: one ground-truth value "
-                               "per sample; adds each backend's RMSE (or accuracy)."),
+    labels: str = typer.Option(None, "--labels", help=LABELS_HELP),
     threads: int = typer.Option(None, "--threads", help=THREADS_HELP),
+    image_prep: str = typer.Option(None, "--image-prep", help=IMAGE_PREP_HELP),
 ):
     """Which backend? Latency, energy AND whether the answer changed, for the
     same model on CPU / CUDA / TensorRT (FP32, FP16, INT8) / DLA and external
@@ -110,7 +111,7 @@ def sweep(
                 atol=atol, rtol=rtol, decision=decision, threshold=threshold,
                 min_agreement=min_agreement, deadline_ms=deadline_ms, trt_cache=cache,
                 save_stem=_stem(save), progress=lambda m: status.update(m), threads=threads,
-                labels_path=labels)
+                labels_path=labels, image_prep=image_prep)
     except (RuntimeError, ValueError, OSError) as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
@@ -179,7 +180,7 @@ def print_sweep(summary):
 # ---------------------------------------------------------------- periodic (I1)
 
 def _build_pipe(model, pipeline, provider, input_shape, inputs=None, labels=None, threads=None,
-                inputs_order=None):
+                inputs_order=None, image_prep=None):
     from .benchmark.runner import _resolve_pipeline
     given = [n for n, v in (("pipeline_path", pipeline), ("model_path", model)) if v]
     if len(given) != 1:
@@ -188,7 +189,8 @@ def _build_pipe(model, pipeline, provider, input_shape, inputs=None, labels=None
     try:
         return _resolve_pipeline(given, model, provider, None, pipeline,
                                  parse_input_shapes(input_shape), None, inputs=inputs,
-                                 labels=labels, threads=threads, inputs_order=inputs_order)
+                                 labels=labels, threads=threads, inputs_order=inputs_order,
+                                 image_prep=image_prep)
     except RuntimeError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
@@ -216,13 +218,14 @@ def periodic(
     labels: str = typer.Option(None, "--labels", help=LABELS_HELP),
     threads: int = typer.Option(None, "--threads", help=THREADS_HELP),
     inputs_order: str = typer.Option("sequential", "--inputs-order", help=ORDER_HELP),
+    image_prep: str = typer.Option(None, "--image-prep", help=IMAGE_PREP_HELP),
 ):
     """Latency and energy at the REAL inference rate. Benchmarks run back to
     back; a 1 Hz model wakes a sleeping board every second and pays for it."""
     from . import periodic as per
     periods = list(period_ms or [1000.0])
     pipe, source, model_path = _build_pipe(model, pipeline, provider, input_shape, inputs, labels,
-                                           threads, inputs_order)
+                                           threads, inputs_order, image_prep)
     total = sum(periods) * (iterations + 1) / 1000.0
     console.print(f"[dim]This takes about {total + idle_baseline + 5:.0f} s "
                   f"({len(periods)} period(s) x {iterations} inferences).[/dim]")
@@ -329,6 +332,7 @@ def soak(
     labels: str = typer.Option(None, "--labels", help=LABELS_HELP),
     threads: int = typer.Option(None, "--threads", help=THREADS_HELP),
     inputs_order: str = typer.Option("sequential", "--inputs-order", help=ORDER_HELP),
+    image_prep: str = typer.Option(None, "--image-prep", help=IMAGE_PREP_HELP),
 ):
     """Long runs: latency drift, thermal throttling, memory growth (process
     and Jetson GPU memory), swap and time-to-out-of-memory, window by window,
@@ -371,7 +375,8 @@ def soak(
     try:
         if driven:
             pipe, source, model_path = _build_pipe(model, pipeline, provider, input_shape,
-                                                   inputs, labels, threads, inputs_order)
+                                                   inputs, labels, threads, inputs_order,
+                                                   image_prep)
             result = sk.run_soak_pipeline(pipe, seconds, window_s=window, period_ms=period_ms,
                                           deadline_ms=deadline_ms, jsonl_path=jsonl,
                                           pipeline_source=source, model_path=model_path,

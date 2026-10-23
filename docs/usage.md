@@ -24,9 +24,10 @@ TensorRT / quantised build on the device. Give it data you already prepared,
 and its labels:
 
 ```bash
-# image classifier: 500 preprocessed images, class index per image
-edgelens benchmark --model mobilenet.onnx --inputs val_images.npy --labels val_classes.npy \
-    --iterations 500 --save mobilenet.json
+# image classifier on a folder of JPEGs, class from the folder (val/cat/1.jpg)
+pip install "edgelens[images]"          # Pillow, for decoding
+edgelens benchmark --model mobilenet.onnx --inputs val/ --labels subfolders \
+    --image-prep imagenet --iterations 500 --save mobilenet.json
 edgelens validate mobilenet.json --p99-ms 20 --min-accuracy 0.70
 
 # time-series model: sensor windows in a raw float32 file, a target per window
@@ -37,10 +38,29 @@ edgelens validate lstm.json --max-rmse 0.2
 
 | Option | Meaning |
 | --- | --- |
-| `--inputs` | `.npy` (memory-mapped), `.npz` (one array per input name) or raw little-endian `.bin/.raw/.f32` in the model's input dtype. One sample per iteration, first dimension = sample; `[N, 3, 224, 224]` feeds a `[1, 3, 224, 224]` input. Fed **as given**: resize and normalise the data the way the model was trained. The file's SHA-256 is in the result, so `compare` can tell a data change from a setup change |
+| `--inputs DIR` (images) | a folder of JPEG / PNG / BMP / WebP images (or one image). Decoded and resized once before the run (frames in a capture buffer); colour order, scaling and HWC -> CHW happen in the timed **preprocess** stage, as in a camera pipeline. Layout and size follow the model input (`[1, 3, H, W]` or `[1, H, W, 3]`) |
+| `--image-prep` | how the images are prepared: a preset and/or overrides (table below) |
+| `--inputs FILE` (arrays) | `.npy` (memory-mapped), `.npz` (one array per input name) or raw little-endian `.bin/.raw/.f32` in the model's input dtype. One sample per iteration, first dimension = sample; `[N, 3, 224, 224]` feeds a `[1, 3, 224, 224]` input. Fed **as given**: resize and normalise the data the way the model was trained. The file's SHA-256 is in the result, so `compare` can tell a data change from a setup change |
 | `--labels` | ground truth, one row per sample (`.npy`, raw float32 `.bin`, `.csv/.txt`), scored against the model's **first** output (see below) |
 | `--inputs-order` | `sequential` (file order: soaks, replaying a recording) or `spread` (a fixed stride that visits every sample once per pass, so a short run already covers the whole data set) |
 | `--threads` | onnxruntime intra-op threads (default: one per core, all busy). Recorded in the result; fewer threads often keep the latency and free CPU for the rest of the system |
+
+`--image-prep` presets (override any part, e.g. `yolo,channels=bgr` or
+`resize=crop,mean=0.5/0.5/0.5,std=0.5/0.5/0.5`):
+
+| Preset | Resize | Scaling | Typical models |
+| --- | --- | --- | --- |
+| `unit` (default) | stretch to H x W | x / 255 | many custom models |
+| `imagenet` | shorter side to size / 0.875, centre crop (torchvision eval) | x / 255, ImageNet mean / std | torchvision / timm classifiers |
+| `yolo` | letterbox (fit, pad grey 114) | x / 255 | YOLO-family detectors |
+| `signed` | stretch | x / 127.5 - 1 | TF / TFLite MobileNets |
+| `raw` | stretch | none (0..255 as float) | models with normalisation built in |
+
+`channels=bgr` for OpenCV-trained models; uint8 model inputs get the resized
+pixels unscaled. With `--labels subfolders` classes are numbered in sorted
+folder-name order (the torchvision `ImageFolder` convention): check it
+matches the model's class order. A label file is matched to the images in
+sorted path order; the first files are recorded in the result.
 
 What the labels give, decided from their shape and the model's first output:
 
@@ -49,7 +69,7 @@ What the labels give, decided from their shape and the model's first output:
 | `[N]` values | 1 value | RMSE, MAE, worst error; RMSE per label level when there are few distinct labels | `max_rmse` |
 | `[N]` of 0 / 1 | 1 score | the above plus accuracy, precision, recall, false alarms and misses at > 0.5 | `max_rmse`, `min_accuracy` |
 | `[N, k]` values | k values | RMSE overall and per output | `max_rmse` |
-| `[N]` class indices | C class scores | top-1, top-5 (C > 5) and per-class accuracy | `min_accuracy` (top-1) |
+| `[N]` class indices, or `subfolders` | C class scores | top-1, top-5 (C > 5) and per-class accuracy | `min_accuracy` (top-1) |
 
 Labels that can't fit the model (3 values per sample for a 1-value output,
 fractional "classes") are refused **before** the run. The result says whether

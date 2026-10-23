@@ -132,16 +132,12 @@ def load_inputs(path, onnx_pipe):
 
 def load_real_samples(path, onnx_pipe, n):
     """(samples, indices): n samples spread evenly over a real-input file
-    (.npy / .npz / raw .bin, see edgelens.benchmark.real_inputs), so a short
+    (.npy / .npz / raw .bin / a folder of images, see edgelens.benchmark.real_inputs), so a short
     evaluation covers the whole recording rather than its first n windows."""
-    from .benchmark.real_inputs import InputError, RealInputs
-    try:
-        ri = RealInputs(path, onnx_pipe.inputs)
-    except InputError as e:
-        raise ValueError(str(e)) from e
+    ri = onnx_pipe.real              # opened (and, for images, decoded) by the pipeline
     m = min(n or ri.n, ri.n)
     idx = np.unique(np.linspace(0, ri.n - 1, m).round().astype(int))
-    return [ri.sample(int(k)) for k in idx], idx, ri.n
+    return [ri.prepare(ri.sample(int(k))) for k in idx], idx, ri.n
 
 
 def quality_of(outputs, output_names, labels):
@@ -296,7 +292,7 @@ def run_sweep(model, backends, reference="cpu", iterations=300, input_shapes=Non
               inputs_path=None, eval_samples=50, export_inputs_path=None, external=None,
               atol=1e-5, rtol=1e-4, decision="auto", threshold=None, min_agreement=1.0,
               deadline_ms=None, trt_cache=None, save_stem=None, progress=None,
-              threads=None, labels_path=None):
+              threads=None, labels_path=None, image_prep=None):
     """Returns (summary, {backend: result_document}).
 
     threads: onnxruntime intra-op threads for every backend (None = default).
@@ -330,7 +326,8 @@ def run_sweep(model, backends, reference="cpu", iterations=300, input_shapes=Non
         try:
             onnx = OnnxStagePipeline(model, provider=provider, input_shapes=input_shapes,
                                      provider_options=opts or None, threads=threads,
-                                     inputs=inputs_path, inputs_order="spread")
+                                     inputs=inputs_path, inputs_order="spread",
+                                     image_prep=image_prep)
         except RuntimeError as e:
             row.update(status="unavailable", reason=str(e).splitlines()[0][:300])
             rows.append(row)
@@ -344,9 +341,9 @@ def run_sweep(model, backends, reference="cpu", iterations=300, input_shapes=Non
                 samples, idx, total = load_real_samples(inputs_path, onnx, eval_samples)
                 inputs_source = f"file:{inputs_path} ({len(samples)} of {total} samples, spread)"
                 if labels_path:
-                    from .benchmark.real_inputs import InputError, load_labels
+                    from .benchmark.real_inputs import InputError, resolve_labels
                     try:
-                        labels = load_labels(labels_path, total)[idx]
+                        labels = resolve_labels(labels_path, onnx.real)[idx]
                     except InputError as e:
                         raise ValueError(str(e)) from e
             else:

@@ -537,8 +537,10 @@ class OnnxStagePipeline:
 
     def __init__(self, model_path, provider=None, input_shape=None, input_shapes=None,
                  provider_options=None, inputs=None, labels=None, threads=None,
-                 inputs_order="sequential"):
-        """inputs / labels: file paths (see edgelens.benchmark.real_inputs);
+                 inputs_order="sequential", image_prep=None):
+        """inputs / labels: file paths (see edgelens.benchmark.real_inputs; a
+        folder of images: edgelens.benchmark.image_inputs, prepared per
+        image_prep);
         threads: onnxruntime intra-op threads (None = its default)."""
         inputs_path = inputs          # `inputs` is reused below for the model's inputs
         if ort is None:
@@ -655,7 +657,8 @@ class OnnxStagePipeline:
             # capture bottleneck (found on real hardware).
             self._static_inputs[inp.name] = _synthetic_tensor(shape, dtype, rng)
 
-        from .real_inputs import InputError, Predictions, RealInputs, SampleOrder, load_labels
+        from .real_inputs import (InputError, Predictions, SampleOrder, open_inputs,
+                                  resolve_labels)
         from .real_inputs import _task as _label_task
         self.real = self.labels = self.preds = self.order = None
         self.labels_path = labels
@@ -663,16 +666,18 @@ class OnnxStagePipeline:
         self._k = None
         try:
             if inputs_path:
-                self.real = RealInputs(inputs_path, self.inputs)
+                self.real = open_inputs(inputs_path, self.inputs, image_prep)
                 self.order = SampleOrder(self.real.n, inputs_order)
                 self.preds = Predictions(self.real.n, self.session.get_outputs()[0].name)
                 if labels:
-                    self.labels = load_labels(labels, self.real.n)
+                    self.labels = resolve_labels(labels, self.real)
                     oshape = self.session.get_outputs()[0].shape
                     if all(isinstance(d, int) and d > 0 for d in oshape):
                         _label_task(self.labels, int(np.prod(oshape)))   # fail before the run
             elif labels:
                 raise InputError("--labels needs --inputs: labels belong to real input samples.")
+            elif image_prep:
+                raise InputError("--image-prep needs --inputs with images.")
         except InputError as e:
             raise RuntimeError(str(e)) from e
 
@@ -725,11 +730,11 @@ class OnnxStagePipeline:
             self._raw = self._static_inputs
 
     def preprocess(self):
-        """Real inputs pass through unchanged (they are model inputs already,
-        usually scaled). Synthetic: min-max normalise float inputs;
+        """Real arrays pass through unchanged (they are model inputs already);
+        images get their colour order, scaling and layout here (--image-prep). Synthetic: min-max normalise float inputs;
         integer/bool inputs pass through unchanged."""
         if self.real is not None:
-            self._prepped = self._raw
+            self._prepped = self.real.prepare(self._raw)
             return
         out = {}
         for name, arr in self._raw.items():

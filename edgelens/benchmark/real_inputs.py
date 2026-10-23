@@ -140,10 +140,38 @@ class RealInputs:
         return {name: np.ascontiguousarray(a[k], dtype=self.dtypes[name])
                 for name, a in self.arrays.items()}
 
+    def prepare(self, raw):
+        """Real arrays are model inputs already: fed as given."""
+        return raw
+
     def describe(self):
         return {"path": self.path, "format": self.format, "samples": self.n,
                 "sha256": self.sha256,
                 "shapes": {n: list(a.shape[1:]) for n, a in self.arrays.items()}}
+
+
+def open_inputs(path, model_inputs, image_prep=None):
+    """RealInputs for arrays, ImageFolderInputs for a folder or an image file."""
+    from .image_inputs import is_image_source, open_images
+    if is_image_source(path):
+        return open_images(path, model_inputs, image_prep)
+    if image_prep:
+        raise InputError("--image-prep applies to --inputs with images (a folder or an image "
+                         "file); array files are fed as given.")
+    return RealInputs(path, model_inputs)
+
+
+SUBFOLDERS = "subfolders"
+
+
+def resolve_labels(labels, inputs):
+    """--labels FILE, or --labels subfolders (the class folder of each image)."""
+    if labels == SUBFOLDERS:
+        if getattr(inputs, "labels", None) is None:
+            raise InputError("--labels subfolders needs --inputs pointing at a folder of class "
+                             "folders (images/cat/1.jpg, images/dog/2.jpg, ...).")
+        return inputs.labels
+    return load_labels(labels, inputs.n)
 
 
 def load_labels(path, n):

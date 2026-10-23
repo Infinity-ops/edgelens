@@ -90,19 +90,45 @@ TINY_STAGE_MS = 0.005     # per-stage % change is not shown below this
 
 # --model with real data (edgelens.benchmark.real_inputs); shared by benchmark,
 # periodic, soak and contract run
-INPUTS_HELP = ("--model only: real input samples (images, sensor windows, features) as "
-               ".npy, .npz (one array per input) or raw .bin in the model's input dtype; "
-               "first dimension = sample. Fed as given (no resizing or normalisation), one "
-               "per iteration. For raw CSV recordings use `edgelens replay`.")
+INPUTS_HELP = ("--model only: real input samples, one per iteration: a folder of images "
+               "(or one image; resized and normalised per --image-prep), or arrays as .npy, "
+               ".npz (one array per input) or raw .bin in the model's input dtype, first "
+               "dimension = sample, fed as given. For raw CSV recordings use `edgelens replay`.")
 LABELS_HELP = ("With --inputs: ground truth, one row per sample (.npy, raw float32 .bin, "
-               ".csv), scored against the model's first output: values -> RMSE/MAE "
+               ".csv; `subfolders` = the class folder of each image), scored against the model's first output: values -> RMSE/MAE "
                "(0/1 labels also accuracy, precision, recall); class indices -> top-1/top-5 "
                "accuracy. Checked by `validate --max-rmse / --min-accuracy` and contracts.")
 THREADS_HELP = ("--model only: onnxruntime intra-op threads (default: one per core, all "
                 "busy). Fewer threads often keep the latency and free CPU for the rest of "
                 "the system; recorded in the result so `compare` shows the effect.")
+IMAGE_PREP_HELP = ("With --inputs images: a preset (unit [default], imagenet, yolo, signed, "
+                   "raw) and/or key=value overrides: resize=stretch|crop|letterbox, "
+                   "scale=unit|signed|raw, mean=a/b/c, std=a/b/c, channels=rgb|bgr. "
+                   "E.g. imagenet  or  yolo,channels=bgr.")
 ORDER_HELP = ("With --inputs: sequential (file order) or spread (every sample once per "
               "pass, scattered, so a short run already covers the whole data set).")
+
+
+def _print_inputs(result):
+    """One line on what the model was fed (real inputs only)."""
+    d = ((result.get("pipeline") or {}).get("config") or {}).get("inputs")
+    if not isinstance(d, dict):
+        return
+    what = f"{d.get('samples')} {'images' if d.get('format') == 'images' else 'samples'}"
+    extra = ""
+    if d.get("format") == "images":
+        ip = d.get("image_prep") or {}
+        cls = d.get("classes")
+        if cls:
+            extra += (f", {len(cls)} classes ({', '.join(cls[:5])}{', ...' if len(cls) > 5 else ''})"
+                      if isinstance(cls, list) else f", {cls} classes")
+        extra += (f" · prep {ip.get('spec')}: resize {ip.get('resize')}, scale {ip.get('scale')}"
+                  f"{', mean/std' if ip.get('mean') else ''}, {ip.get('channels')}, "
+                  f"{d.get('layout')}")
+    else:
+        extra = f" ({d.get('format')})"
+    console.print(f"[dim]Inputs: {d.get('path')}: {what}{extra} · order {d.get('order')} · "
+                  f"sha256 {d.get('sha256')}[/dim]")
 
 
 def _print_quality(q):
@@ -289,6 +315,7 @@ def _print_benchmark(result):
     gcb = result.get("gc")
     if gcb:
         _print_gc(gcb)
+    _print_inputs(result)
     _print_quality(result.get("quality"))
     bl = result.get("backlog")
     if bl:
@@ -576,6 +603,7 @@ def benchmark(
     labels: str = typer.Option(None, "--labels", help=LABELS_HELP),
     threads: int = typer.Option(None, "--threads", help=THREADS_HELP),
     inputs_order: str = typer.Option("sequential", "--inputs-order", help=ORDER_HELP),
+    image_prep: str = typer.Option(None, "--image-prep", help=IMAGE_PREP_HELP),
 ):
     """Run a benchmark; measure per-stage latency, tail, deadlines, power and energy."""
     from .core.gcwatch import GC_MODES
@@ -608,6 +636,7 @@ def benchmark(
                     deadline_ms=deadline_ms, period_ms=period_ms, pace=pace,
                     idle_baseline_s=idle_baseline or None, gc_mode=gc_mode,
                     inputs=inputs, labels=labels, threads=threads, inputs_order=inputs_order,
+                    image_prep=image_prep,
                 )
             except RuntimeError as e:
                 console.print(f"[red]{e}[/red]")

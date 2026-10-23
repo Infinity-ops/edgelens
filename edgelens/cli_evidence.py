@@ -21,7 +21,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from . import contract as ct
-from .cli import (INPUTS_HELP, LABELS_HELP, ORDER_HELP, THREADS_HELP, _print_integrity_issues,
+from .cli import (IMAGE_PREP_HELP, INPUTS_HELP, LABELS_HELP, ORDER_HELP, THREADS_HELP, _print_integrity_issues,
                   _print_quality, _sibling, _write_or_exit, app, console)
 from .validate.engine import exit_code as validate_exit_code
 
@@ -268,6 +268,7 @@ def contract_run(
     labels: str = typer.Option(None, "--labels", help=LABELS_HELP),
     threads: int = typer.Option(None, "--threads", help=THREADS_HELP),
     inputs_order: str = typer.Option("sequential", "--inputs-order", help=ORDER_HELP),
+    image_prep: str = typer.Option(None, "--image-prep", help=IMAGE_PREP_HELP),
 ):
     """Measure exactly what the contract needs (period, iterations, duration, deadline,
     idle baseline), then validate against it. Checks the assumptions it can BEFORE the
@@ -312,7 +313,7 @@ def contract_run(
         raise typer.Exit(2)
 
     pipe, source, model_path = _build_pipe(model, pipeline, provider, input_shape, inputs, labels,
-                                           threads, inputs_order)
+                                           threads, inputs_order, image_prep)
     try:
         if p["kind"] == "soak":
             from . import soak as sk

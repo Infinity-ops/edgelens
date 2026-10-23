@@ -31,7 +31,7 @@ def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced"
                   telemetry_interval_s=0.1, input_shapes=None, pipeline=None,
                   deadline_ms=None, period_ms=None, pace=False, idle_baseline_s=None,
                   source=None, gc_mode="normal", inputs=None, labels=None, threads=None,
-                  inputs_order=None):
+                  inputs_order=None, image_prep=None):
     """Run a benchmark and return a result document
     (see edgelens.core.result for the shape).
 
@@ -61,7 +61,8 @@ def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced"
     pipe, source_label, model = _resolve_pipeline(given, model_path, provider, stage_fns,
                                                   pipeline_path, input_shapes, pipeline,
                                                   inputs=inputs, labels=labels, threads=threads,
-                                                  inputs_order=inputs_order)
+                                                  inputs_order=inputs_order,
+                                                  image_prep=image_prep)
     try:
         result = pipe.run(iterations=iterations, warmup=warmup, source=source,
                           deadline_ms=deadline_ms, period_ms=period_ms, pace=pace,
@@ -76,15 +77,16 @@ def run_benchmark(iterations=50, warmup=10, demo=False, demo_scenario="balanced"
 
 
 def _resolve_pipeline(given, model_path, provider, stage_fns, pipeline_path, input_shapes,
-                      pipeline, inputs=None, labels=None, threads=None, inputs_order=None):
+                      pipeline, inputs=None, labels=None, threads=None, inputs_order=None,
+                      image_prep=None):
     if len(given) > 1:
         raise RuntimeError(
             f"Ambiguous pipeline source: got {', '.join(given)} together. "
             f"Pass exactly one of --model, --pipeline, or stage_fns=... / pipeline=... "
             f"from Python."
         )
-    if model_path is None and any(v for v in (inputs, labels, threads)):
-        raise RuntimeError("--inputs, --labels and --threads apply to --model runs; a --pipeline "
+    if model_path is None and any(v for v in (inputs, labels, threads, image_prep)):
+        raise RuntimeError("--inputs, --labels, --threads and --image-prep apply to --model runs; a --pipeline "
                            "script feeds and configures its own model.")
     if pipeline is not None:
         return pipeline, f"pipeline:{pipeline.name}", None
@@ -101,7 +103,8 @@ def _resolve_pipeline(given, model_path, provider, stage_fns, pipeline_path, inp
         from .onnx_pipeline import OnnxStagePipeline
         onnx = OnnxStagePipeline(model_path, provider=provider, input_shapes=input_shapes,
                                  inputs=inputs, labels=labels, threads=threads,
-                                 inputs_order=inputs_order or "sequential")
+                                 inputs_order=inputs_order or "sequential",
+                                 image_prep=image_prep)
         pipe = Pipeline.from_stage_fns(onnx.stage_fns(), name="onnx", pack="vision",
                                        model_inputs=onnx.input_summary(),
                                        provider=onnx.provider,
