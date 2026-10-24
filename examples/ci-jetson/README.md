@@ -3,6 +3,10 @@
 A complete example repository: every pull request is measured on a real
 Jetson and **cannot be merged when it breaks its assumption contract**.
 
+> **Status (v0.2):** the gate script and the contract run in EdgeLens's own
+> tests; the workflow on a self-hosted Jetson runner has not been run end to
+> end yet (gate E3 in [docs/jetson.md](../../docs/jetson.md)). Reports welcome.
+
 ```
 .github/workflows/edgelens-perf.yml   the workflow (self-hosted Jetson runner)
 perf/anomaly.contract.yaml               requirements + the conditions they hold under
