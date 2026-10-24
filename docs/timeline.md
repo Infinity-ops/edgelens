@@ -1,8 +1,9 @@
 # One timeline in Perfetto (v0.2 Layer 3)
 
-> **Status: v0.2 development.** Validated against Perfetto's trace processor
-> (the engine behind ui.perfetto.dev) in CI; the Jetson rows in
-> [jetson.md](jetson.md) are pending.
+> **Status: v0.2 (Alpha).** Tested in CI. A test loads the export into
+> Perfetto's trace processor (the engine behind ui.perfetto.dev) when
+> `EDGELENS_TRACE_PROCESSOR` points to it; CI does not run that test yet.
+> The Jetson rows in [jetson.md](jetson.md) are pending.
 
 ```bash
 edgelens export run.json --perfetto timeline.json

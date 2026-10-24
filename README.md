@@ -18,7 +18,7 @@
 
 > Same Jetson Nano, same model, same code: **p99 latency 148 ms → 9.4 ms**
 > after pinning clocks. FPS never showed it. EdgeLens did.
-> ([measured](docs/jetson.md#real-results-on-a-jetson-nano))
+> ([measured](https://github.com/Infinity-ops/edgelens/blob/main/docs/jetson.md#real-results-on-a-jetson-nano))
 
 ```bash
 pip install edgelens
@@ -32,13 +32,14 @@ Most edge monitoring tools tell you _what_ the board is doing (CPU 47%, GPU
 92%, 61 °C). That is not the engineering question. The engineering question
 is a loop, and EdgeLens is built around it:
 
-| Question                                 | EdgeLens v0.1                                                                                                                         | Coming                                                                               |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| **Does my system meet its requirement?** | `validate --p99-ms 10 --max-miss-ratio 0.001 --max-energy-mj 60`: PASS / FAIL / INCONCLUSIVE per requirement, with the measured value | v0.2: contract files, quality and thermal requirements, validated on Jetson AGX Orin |
-| **If not, why?**                         | `validate` names the limiting stage and attaches the diagnosis; `diagnose` on its own gives the full evidence                         | v0.3: concurrent stages, queues, critical path                                       |
-| **What should I change?**                | each finding names the next experiment to run                                                                                         | v0.4: run the experiments for you, under your constraints                            |
-| **Does the system decide in time?**      | —                                                                                                                                     | v0.2: `replay` + `detect`: time from event to alarm, false alarms per hour, robustness to sensor faults (docs/stream.md) |
-| **Did the change actually help?**        | `compare`: before/after per stage; warns when the runs come from different environments (`--strict-env` fails instead)                | —                                                                                    |
+| Question | EdgeLens v0.2 (Alpha) | Later |
+| --- | --- | --- |
+| **Does my system meet its requirement?** | `validate --p99-ms 10 --max-miss-ratio 0.001 --max-energy-mj 60`: PASS / FAIL / INCONCLUSIVE per requirement, with the measured value. Assumption contracts: the conditions a result holds under (board, power mode, clocks, input rate, temperature, background load) | — |
+| **If not, why?** | `validate` names the limiting stage and attaches the diagnosis; `diagnose` gives the full evidence | concurrent stages, queues, critical path |
+| **What does it cost at the real rate, over hours?** | `periodic` (1 Hz is not back to back), `soak` (drift, throttling, memory growth), `sweep` (backends: latency, energy and whether the answer changed) | — |
+| **Is it still accurate on the device?** | `--inputs` / `--labels`: your own data or images, RMSE or top-1 / top-5 accuracy on the board, per backend | — |
+| **Did the change actually help?** | `compare`: before/after per stage, with confidence intervals; warns when the environments differ (`--strict-env` fails instead) | — |
+| **Does the system decide in time?** | *experimental:* `replay` / `detect` / `perturb` / `parity` for windowed sensor pipelines ([docs/stream.md](https://github.com/Infinity-ops/edgelens/blob/main/docs/stream.md)) | stable interface |
 
 Measured fact → evidence → hypothesis → experiment → measured result.
 Every number EdgeLens reports was measured on the board; nothing is inferred
@@ -80,11 +81,20 @@ code 2) if the environment changed under you.
 
 ## Status
 
-**Validated on a real Jetson Nano** (JetPack 4.6 / L4T R32.7.6): core
-engine, statistics, requirements, telemetry, and power/energy all verified
-against real hardware. **Jetson Orin support is implemented, not yet
-hardware-verified.** Full per-area validation table, known limits, and
-measured results: [docs/jetson.md](docs/jetson.md).
+**v0.2 is an Alpha.** The command line, the result file (`schema_version: 1`)
+and the contract format are frozen for 0.2.x ([docs/stability.md](https://github.com/Infinity-ops/edgelens/blob/main/docs/stability.md));
+the windowed-stream commands are experimental.
+
+What has been checked on real hardware, and what has not
+([docs/jetson.md](https://github.com/Infinity-ops/edgelens/blob/main/docs/jetson.md) has every row):
+
+| | Verified | Not yet verified |
+| --- | --- | --- |
+| **Jetson Nano** (JetPack 4.6) | the v0.1 scope: engine, statistics, deadlines, telemetry, INA3221 power and energy, CPU / CUDA / TensorRT providers, `compare --strict-env` | the v0.2 gates (development runs only) |
+| **Jetson AGX Orin 32GB** (Yocto image, shared board) | onnxruntime CPU provider: benchmark, threads, `periodic`, `compare`, `contract run` (PASS path), a 30 min `soak`; sum-of-rails power | CUDA / TensorRT / DLA on Orin, the soak memory verdict, clock A/B (not possible on a shared board), most v0.2 gates |
+| **Linux x86-64** (CI) | the full test suite on Python 3.8–3.13 | — |
+
+Known limitations: [docs/limitations.md](https://github.com/Infinity-ops/edgelens/blob/main/docs/limitations.md).
 
 ## Install
 
@@ -115,10 +125,49 @@ python3 -m pytest -q
 | `dev`      | `pytest`                   | Running `tests/`                          |
 | `onnx`     | `onnxruntime` (CPU)        | `--model` on a non-Jetson host            |
 | `fixtures` | `onnx` (the model library) | Only to regenerate the test `.onnx` files |
+| `images`   | `pillow`                   | `--inputs` with a folder of images        |
+| `rosbag`   | `rosbags`                  | Reading ROS 1/2 bags without ROS (`examples/rosbag_to_windows.py`) |
+
+**Compatibility.** Python 3.8–3.13 on Linux (x86-64 and aarch64). macOS and
+Windows are not supported (sysfs, `/proc` and CLOCK_MONOTONIC semantics are
+Linux-specific). Board telemetry and power need an NVIDIA Jetson; elsewhere
+EdgeLens measures latency, CPU and memory and says which sources are
+missing.
 
 `onnx` is kept out of `dev` on purpose: recent releases pull in
 `protobuf>=6`, which broke sibling packages pinned to protobuf 5.x in real
 testing.
+
+## Quick start (any Linux machine, about 2 minutes)
+
+No model, no GPU and no clone needed: a sensor pipeline in NumPy, measured,
+diagnosed and checked against a requirement.
+
+```bash
+python3 -m venv edgelens-try && . edgelens-try/bin/activate
+pip install --upgrade pip && pip install edgelens
+curl -sSLO https://raw.githubusercontent.com/Infinity-ops/edgelens/main/examples/quickstart/quickstart.py
+edgelens benchmark --pipeline quickstart.py --iterations 1000 --save run.json
+edgelens diagnose run.json
+edgelens validate run.json --p99-ms 32 --max-miss-ratio 0     # exit code 0 = PASS
+```
+
+What you should see, and a checker for the parts that are the same on every
+machine: [examples/quickstart](https://github.com/Infinity-ops/edgelens/blob/main/examples/quickstart/README.md).
+
+**On a Jetson** (this block is run on a real Jetson before every release tag, see the [release checklist](https://github.com/Infinity-ops/edgelens/blob/main/docs/release-checklist.md)):
+
+```bash
+python3 -m venv ~/edgelens && . ~/edgelens/bin/activate && pip install --upgrade pip
+pip install edgelens                  # NOT the [onnx] extra: keep NVIDIA's onnxruntime-gpu
+edgelens doctor                       # readiness: clocks, power mode, power sensor, GPU providers
+git clone https://github.com/Infinity-ops/edgelens && cd edgelens
+edgelens benchmark --model tests/fixtures/small_cnn.onnx --iterations 300 --deadline-ms 33 --save cnn.json
+edgelens periodic --model tests/fixtures/lstm_anomaly.onnx --period-ms 1000 --iterations 30
+```
+
+On JetPack 4.x the power sensor is root-only: `edgelens doctor` prints the
+one-line fix.
 
 ## Three ways in
 
@@ -128,9 +177,9 @@ testing.
 3. **Keep your loop, add three lines** — `with el.trace(...) as t: ... with t.stage("inference"): ...`
 
 Full examples for all three, plus scenario packs (`vision`, `timeseries`,
-`custom`): [docs/usage.md](docs/usage.md). Which example fits your system:
-[examples/README.md](examples/README.md). A worked deployment:
-[predictive maintenance on an AGX Orin](docs/case-study-orin-predictive-maintenance.md).
+`custom`): [docs/usage.md](https://github.com/Infinity-ops/edgelens/blob/main/docs/usage.md). Which example fits your system:
+[examples/README.md](https://github.com/Infinity-ops/edgelens/blob/main/examples/README.md). A worked deployment:
+[predictive maintenance on an AGX Orin](https://github.com/Infinity-ops/edgelens/blob/main/docs/case-study-orin-predictive-maintenance.md).
 
 ## Commands
 
@@ -143,6 +192,14 @@ Full examples for all three, plus scenario packs (`vision`, `timeseries`,
 | `edgelens report`                            | Self-contained HTML report, attachable to an issue                                                                                                                          |
 | `edgelens compare before.json after.json`    | Before/after diff of any pipeline; PASS/REGRESSION; warns when the environment differs (`--strict-env` → exit code 2)                                                       |
 | `edgelens validate run.json --p99-ms 10 ...` | Requirements → PASS / FAIL / INCONCLUSIVE with measured values; on FAIL the limiting stage and why. Never PASSes a requirement the run cannot measure. Exit codes 0 / 1 / 2 |
+| `edgelens contract init / check / run`       | Requirements **and** the conditions they hold under, in one file; `run` measures what the contract needs and writes an evidence record |
+| `edgelens sweep`                             | One model on several backends (CPU, CUDA, TensorRT, FP16, DLA): latency, energy, and whether the outputs and decisions changed |
+| `edgelens periodic`                          | Latency and energy at the real inference rate (e.g. 1 Hz), not back to back |
+| `edgelens soak`                              | Long runs in windows: drift, throttling, memory growth, time to out-of-memory; crash-safe JSONL |
+| `edgelens record -- CMD` / `watch`           | Applications EdgeLens doesn't run: markers from C/C++ or Python, per-process CPU / memory, board telemetry |
+| `edgelens export`                            | Several runs and processes on one Perfetto timeline |
+| `edgelens selftest`                          | How much EdgeLens itself adds: harness error, span cost, sampler load on this machine |
+| `edgelens stream / replay / detect / envelope / perturb / parity` | *Experimental:* windowed sensor pipelines, decision latency, sensor faults, train/serve skew |
 
 Useful `benchmark` flags: `--deadline-ms`, `--period-ms`, `--pace`,
 `--idle-baseline SECONDS` (measures idle power first, then reports the
@@ -158,7 +215,7 @@ differ, with `--strict-env`); `validate` returns 0 (pass), 1 (fail),
 `--max-miss-ratio` (needs a run with `--deadline-ms`), `--min-fps`,
 `--max-power-w`, `--max-energy-mj` (need a readable power sensor).
 
-Full result schema and internals: [docs/architecture.md](docs/architecture.md).
+Full result schema and internals: [docs/architecture.md](https://github.com/Infinity-ops/edgelens/blob/main/docs/architecture.md).
 
 ## Why not just jtop / Nsight / trtexec?
 

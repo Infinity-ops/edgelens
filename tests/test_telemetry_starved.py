@@ -4,9 +4,7 @@ AGX Orin, a ~1 s pure-Python benchmark: 2 telemetry samples, the first
 finishing at the very end, and the output said "0.00 mJ/iteration ·
 1000000.0 iterations/J". Both are now reported as what they are.
 """
-from typer.testing import CliRunner
 
-from edgelens.cli import app
 from edgelens.hardware.telemetry import TelemetryRecorder
 
 

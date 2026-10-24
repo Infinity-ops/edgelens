@@ -1,6 +1,6 @@
 # Jetson validation log
 
-## Status of this release (v0.1.0)
+## Status of v0.1.0 (Jetson Nano)
 
 **Validated on a real Jetson Nano** (JetPack 4.6 / L4T R32.7.6, Python 3.8
 venv, ONNX Runtime CPU, CUDA and TensorRT providers):
@@ -42,33 +42,72 @@ venv, ONNX Runtime CPU, CUDA and TensorRT providers):
   becomes the first stage (or use observer mode in your existing loop).
   Recorded signals can be replayed with `WindowSource`.
 
-## v0.2 validation (in progress)
+## v0.2 validation status
 
-Layers 0, 1, 2 and 3 of the v0.2 roadmap are implemented and pass CI. They enter
-the README only once their row below is filled from a real board, using
-`scripts/validate_on_jetson.sh` ([how](validation-v0.2.md)).
+Rule: a v0.2 feature is called *verified on hardware* only where its row
+below says **measured**, from a run on a real board whose output was kept.
+Everything else is implemented and passes CI (Python 3.8–3.13, Linux x86-64),
+nothing more.
 
-| Gate | What is measured | Jetson Nano (JP 4.6) | AGX Orin Industrial |
+Boards:
+
+- **Jetson Nano** (JetPack 4.6 / L4T R32.7.6): the v0.1 scope is verified
+  (section above). v0.2 development runs on this Nano found and fixed bugs
+  (see the changelog); no complete v0.2 gate run has been archived yet.
+- **Jetson AGX Orin 32GB** (`tegra234`, as `edgelens doctor` reports it),
+  custom carrier, Yocto / OE4Tegra image, **shared with another team**:
+  clocks left as configured (not pinned), power mode not set by nvpmodel,
+  onnxruntime **CPU execution provider only** (no CUDA / TensorRT build on
+  this image), runs as root. Power is the **sum of module rails** (no input
+  rail on the AGX Orin), which under-reads the carrier board.
+
+| Gate | What is measured | Jetson Nano (JP 4.6) | Jetson AGX Orin 32GB |
 | --- | --- | --- | --- |
 | T2 one clock | stage timing, markers, telemetry on CLOCK_MONOTONIC | _pending_ | _pending_ |
 | T3 selftest: harness error | 1 ms / 10 ms reference, median error | _pending_ | _pending_ |
 | T3 selftest: span cost | Python / C, µs per span (kernel sendto) | _pending_ | _pending_ |
 | T3 selftest: sampler | % of one core; telemetry shift % | _pending_ | _pending_ |
 | T4 A/A | identical setups → NO DETECTABLE CHANGE | _pending_ | _pending_ |
-| T4 A/B | `jetson_clocks` → IMPROVED, change and 95% CI | _pending_ | _pending_ |
+| T4 A/B | `jetson_clocks` → IMPROVED, change and 95% CI | _pending_ | not possible on a shared board (changes its clocks) |
 | T5 schema | 0.1.0 file loads in every command | _pending_ | _pending_ |
 | S1 markers | C++ and Python: received / lost at a realistic rate | _pending_ | _pending_ |
 | S2 attach | process table; deliberate leak detected | _pending_ | _pending_ |
-| S3 ROS 2 | chain latency vs markers in the node | _pending_ | _pending_ |
+| S3 ROS 2 | chain latency vs markers in the node | _pending_ | _pending_ (no ROS 2 on this image) |
 | S4 bag replay | robot bag (IMU / odometry / commands) → 1 Hz pipeline, SLA check | _pending_ | _pending_ |
-| I3 sweep | LSTM: p50 / energy / max error / decision agreement per backend (CPU, CUDA, TRT, TRT-FP16, DLA) | _pending_ | _pending_ |
-| I1 periodic | 1 Hz vs back-to-back p50; energy per period; pinned vs unpinned trade-off | _pending_ | _pending_ |
-| I2 soak | 30 min bag replay at 1 Hz: drift, throttling, memory growth; deliberate leak found | _pending_ | _pending_ |
-| E1 contracts | PASS on a quiet board; each assumption deliberately violated → INCONCLUSIVE | _pending_ | _pending_ |
+| I3 sweep | p50 / energy / max error / decision agreement per backend (CPU, CUDA, TRT, TRT-FP16, DLA) | _pending_ | _pending_ (CPU only on this image) |
+| I1 periodic | 1 Hz vs back-to-back p50; energy per period; pinned vs unpinned trade-off | _pending_ | **measured** (1 Hz vs back to back, energy per period); pinned vs unpinned not possible on a shared board |
+| I2 soak | 30 min at 1 Hz: drift, throttling, memory growth; deliberate leak found | _pending_ | **partial**: 30 min run measured; memory verdict and deliberate leak still open (below) |
+| E1 contracts | PASS on a quiet board; each assumption deliberately violated → INCONCLUSIVE | _pending_ | **partial**: PASS path measured; violations not yet run |
 | E2 timeline | two applications + board power on one Perfetto timeline, opened in ui.perfetto.dev | _pending_ | _pending_ |
 | E3 CI | example repository: self-hosted runner blocks a pull request that breaks the contract | _pending_ | _pending_ |
 | L4 replay | windowed pipeline, incremental vs recompute features: per-stage ms per step; `--speed 1` deadline misses | _pending_ | _pending_ |
 | L4 detect / envelope / perturb / parity | identical decisions on the board as on the laptop (same time to detect, same outputs to 1e-4) | _pending_ | _pending_ |
+
+On a shared board, `bash scripts/validate_on_jetson.sh` **without**
+`EDGELENS_VALIDATE_SUDO=1` never changes clocks or the power mode: the
+violated-assumption gates edit the contract, not the board. Only the
+`jetson_clocks` A/B and the pinned/unpinned trade-off need the board to
+yourself.
+
+### What was measured on the AGX Orin
+
+One small LSTM (ONNX, about 2 ms per inference on the CPU), onnxruntime CPU
+execution provider, EdgeLens 0.2.0.dev4/dev5:
+
+| Run | Result |
+| --- | --- |
+| Back to back, onnxruntime default threads (one per core) | p50 2.09 ms, p99 2.65 ms · CPU 98% of all 8 cores · 11.2 W · 23.7 mJ per inference |
+| Same, 4 intra-op threads | p50 2.15 ms, p99 2.45 ms · CPU 49% · 8.8 W · **19.3 mJ** per inference |
+| Same, 2 / 1 threads | p50 3.12 / 5.14 ms · CPU 27% / 13% · 23.3 / 35.1 mJ per inference |
+| EdgeLens vs a bare onnxruntime loop, same model | p50 within 0.7–2.3%. p99 34–41% higher in EdgeLens: it ran 2437 iterations with its telemetry sampler thread while onnxruntime's default threads kept every core busy; the bare loop ran 600 without a sampler. Which of the two explains the tail is not yet separated |
+| `periodic`, 1 Hz vs back to back (default threads) | p50 6.15 ms vs 2.21 ms (**2.8x**); OS wake-up p50 0.35 ms; 5.15 J per period incl. idle (5.23 W idle); energy above idle per inference below the sensor's resolution |
+| Paced 1 Hz, default vs 1 thread | p50 7.6 ms vs 32.9 ms at the same mean power (5.3 / 5.2 W): one thread is slower **and** not cheaper at 1 Hz |
+| `contract run`, 5 min at 1 Hz | PASS: every assumption held (board, clocks not pinned, input period, start temperature 43.6 C, background load 0.13%); p99 20.3 ms, 0 of 301 deadline misses, 5.2 W mean, 44.3 C peak |
+| `soak`, 30 min at 1 Hz, 4 threads | drift +39% p50 (not significant: the windows alternate between ~7 ms and ~31 ms levels); no throttling; peak 44.3 C |
+| `soak` memory | 0.2.0.dev4 reported LEAK SUSPECTED (+221 MB/h). The growth (+107 MB) matches the input windows read in order from a 146 MB memory-mapped file (1836 × 60 kB = 110 MB): file pages, not a leak. 0.2.0.dev5 separates private memory from mapped files; **a rerun to confirm this is pending** |
+
+Open on this board: the latency levels' cause (dev5 records the CPU clock
+per level), the soak rerun, the deliberate leak, and the remaining gates.
 
 ## Real results on a Jetson Nano
 

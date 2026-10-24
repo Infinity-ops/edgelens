@@ -1,8 +1,8 @@
 # Assumption contracts: requirements as code (v0.2 Layer 3)
 
-> **Status: v0.2 development.** Implemented and tested in CI; the rows in
-> [jetson.md](jetson.md) are filled as each is validated on a Nano and an
-> AGX Orin.
+> **Status: v0.2 (Alpha).** Tested in CI. On real hardware
+> ([jetson.md](jetson.md)): a `contract run` PASS on an AGX Orin 32GB;
+> the deliberately violated assumptions are not yet run there.
 
 A latency number is only meaningful together with the conditions it was
 measured under. "p99 = 41 ms" on a board with pinned clocks, a cold start

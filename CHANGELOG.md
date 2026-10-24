@@ -1,9 +1,129 @@
 # Changelog
 
-## Unreleased — 0.2.0.dev4 (Layers 0–3 of the v0.2 roadmap)
+## 0.2.0 — unreleased (Alpha)
+
+v0.2 adds evidence and workflow on top of v0.1's measurement: assumption
+contracts, the real inference rate (`periodic`), long runs (`soak`), backend
+comparison (`sweep`), applications EdgeLens doesn't run (markers, `record`,
+`watch`, ROS 2), one timeline (`export`), self-measurement (`selftest`),
+statistical `compare`, real model inputs and accuracy on the device, and,
+experimental, decision latency for windowed sensor pipelines.
+
+What has been verified on real hardware is listed per gate in
+[docs/jetson.md](docs/jetson.md): in short, the v0.1 scope on a Jetson Nano,
+and the onnxruntime CPU path on a Jetson AGX Orin 32GB (benchmark, threads,
+`periodic`, `compare`, `contract run`, a 30-minute `soak`). CUDA / TensorRT /
+DLA on Orin and most v0.2 gates are still open. Known limitations:
+[docs/limitations.md](docs/limitations.md). Interface freeze for 0.2.x:
+[docs/stability.md](docs/stability.md).
+
+### Upgrading from 0.1
+
+Nothing in a 0.1 command line or `--pipeline` script has to change. Results
+keep `schema_version: 1`; fields were only added, and files written by 0.1.0
+load in every command. Visible changes:
+
+- `fps` in paced, markers, attach and ROS 2 runs is the observed rate over the
+  run, not 1 / mean latency; `throughput_basis` says which.
+- `telemetry.max_temp_c` is `null`, not `0`, when no thermal zone is readable.
+- `validate` is stricter: a latency PASS becomes NOT_MEASURED when a
+  measurement-integrity issue blocks it, energy from fewer than 3 power
+  samples is NOT_MEASURED, and `--max-miss-ratio` compares the exact ratio.
+- Python 3.8 is still supported (JetPack 4 venvs); 3.8–3.13 are tested.
+
+### Experimental in 0.2
+
+`stream`, `replay`, `detect`, `envelope`, `perturb`, `parity` (Layer 4) and
+`ros2 latency`: their spec and fault file formats are frozen, their reports
+and metrics may still change in a 0.2.x release.
+
+### Added — Layer 4: windowed sensor pipelines (experimental)
+
+- **Stream spec** (`edgelens stream init | check | fit-scaler`): one YAML file
+  describes columns, rates, windowing, the scaler, features, the model and the
+  alarm rule; `stream check` reports what the pipeline implies (history,
+  warm-up, smoothing delay) and whether recordings match it (rate, gaps, dead
+  columns).
+- **`replay`**: recordings through the spec's pipeline one block at a time,
+  per-stage cost per step on the board, incremental or recompute features,
+  `--speed 1` for real-time deadline misses.
+- **`detect`**: time from event to alarm, false alarms per healthy hour,
+  missed events, and what-if threshold / smoothing changes.
+- **`envelope fit | check`**: is the model answering about data it has seen
+  in training?
+- **`perturb`**: seeded sensor-fault campaigns (noise, bias, gain, stuck,
+  dropout, spikes, gaps, rate) and the severity at which decisions break.
+- **`parity`**: train/serve skew, the deployed feature path against the
+  training tensor or a reference runtime's outputs.
+- Docs: [docs/stream.md](docs/stream.md). Requirements `max_time_to_detect_s`,
+  `max_false_alarms_per_h`, `max_rmse` in `validate` and contracts.
+
+### Added — real inputs, accuracy, threads and images
+
+- `--inputs`, `--labels`, `--inputs-order sequential|spread`, `--threads`
+  for `benchmark --model`, `periodic`, `soak`, `contract run` (and
+  `--labels` / `--threads` for `sweep`). Real inputs (.npy / .npz / raw
+  .bin) are fed as given; the result records the file, its SHA-256, the
+  order and the onnxruntime thread count.
+- Accuracy against the labels follows their shape and the model's first
+  output: RMSE / MAE / RMSE per label level (regression, one or k values per
+  sample), accuracy / precision / recall at > 0.5 (0/1 detectors), top-1 /
+  top-5 / per-class accuracy (classifiers). Labels that cannot fit the model
+  are refused before the run; partial passes over the data are flagged.
+- `--inputs images/`: JPEG / PNG / BMP / WebP folders (or one image), decoded
+  once, prepared per `--image-prep` (presets `unit`, `imagenet`, `yolo`,
+  `signed`, `raw`, with overrides) in the timed preprocess stage; `--labels
+  subfolders` for class folders; extra `edgelens[images]`.
+- `validate --max-rmse` on benchmark results; new `--min-accuracy`.
+- `compare` separates requirement, data (input SHA) and setup (threads, GC
+  mode) differences.
+- Soak: private memory (RssAnon) is checked for leaks separately from
+  memory-mapped files (RssFile); a LATENCY_LEVELS finding names runs that
+  switch between two latency levels, with the CPU clock per level.
+- `examples/quickstart/` (a NumPy pipeline, the expected output and a result
+  checker), `examples/README.md`.
+
+### Changed
+
+- Renamed examples: `examples/robot_bag_replay.py` (was
+  `dem2_bag_replay.py`; `BAG_*` variables, the old names are still read),
+  `examples/ci-jetson/perf/anomaly.contract.yaml`,
+  `tests/fixtures/make_robot_bag.py`; `scripts/validate_on_jetson.sh` reads
+  `BAG_FILE`.
+- Help texts, docstrings, the contract template and the docs use generic
+  names and examples.
+
+### Fixed — release review
+
+- `validate --max-miss-ratio` compared the miss ratio rounded to 6
+  decimals: one miss in 2 million or more iterations read 0.0 and passed a
+  "no misses" requirement.
+- Dynamic energy per iteration (`--idle-baseline`) was dynamic power x mean
+  latency; in paced runs that under-read by period / latency. It is dynamic
+  power x measured window / iterations.
+- No readable thermal zone gave `max_temp_c: 0` and "GPU mean None%, peak
+  temp 0C" in the summary; now `null` and "n/a".
+- `record -- CMD` aborted with "No process with pid N" when the command
+  finished before process sampling started; markers and telemetry are kept.
+- The source distribution lacked `examples/markers/cpp_app.cpp` (a test
+  compiles it) and listed a `ROADMAP.md` that does not exist; an error
+  message pointed to that file.
+- Subprocess tests failed from a plain checkout without `pip install -e .`.
+- Contract error for a comma inside `{ ... }` explains the quoting.
 
 ### Fixed — found on an AGX Orin 32GB (Yocto/OE4Tegra)
 
+- `doctor` said "Is Jetson: no" and missed CUDA and TensorRT on a Jetson whose
+  model string is the integrator's own and whose rootfs is not NVIDIA's
+  Ubuntu. Detection now also uses `/proc/device-tree/compatible`
+  (`nvidia,tegra*`) and `/sys/devices/soc0/family`; CUDA is found under
+  versioned `/usr/local/cuda-*/` without the `cuda` symlink, and on
+  runtime-only installs (no version.json, no nvcc) from `libcudart.so.X.Y.Z`
+  or the `/usr/local/cuda-X.Y` directory name; TensorRT under
+  `/usr/lib/libnvinfer.so.*` and `/usr/include/NvInferVersion.h`.
+- `doctor` shows the module and SoC from the part number
+  (e.g. `Jetson AGX Orin 32GB · tegra234`) and says why L4T is missing
+  instead of "not detected".
 - soak: a 5-minute run WITHOUT a leak (+0.9 MB warm-up) was reported as LEAK
   SUSPECTED. A leak now also needs >= 8 MB and >= 5% real growth; below
   that, "growing — too little to call a leak; run longer".
@@ -151,10 +271,9 @@
 - Telemetry: slow thermal zones (firmware / I2C reads of several ms) are read
   every 20th sample; swap every 10th.
 
-Implemented and tested in CI (Python 3.8 and 3.13); not yet validated on
-Jetson hardware — see docs/jetson.md for the rows still pending.
+Tested in CI; their Jetson rows are in docs/jetson.md.
 
-### Added — can you trust the numbers?
+### Added — Layer 0: can you trust the numbers?
 
 - **One clock (T2):** every timestamp is CLOCK_MONOTONIC: harness and
   observer stages, markers, telemetry samples (`t_mono_ns`), energy
@@ -179,7 +298,7 @@ Jetson hardware — see docs/jetson.md for the rows still pending.
   `validate` turns a latency PASS into NOT_MEASURED when an issue blocks it
   (a FAIL stays a FAIL); `diagnose` lists them.
 
-### Added — systems EdgeLens doesn't run
+### Added — Layer 1: systems EdgeLens doesn't run
 
 - **Markers (S1):** header-only `edgelens_mark.h` for C/C++ (`EL_SPAN`,
   `EL_ITERATION`, `EL_SPAN_GPU`, `EL_SPAN_CUDA`, `-DEDGELENS_DISABLE`) and
@@ -194,7 +313,7 @@ Jetson hardware — see docs/jetson.md for the rows still pending.
   with explicit clock uncertainty, per-topic rate, jitter and gaps.
 - **ROS bag replay (S4):** `examples/rosbag_to_windows.py` (as-of merge of
   /imu, /odom, /cmd_vel_rc100 + any topic, data-age columns, gap report;
-  extra `edgelens[rosbag]`) and `examples/dem2_bag_replay.py` (1 Hz
+  extra `edgelens[rosbag]`) and `examples/robot_bag_replay.py` (1 Hz
   stand-in LSTM pipeline with a freshness check).
 - `examples/markers/cpp_app.cpp`, `examples/markers/python_app.py`;
   `scripts/validate_on_jetson.sh` extended with a gate per feature and a
@@ -348,17 +467,3 @@ Jetson hardware — see docs/jetson.md for the rows still pending.
 - HTML report inserted stage names / paths / JSON unescaped.
 - `GPU_BOUND` was suppressed whenever any other finding existed.
 - `requirements.txt` was missing `numpy`.
-
-### Fixed — found on an AGX Orin 32GB, custom carrier, Yocto (OE4Tegra) rootfs
-
-- `doctor` said "Is Jetson: no" and missed CUDA and TensorRT on a Jetson whose
-  model string is the integrator's own and whose rootfs is not NVIDIA's
-  Ubuntu. Detection now also uses `/proc/device-tree/compatible`
-  (`nvidia,tegra*`) and `/sys/devices/soc0/family`; CUDA is found under
-  versioned `/usr/local/cuda-*/` without the `cuda` symlink, and on
-  runtime-only installs (no version.json, no nvcc) from `libcudart.so.X.Y.Z`
-  or the `/usr/local/cuda-X.Y` directory name; TensorRT under
-  `/usr/lib/libnvinfer.so.*` and `/usr/include/NvInferVersion.h`.
-- `doctor` shows the module and SoC from the part number
-  (e.g. `Jetson AGX Orin 32GB · tegra234`) and says why L4T is missing
-  instead of "not detected".

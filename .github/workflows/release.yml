@@ -4,7 +4,8 @@ name: release
 # GitHub. One-time setup is described in CONTRIBUTING.md ("Releasing").
 #
 #   Run this workflow manually            -> TestPyPI (dry run)
-#   Publish a GitHub Release (tag v0.1.0)  -> PyPI
+#   Publish a GitHub Release (tag vX.Y.Z)  -> PyPI
+#   Before tagging: docs/release-checklist.md
 
 on:
   workflow_dispatch:
@@ -27,7 +28,7 @@ jobs:
       # separate `tests` workflow, so run the suite here before building.
       - name: Run tests
         run: |
-          pip install -e ".[dev,onnx]"
+          pip install -e ".[dev,onnx,images]"
           python -m pytest -q
       - name: Version must be identical in pyproject.toml and edgelens/__init__.py
         run: |

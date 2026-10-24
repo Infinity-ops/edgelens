@@ -5,6 +5,7 @@ Start from the one closest to your system; every example runs on a laptop
 
 | You have | Start with | What it shows |
 | --- | --- | --- |
+| nothing yet: just want to see it work | [quickstart/](quickstart/) | a NumPy sensor pipeline measured, diagnosed and validated in 2 minutes, with the expected output and a result checker |
 | an ONNX image model and a folder of images | `edgelens benchmark --model m.onnx --inputs val/ --labels subfolders --image-prep imagenet` ([usage.md](../docs/usage.md#real-inputs-accuracy-and-threads)) | latency per stage, accuracy (top-1 / top-5) on the board, `sweep` across CPU / CUDA / TensorRT / FP16 |
 | an ONNX model and prepared arrays (.npy / .bin) | `edgelens benchmark --model m.onnx --inputs x.npy --labels y.npy` | the same for time-series, audio or tabular models: RMSE or accuracy |
 | a Python pipeline (several stages) | [timeseries_vibration.py](timeseries_vibration.py), [predictive_maintenance.py](predictive_maintenance.py) | harness mode: EdgeLens drives your stages and finds the bottleneck |

@@ -23,10 +23,10 @@ from rich.table import Table
 
 from .cli import _load_result_or_exit, _write_or_exit, app, console
 
-stream_app = typer.Typer(help="Stream specs: a windowed time-series pipeline exactly as "
+stream_app = typer.Typer(help="(Experimental in v0.2.) Stream specs: a windowed time-series pipeline exactly as "
                               "trained (docs/stream.md).")
 app.add_typer(stream_app, name="stream")
-envelope_app = typer.Typer(help="The training envelope of a model's inputs, and a runtime "
+envelope_app = typer.Typer(help="(Experimental in v0.2.) The training envelope of a model's inputs, and a runtime "
                                 "guard against inputs it never saw.")
 app.add_typer(envelope_app, name="envelope")
 
@@ -212,7 +212,7 @@ def replay(spec_path: str = typer.Argument(..., help="Stream spec."),
            deadline_ms: float = typer.Option(None, "--deadline-ms"),
            max_steps: int = typer.Option(None, "--max-steps"),
            telemetry: bool = typer.Option(True, "--telemetry/--no-telemetry")):
-    """Replay recordings through the spec's pipeline, one block at a time:
+    """(Experimental in v0.2.) Replay recordings through the spec's pipeline, one block at a time:
     per-stage timing, board telemetry, and every decision against ground truth."""
     spec = _spec_or_exit(spec_path)
     if features not in ("incremental", "recompute"):
@@ -314,7 +314,7 @@ def detect(results: List[str] = typer.Argument(..., help="Replay results (JSON).
            save: str = typer.Option(None, "--save", help="Write the detection result (JSON; "
                                     "`edgelens validate --contract` reads it)."),
            markdown: str = typer.Option(None, "--markdown", help="Write a Markdown report.")):
-    """Decision latency and alarm quality over replayed recordings: time from
+    """(Experimental in v0.2.) Decision latency and alarm quality over replayed recordings: time from
     event to alarm, false alarms per healthy hour, missed events — for the raw
     model output and after post-processing. Recomputes from the stored outputs,
     so thresholds and smoothing can be tuned without re-running the model."""
@@ -592,7 +592,7 @@ def perturb(spec_path: str = typer.Argument(..., help="Stream spec."),
                                      "and exit."),
             save: str = typer.Option(None, "--save", help="Robustness result (JSON)."),
             markdown: str = typer.Option(None, "--markdown", help="Robustness report (MD).")):
-    """Inject data faults (noise, bias, stuck, dropout, spikes, gaps, rate changes)
+    """(Experimental in v0.2.) Inject data faults (noise, bias, stuck, dropout, spikes, gaps, rate changes)
     over a range of severities: robustness curves of accuracy, time to detect
     and false alarms, and the severity where the decision breaks."""
     if init:
@@ -655,7 +655,7 @@ def parity(spec_path: str = typer.Argument(..., help="Stream spec."),
                                                       ".bin / .npy), e.g. the C++ service."),
            steps: int = typer.Option(300, "--steps", help="Steps for the streaming self-check."),
            save: str = typer.Option(None, "--save")):
-    """Train/serve parity: the deployed feature path vs the batch reference, vs
+    """(Experimental in v0.2.) Train/serve parity: the deployed feature path vs the batch reference, vs
     the training code's own tensor, and the model outputs vs another runtime.
     Exit 0 = match, 1 = mismatch."""
     import numpy as np

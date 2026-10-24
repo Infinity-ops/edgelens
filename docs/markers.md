@@ -1,8 +1,7 @@
 # Measuring code EdgeLens doesn't run: markers, attach mode, logs, ROS 2
 
-> **Status: v0.2 development.** Implemented and tested in CI; rows in
-> [jetson.md](jetson.md) are filled in as each path is validated on a
-> real Nano and AGX Orin.
+> **Status: v0.2 (Alpha).** Tested in CI (C, C++ and Python senders);
+> the Jetson rows in [jetson.md](jetson.md) are pending.
 
 Most real edge AI systems are not one Python loop: C++ nodes, ROS 2,
 several processes, a runtime manager in between. EdgeLens has four ways in,

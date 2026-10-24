@@ -1,8 +1,9 @@
 # Insights nobody else gives you (v0.2 Layer 2)
 
-> **Status: v0.2 development.** Implemented and tested in CI; rows in
-> [jetson.md](jetson.md) are filled as each is validated on a Nano and an
-> AGX Orin.
+> **Status: v0.2 (Alpha).** Tested in CI. On real hardware
+> ([jetson.md](jetson.md)): `periodic` measured on an AGX Orin 32GB (CPU
+> provider); a 30-minute `soak` partly (its memory verdict is open); `sweep`
+> across GPU backends not yet.
 
 ## Which backend? `edgelens sweep`
 

@@ -36,7 +36,7 @@ python3 -c "import onnxruntime as o; print(o.__version__, o.get_available_provid
 Expected last line: your version and
 `['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']`.
 
-From v0.2 on (patch 0015), EdgeLens can no longer be taken down by this:
+Since v0.2, EdgeLens can no longer be taken down by this:
 the CUDA check runs in a child process, `edgelens doctor` shows a red
 **"ONNX Runtime installation is broken"** panel with the exact fix, and the
 validation script stops at its preflight step instead of running for hours.
@@ -69,7 +69,7 @@ Check in this order:
    measure nothing on it: its numbers are not evidence.
 2. **EdgeLens's check.** v0.2.0.dev1 tested CUDA by allocating a bare CUDA
    tensor, which can crash the JetPack 4.6 onnxruntime-gpu 1.11 build even
-   though sessions work (TensorRT ran on this Nano in v0.1). From patch 0021
+   though sessions work (TensorRT ran on this Nano in v0.1). Since v0.2
    the check creates and runs a CUDA session on a tiny model, like a real
    benchmark, and names the step that failed.
 3. **The wheel.** If the session-based check still crashes on a healthy card:
@@ -128,7 +128,7 @@ sudo chmod o+r /sys/bus/i2c/drivers/ina3221x/*/iio:device*/rail_name_* \
                /sys/bus/i2c/drivers/ina3221x/*/iio:device*/in_power*_input
 ```
 
-Why the desktop matters: on your first Nano run, `selftest` measured a 1 ms
+Why the desktop matters: on the first Nano run, `selftest` measured a 1 ms
 reference workload finishing up to **2 ms late** in its worst 1% — the GUI
 and its services taking the CPU away. Every p99 you measure carries that
 noise. selftest now reports it as `scheduling_jitter` with this fix.
@@ -153,7 +153,7 @@ edgelens selftest
 | telemetry_disturbance | PASS (< 3%) | — |
 | chrony | PASS, bound in ms | only needed for ROS 2 across machines |
 
-What changed since your first run: the collector no longer parses while
+What changed since the first Nano run: the collector no longer parses while
 receiving (it couldn't keep up on the Nano's CPU), the C sender no longer
 re-sends a 32 KB batch on every span when the queue is full (that was the
 234 µs per span), the "realistic rate" is now really one (4000 spans/s,
@@ -166,6 +166,15 @@ own `sendto()`, and slow thermal zones are read only every 20th sample.
 EDGELENS_VALIDATE_QUICK=1 bash scripts/validate_on_jetson.sh       # ~15 min smoke run
 EDGELENS_VALIDATE_SUDO=1  bash scripts/validate_on_jetson.sh       # full: ~100 min (30 min soak, 3 x 5 min contract runs)
 ```
+
+**On a board you share** (another team's clocks and power mode): run the
+script **without** `EDGELENS_VALIDATE_SUDO=1` and skip step 2 (don't stop
+someone else's desktop or change their sysctl). Then nothing on the board is
+changed: the violated-assumption gates (E1) edit the contract, not the
+board. Only `T4 clocks` and `I1 trade-off` need the board to yourself; they
+are reported as SKIP, and their rows in [jetson.md](jetson.md) say "not
+possible on a shared board". Write the board's state (clocks not pinned,
+power mode as found) into the row.
 
 Each run writes `edgelens_validation_<board>_<date>/SUMMARY.txt` and a
 `.tar.gz`. The script:

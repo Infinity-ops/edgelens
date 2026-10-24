@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "edgelens"
-version = "0.2.0.dev5"
+version = "0.2.0"
 description = "Measure, diagnose and validate AI pipelines on edge devices: stage-level latency, tail and deadlines, power and energy, evidence-based diagnosis. Deep NVIDIA Jetson support."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -12,8 +12,9 @@ license = { text = "MIT" }
 authors = [{ name = "EdgeLens contributors" }]
 keywords = ["jetson", "nvidia", "edge-ai", "profiling", "tensorrt", "cuda", "benchmark", "real-time", "energy", "latency", "deadline"]
 classifiers = [
-    # Alpha: every v0.1.0 hardware path passed scripts/validate_on_jetson.sh
-    # on a Jetson Nano (JetPack 4.6). Orin is implemented, not yet validated.
+    # Alpha: the v0.1 hardware paths are verified on a Jetson Nano (JetPack
+    # 4.6); v0.2 on an AGX Orin 32GB only for the onnxruntime CPU path, see
+    # docs/jetson.md. Interfaces frozen for 0.2.x: docs/stability.md.
     # NOTE: license uses the TOML-table form `{ text = "MIT" }` on purpose:
     # the SPDX string form needs setuptools>=77, which doesn't support
     # Python 3.8. Newer setuptools accepts the
@@ -62,6 +63,7 @@ rosbag = ["rosbags>=0.9.20"]
 images = ["pillow>=9.1"]
 
 [project.urls]
+Documentation = "https://github.com/Infinity-ops/edgelens#readme"
 Homepage = "https://github.com/Infinity-ops/edgelens"
 Repository = "https://github.com/Infinity-ops/edgelens"
 Issues = "https://github.com/Infinity-ops/edgelens/issues"
