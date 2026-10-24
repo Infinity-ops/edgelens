@@ -5,7 +5,7 @@ type: software
 authors:
   - family-names: Ambigapathy
     given-names: Narmada
-version: 0.2.0
+version: 0.2.0rc1
 license: MIT
 repository-code: "https://github.com/Infinity-ops/edgelens"
 keywords:

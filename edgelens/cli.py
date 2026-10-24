@@ -561,6 +561,8 @@ def monitor(
 @app.command()
 def benchmark(
     iterations: int = typer.Option(50, min=1, help="Number of timed iterations."),
+    warmup: int = typer.Option(10, "--warmup", min=0, help="Untimed iterations before the "
+                               "timed loop (recorded in the result's protocol block)."),
     model: str = typer.Option(None, "--model", help="Path to a real .onnx model — runs a "
                                "real ONNX Runtime session (CPU on a laptop, CUDA/TensorRT "
                                "on Jetson if available)."),
@@ -633,7 +635,7 @@ def benchmark(
         with console.status(label):
             try:
                 return run_benchmark(
-                    iterations=iterations, demo=demo, demo_scenario=scenario,
+                    iterations=iterations, warmup=warmup, demo=demo, demo_scenario=scenario,
                     model_path=model, provider=provider, pipeline_path=pipeline,
                     input_shapes=parse_input_shapes(input_shape),
                     deadline_ms=deadline_ms, period_ms=period_ms, pace=pace,
@@ -681,6 +683,8 @@ def _run_repeats(one_run, n, cooldown, save):
         if i > 1 and cooldown:
             time.sleep(cooldown)
         r = one_run(f"Run {i}/{n}...")
+        if isinstance(r.get("protocol"), dict):
+            r["protocol"].update(repeats=n, repeat_index=i, cooldown_s=cooldown)
         runs.append(r)
         _write_or_exit(path, json.dumps(r, indent=2))
         lat, dl, en = r.get("latency") or {}, r.get("deadline"), r.get("energy") or {}

@@ -127,12 +127,26 @@ def is_jetson() -> bool:
     return False
 
 
+def _cpu_name():
+    """CPU model from /proc/cpuinfo, else the machine type (x86_64, aarch64)."""
+    text = _read_file("/proc/cpuinfo") or ""
+    for key in ("model name", "Model", "Hardware", "cpu model"):
+        for line in text.splitlines():
+            if line.split(":")[0].strip() == key and ":" in line:
+                name = " ".join(line.split(":", 1)[1].split())
+                if name:
+                    return name
+    return platform.machine() or "unknown CPU"
+
+
 def detect_board():
     model = _read_file("/proc/device-tree/model")
     l4t_raw = _read_file("/etc/nv_tegra_release")
     return {
         "is_jetson": is_jetson(),
-        "model": model or f"Non-Jetson host ({platform.node()})",
+        # Never the hostname: the board name is part of environment_id and of
+        # every result file people share. The CPU model identifies the hardware.
+        "model": model or f"Non-Jetson host ({_cpu_name()})",
         "module": detect_module(),
         "soc": detect_soc(),
         "l4t_release_raw": l4t_raw,

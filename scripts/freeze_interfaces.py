@@ -35,7 +35,7 @@ frozen = {
                                      "stage_avg_ms", "total_latency_ms", "fps", "throughput_basis",
                                      "latency_p50_ms", "latency_p95_ms", "latency_p99_ms",
                                      "telemetry", "telemetry_series", "energy", "trace", "clock",
-                                     "identity", "environment"]),
+                                     "identity", "environment", "protocol"]),
     "result_modes": sorted(schema.KNOWN_MODES),
 }
 json.dump(frozen, sys.stdout, indent=1, sort_keys=True)

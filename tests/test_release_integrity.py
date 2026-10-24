@@ -117,3 +117,40 @@ def test_record_of_a_command_that_exits_at_once_keeps_its_result(monkeypatch, tm
     import pytest
     with pytest.raises(TargetError):
         runner.observe(pid=2 ** 22 + 12345, markers=False, telemetry=False, duration_s=0.1)
+
+
+def test_board_name_never_contains_the_hostname(monkeypatch):
+    """The board name is part of environment_id and of every shared result:
+    two identical machines must get the same id, and a result attached to an
+    issue must not publish the machine's name."""
+    import platform
+    from edgelens.hardware import detector
+    monkeypatch.setattr(platform, "node", lambda: "alice-secret-laptop")
+    monkeypatch.setattr(detector, "_read_file",
+                        lambda p: "model name\t: Example CPU 9000\n" if p == "/proc/cpuinfo" else None)
+    b = detector.detect_board()
+    assert "alice-secret-laptop" not in b["model"]
+    assert b["model"] == "Non-Jetson host (Example CPU 9000)"
+
+
+def test_every_result_records_its_measurement_protocol():
+    from edgelens.benchmark.runner import run_benchmark
+    r = run_benchmark(iterations=7, warmup=3, stage_fns={"a": lambda: None})
+    p = r["protocol"]
+    assert p["warmup_iterations"] == 3 and p["iterations_timed"] == 7 == r["iterations"]
+    assert p["gc_mode"] == "normal" and p["paced"] is False and p["repeats"] == 1
+
+
+def test_cli_warmup_option_and_repeats_are_recorded(tmp_path):
+    import json
+    from typer.testing import CliRunner
+    from edgelens.cli import app
+    script = tmp_path / "p.py"
+    script.write_text("def build_stage_fns():\n    return {'a': lambda: None}\n")
+    res = CliRunner().invoke(app, ["benchmark", "--pipeline", str(script), "--iterations", "5",
+                                   "--warmup", "0", "--repeat", "2", "--save",
+                                   str(tmp_path / "r.json")])
+    assert res.exit_code == 0, res.output
+    second = json.loads((tmp_path / "r.r02.json").read_text())
+    assert second["protocol"]["warmup_iterations"] == 0
+    assert second["protocol"]["repeats"] == 2 and second["protocol"]["repeat_index"] == 2

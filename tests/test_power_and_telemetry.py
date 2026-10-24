@@ -83,12 +83,26 @@ def test_energy_is_trapezoidal_integral():
     assert s["method"] == "input_rail"
 
 
-def test_snapshot_is_non_blocking():
+def test_snapshot_is_non_blocking(monkeypatch):
+    """The old implementation blocked 200 ms per sample in
+    psutil.cpu_percent(interval=0.2). Checked directly (the call must not
+    block), plus a timing bound the old code could not meet (5 x 200 ms).
+    A fixed 0.5 s budget failed on a laptop whose ACPI thermal zones take
+    ~100 ms per read (0.51 s for 5 samples): slow sysfs, not blocking."""
+    intervals = []
+    real = telemetry.psutil.cpu_percent
+
+    def spy(interval=None, *args, **kwargs):
+        intervals.append(interval)
+        return real(None, *args, **kwargs)
+    monkeypatch.setattr(telemetry.psutil, "cpu_percent", spy)
+    reader = power.PowerReader()
     t0 = time.perf_counter()
     for _ in range(5):
-        telemetry.snapshot(stream=None, power_reader=power.PowerReader())
-    # the old implementation blocked 200 ms per sample in cpu_percent()
-    assert (time.perf_counter() - t0) < 0.5
+        telemetry.snapshot(stream=None, power_reader=reader)
+    elapsed = time.perf_counter() - t0
+    assert intervals and all(i in (None, 0, 0.0) for i in intervals), intervals
+    assert elapsed < 5 * 0.2, f"{elapsed:.3f} s for 5 snapshots"
 
 
 def test_recorder_keeps_timestamped_series():

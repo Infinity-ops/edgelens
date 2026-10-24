@@ -160,6 +160,19 @@ def run_harness(pipeline, iterations=100, warmup=10, source=None, deadline_ms=No
         throughput_window_ms=((it_end - t_origin) / 1e6 if (pace and period_ms and e2e) else None),
     )
     result["gc"] = gcw.summary(e2e, deadline_ms)
+    # How the numbers were taken, so a reader can judge and repeat them.
+    result["protocol"] = {
+        "warmup_iterations": warmup,
+        "warmup_policy": "untimed passes through every stage before the timed loop",
+        "iterations_requested": iterations,
+        "iterations_timed": len(e2e),
+        "time_box_s": max_seconds,
+        "paced": bool(pace and period_ms),
+        "period_ms": period_ms,
+        "gc_mode": gc_mode,
+        "telemetry_interval_s": telemetry_interval_s if telemetry else None,
+        "repeats": 1,
+    }
     if attach_ids:
         from .identity import attach_identity
         attach_identity(result, model_path=model_path)

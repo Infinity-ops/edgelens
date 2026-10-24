@@ -65,6 +65,9 @@ the boxes as they were.
 - [ ] Ask two or three people outside the project to install it from PyPI
       and run the quick start and one command on their own system; collect
       friction and measurement doubts as issues (the *hardware report* and
-      *bug report* issue templates).
+      *bug report* issue templates). For a release candidate, pip needs
+      `pip install --pre edgelens` (plain `pip install edgelens` skips
+      pre-releases). An external run on a named configuration that matches
+      a **measured** row is what makes that row *independently reproduced*.
 - [ ] Hardware reports from boards not yet in [jetson.md](jetson.md): add a
       row only from a run whose output was attached.

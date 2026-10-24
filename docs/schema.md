@@ -41,6 +41,9 @@ Percentiles are `null` when the run has too few samples to support them
 | `process`, `process_series` | 0.2.0 | attach mode: per-process CPU, RSS and growth, threads, context switches |
 | `observation` | 0.2.0 | target, how the run ended, exit code |
 | `ros2` | 0.2.0 | topics, chain matching, data age and its clock uncertainty, `latency_basis` |
+| `protocol` | 0.2.0 | how the numbers were taken: `warmup_iterations`, `warmup_policy`, `iterations_requested` / `iterations_timed`, `time_box_s`, `paced`, `period_ms`, `gc_mode`, `telemetry_interval_s`, `repeats` (+ `repeat_index`, `cooldown_s` with `--repeat`) |
+| `quality` | 0.2.0 | `--model --inputs --labels`: RMSE / MAE / accuracy (top-1, top-5), per level or class, `samples_predicted`, `full_pass` |
+| `process_note` | 0.2.0 | `record -- CMD` when the command exited before process sampling started |
 
 `mode` values: `hardware`, `demo`, `markers`, `attach`, `imported-log`,
 `ros2`.

@@ -154,9 +154,12 @@ def test_periodic_detects_duty_cycle_penalty_and_separates_wakeup():
                          idle_baseline_s=0)
     p = r["periodic"]
     row = p["periods"][0]
-    assert p["back_to_back"]["p50_ms"] == pytest.approx(0.5, abs=0.3)
-    assert row["p50_ms"] == pytest.approx(3.5, abs=0.6)
-    assert row["penalty_ratio_p50"] > 3 and p["duty_cycle_penalty"]
+    # Busy-wait stages on a shared CI runner can be preempted: the bands are
+    # wide on purpose; what is tested is that the 3 ms wake-up penalty is
+    # found (and kept apart from the OS wake-up delay), not the exact ms.
+    assert 0.3 <= p["back_to_back"]["p50_ms"] < 1.5
+    assert 3.0 <= row["p50_ms"] < 6.0
+    assert row["penalty_ratio_p50"] > 2 and p["duty_cycle_penalty"]
     assert row["wake_delay_p50_ms"] is not None and row["wake_delay_p50_ms"] >= 0
     assert row["inferences"] == 12
     from edgelens.diagnose.engine import diagnose

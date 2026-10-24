@@ -61,6 +61,19 @@ Boards:
   this image), runs as root. Power is the **sum of module rails** (no input
   rail on the AGX Orin), which under-reads the carrier board.
 
+Named configurations (a claim holds for the configuration it was measured
+on, nothing wider):
+
+| ID | Board | Software | Runtimes run | EdgeLens | Date | Evidence publishable |
+| --- | --- | --- | --- | --- | --- | --- |
+| **NANO-1** | Jetson Nano | JetPack 4.6 / L4T R32.7.6, Python 3.8 venv | onnxruntime-gpu: CPU, CUDA, TensorRT | 0.1.0 | before 2026-10-07 | yes (repository fixtures) |
+| **ORIN-1** | Jetson AGX Orin 32GB, custom carrier | Yocto / OE4Tegra, Python 3.13 venv, shared board | onnxruntime: CPU only | 0.2.0.dev4 / dev5 | 2026-10-22 | **no**: third-party model and data; rerun with the repository's workloads pending |
+| **CI-X86** | GitHub-hosted runner | Ubuntu 22.04, Python 3.8–3.13 | onnxruntime: CPU | every commit | every commit | yes (Actions logs) |
+
+A row is **independently reproducible** when its evidence is publishable and
+the exact commands are in [validation-v0.2.md](validation-v0.2.md):
+NANO-1 and CI-X86 today, ORIN-1 after the rerun.
+
 | Gate | What is measured | Jetson Nano (JP 4.6) | Jetson AGX Orin 32GB |
 | --- | --- | --- | --- |
 | T2 one clock | stage timing, markers, telemetry on CLOCK_MONOTONIC | _pending_ | _pending_ |
@@ -89,10 +102,13 @@ violated-assumption gates edit the contract, not the board. Only the
 `jetson_clocks` A/B and the pinned/unpinned trade-off need the board to
 yourself.
 
-### What was measured on the AGX Orin
+### What was measured on the AGX Orin (ORIN-1)
 
 One small LSTM (ONNX, about 2 ms per inference on the CPU), onnxruntime CPU
-execution provider, EdgeLens 0.2.0.dev4/dev5:
+execution provider, EdgeLens 0.2.0.dev4/dev5, 2026-10-22. The raw results
+are kept by the maintainer and not published (the model belongs to a third
+party), so these numbers are a record, not yet reproducible by others: the
+same gates will be rerun with the repository's own workloads.
 
 | Run | Result |
 | --- | --- |

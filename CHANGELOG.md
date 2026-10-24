@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.2.0 — unreleased (Alpha)
+## 0.2.0rc1 — release candidate for 0.2.0 (Alpha)
+
+0.2.0 final follows when its exit criteria hold: the hardware matrix's
+measured rows backed by publishable evidence, and the advertised features
+reproduced by someone outside the project ([release-checklist.md](docs/release-checklist.md)).
 
 v0.2 adds evidence and workflow on top of v0.1's measurement: assumption
 contracts, the real inference rate (`periodic`), long runs (`soak`), backend
@@ -75,6 +79,9 @@ and metrics may still change in a 0.2.x release.
   `signed`, `raw`, with overrides) in the timed preprocess stage; `--labels
   subfolders` for class folders; extra `edgelens[images]`.
 - `validate --max-rmse` on benchmark results; new `--min-accuracy`.
+- Every harness result records its measurement protocol (`protocol`: warm-up
+  iterations and policy, iterations requested and timed, pacing, GC mode,
+  telemetry interval, repeats); `benchmark --warmup N` sets the warm-up.
 - `compare` separates requirement, data (input SHA) and setup (threads, GC
   mode) differences.
 - Soak: private memory (RssAnon) is checked for leaks separately from
@@ -102,6 +109,12 @@ and metrics may still change in a 0.2.x release.
   power x measured window / iterations.
 - No readable thermal zone gave `max_temp_c: 0` and "GPU mean None%, peak
   temp 0C" in the summary; now `null` and "n/a".
+- On machines without a Jetson device tree the board name contained the
+  hostname ("Non-Jetson host (alice-laptop)"). It is part of
+  `environment_id`, so identical machines got different ids, and it was
+  published in every shared result. It is now the CPU model. Results from
+  such machines get a new `environment_id` (compare warns once across the
+  change).
 - `record -- CMD` aborted with "No process with pid N" when the command
   finished before process sampling started; markers and telemetry are kept.
 - The source distribution lacked `examples/markers/cpp_app.cpp` (a test
