@@ -393,7 +393,7 @@ if python3 -c "import rosbags" 2>/dev/null; then
   if [ "$QUICK" != "1" ]; then
     BAG_MERGED="$OUT/bag_merged.npy" run edgelens benchmark --pipeline examples/robot_bag_replay.py --iterations 60 --pace --period-ms 1000 --deadline-ms 3000 --save "$OUT/bag_1hz.json"
   fi
-  BAG_FILE="${BAG_FILE:-${DEM2_BAG:-}}"   # your own bag (DEM2_BAG still read)
+  BAG_FILE="${BAG_FILE:-}"   # optional: your own bag
   [ -n "$BAG_FILE" ] && run python3 examples/rosbag_to_windows.py "$BAG_FILE" --out "$OUT/bag_real.npy"
 else
   skip "S4 bag" 'pip install "edgelens[rosbag]"'

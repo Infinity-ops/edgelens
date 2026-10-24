@@ -1,6 +1,6 @@
 """Write a small synthetic ROS 1 bag shaped like a mobile-robot recording:
 /imu (sensor_msgs/Imu, 100 Hz), /odom (nav_msgs/Odometry, 20 Hz),
-/cmd_vel_rc100 (geometry_msgs/Twist, 10 Hz, no header), and an optional
+/cmd_vel (geometry_msgs/Twist, 10 Hz, no header), and an optional
 /battery (sensor_msgs/BatteryState) for the generic-fields path.
 
     python tests/fixtures/make_robot_bag.py out.bag --seconds 5 [--imu-gap 1.0]
@@ -58,7 +58,7 @@ def write_bag(path, seconds=5.0, imu_gap_at=None, battery=False, t0_ns=1_700_000
                            covariance=cov36)), "nav_msgs/msg/Odometry"))
     for i in range(int(seconds * 10)):
         t = t0_ns + 7_000_000 + i * 100_000_000
-        events.append((t, "/cmd_vel_rc100", Twist(linear=Vec3(x=1.0, y=0.0, z=0.0),
+        events.append((t, "/cmd_vel", Twist(linear=Vec3(x=1.0, y=0.0, z=0.0),
                                                   angular=Vec3(x=0.0, y=0.0, z=0.1)),
                        "geometry_msgs/msg/Twist"))
     if battery:

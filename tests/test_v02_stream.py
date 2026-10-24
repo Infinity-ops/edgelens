@@ -2,8 +2,7 @@
 
 A synthetic robot: 20 Hz, three inputs (one dead), a health truth that
 degrades in 10 % steps; the 'model' is a Python function of the window, so
-these tests need no onnxruntime. The real DEM2 pipeline is checked against
-SML's own pandas code in docs/stream.md (not in CI: partner data)."""
+these tests need no onnxruntime."""
 
 import json
 import math

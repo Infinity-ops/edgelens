@@ -16,5 +16,5 @@ Start from the one closest to your system; every example runs on a laptop
 | a long-running deployment | [soak_leak_demo.py](soak_leak_demo.py) | `soak`: drift, throttling, memory growth (a known leak to check against) |
 | requirements to gate in CI | [ci-jetson/](ci-jetson/) | an assumption contract and a GitHub Actions job on a self-hosted Jetson |
 
-A worked deployment (predictive maintenance on an AGX Orin) is in
-[docs/case-study-orin-predictive-maintenance.md](../docs/case-study-orin-predictive-maintenance.md).
+What was measured on real boards, with the numbers:
+[docs/jetson.md](../docs/jetson.md).

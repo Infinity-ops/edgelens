@@ -1,8 +1,8 @@
 """--model with real inputs, labels and a thread count.
 
-From SML's motor-dropout LSTM on an AGX Orin: windows prepared by a partner
-(raw float32, [N, 100, 150] for a [1, 100, 150] input) plus a regression
-target needed hand-written replay scripts; synthetic inputs cannot say how
+From a robot-health LSTM on an AGX Orin: prepared windows (raw float32,
+[N, T, F] for a [1, T, F] input) plus a regression target needed
+hand-written replay scripts; synthetic inputs cannot say how
 accurate a model is; and onnxruntime's thread count changed latency, CPU and
 energy enough to belong in the result. Uses the repository's LSTM fixture
 ([1, 50, 16] -> [1, 1]) so no extra packages are needed.
@@ -28,7 +28,7 @@ N = 37
 @pytest.fixture
 def data(tmp_path):
     rng = np.random.default_rng(3)
-    x = rng.standard_normal((N, 50, 16)).astype(np.float32)        # no batch dim, like SML's
+    x = rng.standard_normal((N, 50, 16)).astype(np.float32)        # no batch dim, as prepared windows often are
     y = np.repeat(np.array([1.0, 0.6, 0.3], np.float32), [15, 12, 10])
     paths = {"npy": tmp_path / "x.npy", "bin": tmp_path / "x.bin", "npz": tmp_path / "x.npz",
              "y": tmp_path / "y.bin", "ynpy": tmp_path / "y.npy"}
@@ -101,8 +101,8 @@ def test_accuracy_matches_an_independent_loop(data):
 
 
 def test_real_inputs_are_fed_as_given(data):
-    """--model min-max normalises SYNTHETIC inputs; partners' windows are
-    already scaled and must reach the model unchanged."""
+    """--model min-max normalises SYNTHETIC inputs; prepared windows are
+    usually scaled already and must reach the model unchanged."""
     from edgelens.benchmark.onnx_pipeline import OnnxStagePipeline
     x, _, p = data
     o = OnnxStagePipeline(MODEL, inputs=p["npy"])

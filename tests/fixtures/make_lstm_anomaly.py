@@ -1,5 +1,5 @@
 """Regenerates lstm_anomaly.onnx — a small, untrained but architecturally
-real anomaly model shaped like the DEM2 stand-in: a window of 50 time steps
+real anomaly model: a window of 50 time steps
 x 16 sensor features -> LSTM(32) -> last hidden state -> Gemm -> Sigmoid ->
 anomaly score in [0, 1]. Used by `edgelens sweep` tests and docs.
 

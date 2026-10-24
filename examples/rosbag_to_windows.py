@@ -8,7 +8,7 @@ gets the last X readings of all sources, merged by timestamp.
     pip install "edgelens[rosbag]"           # rosbags: reads ROS 1 .bag and
                                               # ROS 2 .db3/.mcap, no ROS needed
     python examples/rosbag_to_windows.py robot.bag --out merged.npy
-    # optional: --topics /imu /odom /cmd_vel_rc100 /battery  --base /imu
+    # optional: --topics /imu /odom /cmd_vel /battery  --base /imu
 
 Writes:
     merged.npy              float64 [channels, rows]  (time on the last axis,
@@ -48,7 +48,7 @@ from pathlib import Path
 
 import numpy as np
 
-DEFAULT_TOPICS = ("/imu", "/odom", "/cmd_vel_rc100")
+DEFAULT_TOPICS = ("/imu", "/odom", "/cmd_vel")
 
 _FIELDS = {
     "sensor_msgs/msg/Imu": (

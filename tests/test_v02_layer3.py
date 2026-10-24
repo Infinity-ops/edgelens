@@ -22,7 +22,7 @@ runner = CliRunner()
 
 
 def _pipe(ms=0.3):
-    p = Pipeline("dem2-like")
+    p = Pipeline("anomaly-like")
 
     def pre(x=None):
         t = time.perf_counter() + ms / 2000.0
@@ -59,10 +59,10 @@ def jetson_run():
 
 
 CONTRACT = {
-    "contract": "dem2-anomaly-detection", "version": "1.0", "requirements_doc": "D1.1",
+    "contract": "anomaly-detector", "version": "1.0", "requirements_doc": "SRS-2.1",
     "min_duration": "0.5s", "min_iterations": 100,
     "assumes": {
-        "board": {"value": "AGX Orin", "id": "D1.1-A1"},
+        "board": {"value": "AGX Orin", "id": "SRS-A1"},
         "power_mode": "MAXN",
         "clocks_pinned": True,
         "input_period_ms": {"value": 5, "tolerance_pct": 5},
@@ -73,9 +73,9 @@ CONTRACT = {
         "model_sha256": "1a2b3c4d",
     },
     "guarantees": {
-        "p99_ms": {"limit": 50, "id": "D1.1-R07"},
-        "max_miss_ratio": {"limit": 0.5, "deadline_ms": 5, "id": "D1.1-R08"},
-        "max_temp_c": {"limit": 85, "id": "D1.1-R14"},
+        "p99_ms": {"limit": 50, "id": "SRS-R07"},
+        "max_miss_ratio": {"limit": 0.5, "deadline_ms": 5, "id": "SRS-R08"},
+        "max_temp_c": {"limit": 85, "id": "SRS-R14"},
     },
 }
 
@@ -89,8 +89,8 @@ def test_all_assumptions_hold_and_the_verdict_is_the_guarantees(jetson_run):
     assert [a["status"] for a in v["assumptions"]] == [ct.HOLDS] * 9, v["assumptions"]
     assert v["verdict"] == ct.PASS and v["guarantees_verdict"] == ct.PASS
     ids = {r["requirement"]: r["id"] for r in v["checks"]}
-    assert ids == {"p99_ms": "D1.1-R07", "max_miss_ratio": "D1.1-R08", "max_temp_c": "D1.1-R14"}
-    assert v["assumptions"][0]["id"] == "D1.1-A1"
+    assert ids == {"p99_ms": "SRS-R07", "max_miss_ratio": "SRS-R08", "max_temp_c": "SRS-R14"}
+    assert v["assumptions"][0]["id"] == "SRS-A1"
 
 
 # E1 "done when": each assumption, deliberately violated, gives INCONCLUSIVE.
@@ -157,7 +157,7 @@ def test_unpaced_run_violates_the_input_period(jetson_run):
 
 def test_fail_under_the_assumptions_is_fail_but_outside_is_inconclusive(jetson_run):
     doc = copy.deepcopy(CONTRACT)
-    doc["guarantees"]["p99_ms"] = {"limit": 0.001, "id": "D1.1-R07"}
+    doc["guarantees"]["p99_ms"] = {"limit": 0.001, "id": "SRS-R07"}
     v = _eval(jetson_run, doc)
     assert v["verdict"] == ct.FAIL and v["diagnosis"]["primary"]["type"]
     r = copy.deepcopy(jetson_run)
@@ -264,10 +264,10 @@ def test_background_load_is_measured_and_detects_a_busy_process():
 
 def test_evidence_markdown_has_every_requirement_id(jetson_run):
     md = ct.evidence_markdown(_eval(jetson_run), "run.json")
-    for rid in ("D1.1-A1", "D1.1-R07", "D1.1-R08", "D1.1-R14"):
+    for rid in ("SRS-A1", "SRS-R07", "SRS-R08", "SRS-R14"):
         assert rid in md
-    assert md.startswith("# ✅ PASS — dem2-anomaly-detection v1.0")
-    assert "| Requirements | D1.1 |" in md
+    assert md.startswith("# ✅ PASS — anomaly-detector v1.0")
+    assert "| Requirements | SRS-2.1 |" in md
 
 
 # ---------------------------------------------------------------- CLI
@@ -284,9 +284,9 @@ def test_cli_validate_contract_exit_codes_and_evidence(tmp_path, jetson_run):
     ev = tmp_path / "evidence.md"
     res = runner.invoke(app, ["validate", str(run), "--contract", str(c), "--evidence", str(ev)])
     assert res.exit_code == 0, res.output
-    assert "D1.1-R07" in ev.read_text()
+    assert "SRS-R07" in ev.read_text()
     saved = json.loads((tmp_path / "run.validation.json").read_text())
-    assert saved["verdict"] == "PASS" and saved["contract"]["name"] == "dem2-anomaly-detection"
+    assert saved["verdict"] == "PASS" and saved["contract"]["name"] == "anomaly-detector"
 
     bad = copy.deepcopy(jetson_run)
     bad["environment"]["cpu_clocks_locked"] = False
@@ -367,7 +367,7 @@ def test_perfetto_trace_has_every_track(jetson_run):
             ("Rail", "VDD_GPU_SOC W"), ("Rail", "VDD_CPU_CV W")} <= counters
     assert any(e["ph"] == "i" and "deadline miss" in e["name"] for e in ev)
     procs = [e["args"]["name"] for e in ev if e["ph"] == "M" and e["name"] == "process_name"]
-    assert any("Board telemetry" in p for p in procs) and any("dem2-like" in p for p in procs)
+    assert any("Board telemetry" in p for p in procs) and any("anomaly-like" in p for p in procs)
     xs = [e for e in ev if e["ph"] == "X"]
     assert min(e["ts"] for e in xs) >= 0 and all(e["dur"] >= 0 for e in xs)
     # spans and counters share one clock: the first counter is at the run start
@@ -377,7 +377,7 @@ def test_perfetto_trace_has_every_track(jetson_run):
 
 
 def test_perfetto_merges_processes_on_one_clock(jetson_run):
-    app_a = {"mode": "markers", "pipeline": {"name": "fortis"},
+    app_a = {"mode": "markers", "pipeline": {"name": "runtime-a"},
              "clock": {"trace_origin_mono_ns": 10_000_000_000,
                        "wall": {"wall_minus_mono_ns": 5_000_000_000_000}},
              "trace": {"events": [

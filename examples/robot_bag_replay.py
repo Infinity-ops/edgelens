@@ -20,7 +20,7 @@ trained windowed model, describe its preprocessing in a stream spec and use
 `edgelens replay` / `edgelens detect` instead (docs/stream.md): that replays
 the exact training features and measures decisions against ground truth.
 
-Environment variables (the older DEM2_* names are still read): BAG_MERGED
+Environment variables: BAG_MERGED
 (default merged.npy), BAG_WINDOW (rows, default 50), BAG_HOP (rows, default
 100), BAG_RATE_HZ (base topic rate, default 100), BAG_MAX_AGE_MS (freshness
 limit, default 200).
@@ -37,7 +37,7 @@ import edgelens as el
 
 
 def _env(name, default):
-    return os.environ.get(f"BAG_{name}", os.environ.get(f"DEM2_{name}", default))
+    return os.environ.get(f"BAG_{name}", default)
 
 
 MERGED = _env("MERGED", "merged.npy")

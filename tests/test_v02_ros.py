@@ -108,10 +108,10 @@ rosbags = pytest.importorskip("rosbags")
 
 
 @pytest.fixture(scope="module")
-def dem2_bag(tmp_path_factory):
+def robot_bag(tmp_path_factory):
     sys.path.insert(0, str(ROOT / "tests" / "fixtures"))
     from make_robot_bag import write_bag
-    path = tmp_path_factory.mktemp("bag") / "dem2.bag"
+    path = tmp_path_factory.mktemp("bag") / "robot.bag"
     write_bag(str(path), seconds=6, imu_gap_at=3.0, battery=True)
     return path
 
@@ -122,16 +122,16 @@ def _run_example(*args):
                           universal_newlines=True, timeout=120)
 
 
-def test_bag_merge_matches_sml_columns_and_finds_gaps(dem2_bag, tmp_path):
+def test_bag_merge_matches_robot_columns_and_finds_gaps(robot_bag, tmp_path):
     out = tmp_path / "m.npy"
-    res = _run_example(dem2_bag, "--out", out)
+    res = _run_example(robot_bag, "--out", out)
     assert res.returncode == 0, res.stderr
     info = json.loads(out.with_suffix(".json").read_text())
     a = np.load(out)
     assert a.shape == (len(info["columns"]), info["rows"])
     cols = info["columns"]
     for c in ("/imu:linear_acceleration.z", "/odom:pose.pose.position.x",
-              "/odom:twist.twist.angular.z", "/cmd_vel_rc100:linear.x", "age_ms:/odom"):
+              "/odom:twist.twist.angular.z", "/cmd_vel:linear.x", "age_ms:/odom"):
         assert c in cols
     assert info["base_topic"] == "/imu"
     assert info["topics"]["/imu"]["gaps_over_2x_period"] == 1
@@ -143,25 +143,25 @@ def test_bag_merge_matches_sml_columns_and_finds_gaps(dem2_bag, tmp_path):
     assert np.allclose(accel_z, 9.81)
 
 
-def test_bag_merge_header_time_generic_fields_and_errors(dem2_bag, tmp_path):
+def test_bag_merge_header_time_generic_fields_and_errors(robot_bag, tmp_path):
     out = tmp_path / "h.npy"
-    res = _run_example(dem2_bag, "--out", out, "--time", "header",
-                       "--topics", "/imu", "/odom", "/cmd_vel_rc100", "/battery")
+    res = _run_example(robot_bag, "--out", out, "--time", "header",
+                       "--topics", "/imu", "/odom", "/cmd_vel", "/battery")
     assert res.returncode == 0, res.stderr
-    assert "no header.stamp on /cmd_vel_rc100" in res.stderr
+    assert "no header.stamp on /cmd_vel" in res.stderr
     cols = json.loads(out.with_suffix(".json").read_text())["columns"]
     assert "/battery:voltage" in cols and "/battery:current" in cols
-    res = _run_example(dem2_bag, "--out", out, "--topics", "/nope")
+    res = _run_example(robot_bag, "--out", out, "--topics", "/nope")
     assert res.returncode != 0 and "Available" in res.stderr
 
 
-def test_dem2_replay_pipeline_runs_and_validates(dem2_bag, tmp_path, monkeypatch):
+def test_robot_replay_pipeline_runs_and_validates(robot_bag, tmp_path, monkeypatch):
     from typer.testing import CliRunner
     from edgelens.cli import app
-    merged = tmp_path / "dem2_merged.npy"
-    assert _run_example(dem2_bag, "--out", merged).returncode == 0
+    merged = tmp_path / "robot_merged.npy"
+    assert _run_example(robot_bag, "--out", merged).returncode == 0
     monkeypatch.setenv("BAG_MERGED", str(merged))
-    out = tmp_path / "dem2.json"
+    out = tmp_path / "robot.json"
     res = CliRunner().invoke(app, ["benchmark", "--pipeline",
                                    str(ROOT / "examples" / "robot_bag_replay.py"),
                                    "--iterations", "120", "--deadline-ms", "3000",

@@ -104,7 +104,7 @@ execution provider, EdgeLens 0.2.0.dev4/dev5:
 | Paced 1 Hz, default vs 1 thread | p50 7.6 ms vs 32.9 ms at the same mean power (5.3 / 5.2 W): one thread is slower **and** not cheaper at 1 Hz |
 | `contract run`, 5 min at 1 Hz | PASS: every assumption held (board, clocks not pinned, input period, start temperature 43.6 C, background load 0.13%); p99 20.3 ms, 0 of 301 deadline misses, 5.2 W mean, 44.3 C peak |
 | `soak`, 30 min at 1 Hz, 4 threads | drift +39% p50 (not significant: the windows alternate between ~7 ms and ~31 ms levels); no throttling; peak 44.3 C |
-| `soak` memory | 0.2.0.dev4 reported LEAK SUSPECTED (+221 MB/h). The growth (+107 MB) matches the input windows read in order from a 146 MB memory-mapped file (1836 × 60 kB = 110 MB): file pages, not a leak. 0.2.0.dev5 separates private memory from mapped files; **a rerun to confirm this is pending** |
+| `soak` memory | 0.2.0.dev4 reported LEAK SUSPECTED (+221 MB/h). The growth matches, to within 3%, the bytes of input windows read in order from a memory-mapped data file during the run: file pages, not a leak. 0.2.0.dev5 separates private memory from mapped files; **a rerun to confirm this is pending** |
 
 Open on this board: the latency levels' cause (dev5 records the CPU clock
 per level), the soak rerun, the deliberate leak, and the remaining gates.

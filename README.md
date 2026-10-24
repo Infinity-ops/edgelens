@@ -178,8 +178,8 @@ one-line fix.
 
 Full examples for all three, plus scenario packs (`vision`, `timeseries`,
 `custom`): [docs/usage.md](https://github.com/Infinity-ops/edgelens/blob/main/docs/usage.md). Which example fits your system:
-[examples/README.md](https://github.com/Infinity-ops/edgelens/blob/main/examples/README.md). A worked deployment:
-[predictive maintenance on an AGX Orin](https://github.com/Infinity-ops/edgelens/blob/main/docs/case-study-orin-predictive-maintenance.md).
+[examples/README.md](https://github.com/Infinity-ops/edgelens/blob/main/examples/README.md). What was measured on real boards:
+[docs/jetson.md](https://github.com/Infinity-ops/edgelens/blob/main/docs/jetson.md).
 
 ## Commands
 

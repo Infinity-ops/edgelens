@@ -85,8 +85,7 @@ and metrics may still change in a 0.2.x release.
 
 ### Changed
 
-- Renamed examples: `examples/robot_bag_replay.py` (was
-  `dem2_bag_replay.py`; `BAG_*` variables, the old names are still read),
+- Renamed examples: `examples/robot_bag_replay.py` (`BAG_*` variables),
   `examples/ci-jetson/perf/anomaly.contract.yaml`,
   `tests/fixtures/make_robot_bag.py`; `scripts/validate_on_jetson.sh` reads
   `BAG_FILE`.
@@ -167,8 +166,8 @@ and metrics may still change in a 0.2.x release.
 - **Performance CI (E3):** `examples/ci-jetson/` — a complete example
   repository: GitHub Actions workflow for a self-hosted Jetson runner
   (concurrency per board, clocks pinned and restored, evidence as job summary
-  and artifact), a DEM2 contract, the gate script (exit code = verdict) and a
-  DEM2-style pipeline; docs/contracts.md, docs/timeline.md, docs/ci.md.
+  and artifact), an example contract, the gate script (exit code = verdict) and
+  a 1 Hz anomaly-detection pipeline; docs/contracts.md, docs/timeline.md, docs/ci.md.
 - Dependency: PyYAML (contract files).
 
 ### Added — Layer 2: insights nobody else gives you
@@ -194,7 +193,7 @@ and metrics may still change in a 0.2.x release.
   MEMORY_LEAK, GPU_MEMORY_GROWTH, OUT_OF_MEMORY_RISK, SWAP_IN_USE; validate
   `--max-latency-drift-pct`, `--max-mem-growth-mb-per-h`,
   `--max-throttled-windows`, `--max-temp-c`.
-- `tests/fixtures/lstm_anomaly.onnx` (DEM2-shaped stand-in),
+- `tests/fixtures/lstm_anomaly.onnx` (a small LSTM stand-in),
   `examples/soak_leak_demo.py`; docs/insights.md.
 
 ### Fixed — from the second Jetson Nano run
@@ -312,7 +311,7 @@ Tested in CI; their Jetson rows are in docs/jetson.md.
   chain latency by matching header stamps (no clock sync needed), data age
   with explicit clock uncertainty, per-topic rate, jitter and gaps.
 - **ROS bag replay (S4):** `examples/rosbag_to_windows.py` (as-of merge of
-  /imu, /odom, /cmd_vel_rc100 + any topic, data-age columns, gap report;
+  /imu, /odom, /cmd_vel + any topic, data-age columns, gap report;
   extra `edgelens[rosbag]`) and `examples/robot_bag_replay.py` (1 Hz
   stand-in LSTM pipeline with a freshness check).
 - `examples/markers/cpp_app.cpp`, `examples/markers/python_app.py`;

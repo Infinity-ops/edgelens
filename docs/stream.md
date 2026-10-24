@@ -1,9 +1,10 @@
 # Windowed time-series pipelines: from inference latency to decision latency (v0.2 Layer 4)
 
-> **Status: v0.2 development.** Checked against a real 30-column, 20 Hz robot
-> pipeline (LSTM, 100 x 150 window) and the training code's own pandas
-> preprocessing: model inputs identical to 4e-7, the same RMSE and the same
-> time to detect. Jetson rows in [jetson.md](jetson.md) are pending.
+> **Status: experimental in v0.2** ([stability.md](stability.md)). Tested in
+> CI on a synthetic robot recording (incremental vs recompute features,
+> detection, envelope, fault campaigns, parity against a batch reference).
+> Check your own pipeline with `edgelens parity` against your training
+> code's tensors. Jetson rows in [jetson.md](jetson.md) are pending.
 
 A sensor model does not see a sample. It sees a **window** of preprocessed
 history, and its answer is smoothed and thresholded before anyone acts on it.
@@ -110,8 +111,9 @@ period (else the trained step).
 `--features incremental` computes only the new block and keeps the last
 `sequence` block vectors in a ring. `recompute` recomputes every block of
 the window from the raw history at each step, which is what a direct port of
-batch training code does. On the 100 x 150 pipeline this is 0.07 ms against
-2.2 ms per step: same numbers, 30x the cost.
+batch training code does. Both give the same numbers; recompute costs a
+multiple of incremental that grows with the window length (`replay` prints
+both per stage).
 
 Printed after the table, **where decision time goes** lists the delays that
 are built into the pipeline, so you can see them before measuring anything:
@@ -199,7 +201,7 @@ run is reproducible), scored with the detection metrics and the envelope.
 The output gives the **breaking point**: the mildest severity at which a
 fault is missed, a false alarm appears, or detection comes more than 10
 model steps later. The fault file is plain data, so it can be shared with
-partners who run the same campaign in another tool.
+teams who run the same campaign in another tool.
 
 A pattern worth looking for: the guard drops to 0 % in-envelope at a bias
 severity where the alarms are still right, and the false alarms appear one

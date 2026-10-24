@@ -1,4 +1,4 @@
-"""Third Jetson Nano run: a 30-minute DEM2 soak at 50 C reported thermal
+"""Third Jetson Nano run: a 30-minute 1 Hz soak at 50 C reported thermal
 throttling in 30 of 30 windows. The 'active' cooling devices were Tegra voltage
 floors and voltage-temperature scaling, which never lower a clock."""
 
@@ -46,7 +46,7 @@ def test_real_throttling_devices_and_cap_drops_still_count():
 
 def test_soak_report_reanalyses_an_old_jsonl_correctly(tmp_path):
     # the .jsonl written by the run that reported 30/30: `soak --report` fixes the verdict
-    path = tmp_path / "soak_dem2.jsonl"
+    path = tmp_path / "soak_1hz.jsonl"
     with open(path, "w") as f:
         f.write(json.dumps({"kind": "header", "deadline_ms": 3000, "limits": {}}) + "\n")
         for r in _rows(cooling=NANO_COOLING):

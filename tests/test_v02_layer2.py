@@ -317,7 +317,7 @@ def test_cli_soak_argument_checks():
 
 
 def _sourced_pipeline():
-    """Like the DEM2 replay: the pipeline reads its own recorded data."""
+    """Like a bag replay: the pipeline reads its own recorded data."""
     p = el.Pipeline("sourced", pack="timeseries", sample_rate_hz=100, window=10, hop=20)
     p.set_source(el.WindowSource(np.arange(1000, dtype=float), window=10, hop=20))
     p.add_stage("build_window", lambda w: float(w[0]) + 1)     # fails on None input

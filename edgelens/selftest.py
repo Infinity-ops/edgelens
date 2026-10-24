@@ -391,7 +391,7 @@ def check_chrony():
     if not st.get("available"):
         return [_row("chrony", WARN, None, "", None,
                      f"{st.get('reason')}. Only needed for latency across machines "
-                     f"(e.g. sensor on the PMC, prediction on the PMA).",
+                     f"(e.g. the sensor on one computer, the prediction on another).",
                      fix=_install("chrony") + "   (and point both machines at the same "
                          "server)")]
     bound_ms = st["error_bound_s"] * 1000

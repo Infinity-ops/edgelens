@@ -185,7 +185,7 @@ def test_timeseries_config_validation():
     with pytest.raises(ValueError, match="hop"):
         el.Pipeline("bad", pack="timeseries", sample_rate_hz=1000, window=10, hop=0)
     # v0.2: hop > window is valid (predict less often than the sensor delivers,
-    # e.g. DEM2: 0.5 s of 100 Hz history once per second).
+    # e.g. 0.5 s of 100 Hz history once per second).
     p = el.Pipeline("sparse", pack="timeseries", sample_rate_hz=100, window=50, hop=100)
     assert p.config["hop_period_ms"] == 1000.0
     assert p.config["overlap_pct"] == 0.0 and p.config["skipped_samples_per_hop"] == 50
