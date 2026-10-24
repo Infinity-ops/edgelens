@@ -28,7 +28,7 @@ from ..hardware import telemetry as telemetry_mod
 from ..markers import protocol
 from ..markers.collector import MarkerCollector
 from ..markers.session import spans_to_result
-from .procsampler import ProcessSampler, find_process
+from .procsampler import ProcessSampler, TargetError, find_process
 
 SETTLE_S = 0.25          # let the last datagrams arrive after the target stops
 
@@ -49,6 +49,7 @@ class ObservedRun:
         self.target = None
         self.target_pids = None
         self.private_socket = False
+        self.process_note = None
         self.pid_verdicts = {}         # sender pid -> True / False / None (gone before check)
 
 
@@ -99,8 +100,17 @@ def observe(cmd=None, pid=None, name=None, duration_s=None, socket_path=None, ma
         if pid is not None and recorder is not None and not cmd:
             recorder.track_pid(pid)          # the target is workload, not background
         if pid is not None:
-            sampler = ProcessSampler(pid, interval_s=process_interval_s,
-                                     children=children).start()
+            try:
+                sampler = ProcessSampler(pid, interval_s=process_interval_s,
+                                         children=children).start()
+            except TargetError:
+                # A command EdgeLens started can finish (and be a zombie)
+                # before process sampling begins: its markers are still
+                # valid. Anything else (a --pid that is gone) stays an error.
+                if child is None or child.poll() is None:
+                    raise
+                run.process_note = ("the command exited before process sampling started; "
+                                    "markers and board telemetry are complete")
 
         end_at = time.monotonic() + duration_s if duration_s else None
         try:
@@ -193,6 +203,8 @@ def to_result(run, *, name, pack="custom", deadline_ms=None, period_ms=None, mod
                              "exit_code": run.exit_code, "interrupted": run.interrupted}}
     if run.process is not None:
         extra["process"] = run.process
+    elif run.process_note:
+        extra["process_note"] = run.process_note
         extra["process_series"] = run.process_series
     spans, foreign, unverified = run.spans, [], []
     own = set()

@@ -122,7 +122,7 @@ def _resolve_pipeline(given, model_path, provider, stage_fns, pipeline_path, inp
         "  --demo                            (synthetic data for previewing output)\n"
         "  stage_fns=... / pipeline=... from Python\n"
         "EdgeLens does not fabricate hardware-mode results from a placeholder "
-        "pipeline — see ROADMAP.md."
+        "pipeline."
     )
 
 

@@ -53,7 +53,13 @@ def energy_summary(power, iterations, mean_e2e_ms, idle_power_w=None):
         dynamic_w = max(0.0, power["power_w_mean"] - idle_power_w)
         out["idle_power_w"] = round(idle_power_w, 3)
         out["dynamic_power_w"] = round(dynamic_w, 3)
-        out["dynamic_energy_per_iteration_j"] = round(dynamic_w * mean_e2e_ms / 1000.0, 6)
+        # Dynamic power is averaged over the whole sampled window, so it must be
+        # multiplied by that window (per iteration), not by the latency: in
+        # paced mode the window includes the idle time between periods and
+        # dynamic power x latency under-reads by period / latency.
+        window_s = power.get("duration_s")
+        per_it_s = (window_s / iterations) if window_s else mean_e2e_ms / 1000.0
+        out["dynamic_energy_per_iteration_j"] = round(dynamic_w * per_it_s, 6)
     if (power.get("sample_count") or 0) < 3:
         out["low_confidence"] = ("fewer than 3 power samples in the timed window; run more "
                                  "iterations for a trustworthy energy figure")

@@ -1,6 +1,18 @@
 """Shared test setup."""
 
+import os
+from pathlib import Path
+
 import pytest
+
+import edgelens
+
+# Subprocess tests run `python app.py` / `python -m edgelens`. From a plain
+# checkout (no `pip install -e .`) those children could not import edgelens
+# and failed with ModuleNotFoundError; point them at the package under test.
+_PKG_PARENT = str(Path(edgelens.__file__).resolve().parents[1])
+os.environ["PYTHONPATH"] = os.pathsep.join(
+    [_PKG_PARENT] + [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p])
 
 
 @pytest.fixture(autouse=True)

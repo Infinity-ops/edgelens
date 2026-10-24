@@ -82,8 +82,12 @@ def _check(result, key, limit):
             return _row(key, "Deadline miss ratio", limit, None, "", NOT_MEASURED,
                         "the run has no deadline; benchmark with --deadline-ms (or a pack "
                         "that defines one) to measure misses")
+        # Compare the exact ratio: the stored miss_ratio is rounded to 6
+        # decimals, so 1 miss in 2 million iterations would read 0.0 and PASS
+        # a "no misses" requirement.
+        exact = (dl["misses"] / dl["iterations"]) if dl.get("iterations") else dl["miss_ratio"]
         row = _row(key, f"Deadline miss ratio ({dl['deadline_ms']} ms)", limit,
-                   dl["miss_ratio"], "", _compare(dl["miss_ratio"], limit, "max"))
+                   dl["miss_ratio"], "", _compare(exact, limit, "max"))
         row["detail"] = f"{dl['misses']} of {dl['iterations']} iterations missed"
         return row
 

@@ -689,7 +689,9 @@ class TelemetryRecorder:
             "emc_percent_mean": mean(emc_vals),
             "temps_c_mean": temps_mean,
             "temps_c_peak": temps_peak,
-            "max_temp_c": max(temps_peak.values()) if temps_peak else 0,
+            # None, not 0: a result file must not say 0 C when no thermal
+            # zone was readable (laptops, containers).
+            "max_temp_c": max(temps_peak.values()) if temps_peak else None,
             # the board's state when the run began (assumption contracts)
             "start_temp_c": (max((first.get("temps_c") or {}).values())
                              if (first.get("temps_c") or {}) else None),

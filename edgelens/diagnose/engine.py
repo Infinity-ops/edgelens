@@ -469,7 +469,7 @@ def diagnose(benchmark_result):
             "cpu_percent_mean": round(cpu, 1),
             "gpu_percent_mean": round(gpu, 1),
             "mem_percent_mean": round(mem_pct, 1),
-            "max_temp_c": round(max_temp, 1),
+            "max_temp_c": round(max_temp, 1) if max_temp else None,
         },
         "telemetry_reliable": telemetry_reliable,
         "telemetry_sample_count": sample_count,

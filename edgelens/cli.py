@@ -350,12 +350,15 @@ def _print_benchmark(result):
 
     tel = result.get("telemetry", {})
     if tel:
+        def _mp(kind):
+            m, p = tel.get(f"{kind}_percent_mean"), tel.get(f"{kind}_percent_peak")
+            return "n/a" if m is None else f"mean {m}% / peak {p}%"
+        temp = tel.get("max_temp_c")
         console.print(
             f"[dim]Telemetry over {tel.get('sample_count', 0)} samples "
             f"({tel.get('duration_s', 0)}s, sampler {tel.get('sampler_cpu_ms_mean')} ms CPU/sample): "
-            f"CPU mean {tel.get('cpu_percent_mean')}% / peak {tel.get('cpu_percent_peak')}% · "
-            f"GPU mean {tel.get('gpu_percent_mean')}% / peak {tel.get('gpu_percent_peak')}% · "
-            f"peak temp {tel.get('max_temp_c')}C[/dim]"
+            f"CPU {_mp('cpu')} · GPU {_mp('gpu')} · "
+            f"peak temp {f'{temp}C' if temp else 'n/a'}[/dim]"
         )
         st = tel.get("starved")
         if st:
