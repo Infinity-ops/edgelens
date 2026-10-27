@@ -11,7 +11,7 @@ CPU/GPU clocks ramp down (DVFS), the GPU may be power-gated (Jetson
 back-to-back benchmark never shows.
 
 `edgelens periodic` measures exactly that:
-  1. idle power baseline (nothing running),
+  1. idle power baseline (nothing running), before and after the rows,
   2. back-to-back latency and energy (the classic benchmark),
   3. for each period (e.g. 1000 ms): inferences released on that period —
      the SERVICE time of each (the pipeline's own work once it runs; the
@@ -39,6 +39,9 @@ MIN_PERIODS_FOR_ENERGY = 30
 # mean power above the idle baseline that a board power sensor can resolve
 IDLE_RESOLUTION_W = 0.02        # INA3221: a few mW per LSB, plus baseline drift
 IDLE_RESOLUTION_REL = 0.01      # 1% of idle power
+# Back-to-back power is the ceiling for the periodic rows (below), so it
+# needs a real power average: at 10 samples/s, 2 s is 20 samples.
+B2B_MIN_POWER_S = 2.0
 
 _RAILGATE_GLOBS = ("/sys/devices/gpu.0/railgate_enable",
                    "/sys/devices/platform/gpu.0/railgate_enable",
@@ -59,7 +62,21 @@ def gpu_railgate():
     return None
 
 
-def _energy_row(result, period_ms, idle_w, n):
+def _energy_row(result, period_ms, idle_w, n, idle_drift_w=None, ceiling_w=None):
+    """Energy per period (measured) and extra energy per inference above idle
+    (derived: (mean power - idle) x period).
+
+    The derived figure is only as good as the idle baseline. AGX Orin, 1 Hz,
+    a 0.3 ms LSTM: three runs on a quiet board gave 57, 114 and 376 mJ "per
+    inference"; 376 mJ in a 4 ms inference would be ~100 W on a board that
+    draws 4-9 W. Mean power had moved with the board, not with the model.
+    So two checks, both from this run's own measurements:
+      * idle_drift_w: idle measured before AND after the rows; an excess
+        smaller than that drift (or the sensor resolution) is only a bound;
+      * ceiling_w: mean power of the same work run back to back (100% duty
+        cycle). A periodic row cannot draw more on average than running the
+        work continuously; if it does, the excess is not this model's.
+    """
     en = result.get("energy") or {}
     if not en.get("available"):
         return {"energy_per_period_mj": None, "power_w_mean": None,
@@ -74,9 +91,19 @@ def _energy_row(result, period_ms, idle_w, n):
         # Fourth Nano run: at 1 Hz a 9 ms inference raised mean power by less
         # than the sensor resolves, and "max(0, P - idle)" printed a confident
         # 0.0 mJ. Below the resolution there is no measurement, only a bound.
-        floor_w = max(IDLE_RESOLUTION_W, IDLE_RESOLUTION_REL * idle_w)
-        if pw - idle_w < floor_w:
+        res_w = max(IDLE_RESOLUTION_W, IDLE_RESOLUTION_REL * idle_w)
+        floor_w = max(res_w, idle_drift_w or 0.0)
+        if ceiling_w is not None and pw > ceiling_w + res_w:
+            row["dynamic_energy_not_attributable"] = (
+                f"mean power {pw:.3f} W is above the {ceiling_w:.3f} W the board drew running "
+                f"the same work back to back: the excess over idle is not this model's (idle "
+                f"baseline drift or other activity on the board)")
+        elif pw - idle_w < floor_w:
             row["dynamic_energy_below_mj"] = round(floor_w * period_ms, 1)
+            row["dynamic_energy_below_reason"] = (
+                "sensor resolution" if floor_w == res_w else
+                f"idle baseline drift ({idle_drift_w:.3f} W between the idle measurements "
+                f"before and after)")
         else:
             row["dynamic_energy_per_inference_mj"] = round((pw - idle_w) * period_ms, 3)
     if n < MIN_PERIODS_FOR_ENERGY or en.get("low_confidence"):
@@ -109,9 +136,21 @@ def run_periodic(pipe, periods_ms, iterations=30, warm_iterations=200, idle_base
                       telemetry_interval_s=telemetry_interval_s, attach_ids=False,
                       pipeline_source=pipeline_source)
     b2b_lat = b2b["latency"]
+    if has_power and b2b_lat.get("mean"):
+        # 200 x 0.3 ms is 60 ms: less than one power sample. Run long enough
+        # for a power average (it is the ceiling of every periodic row).
+        need = int(B2B_MIN_POWER_S * 1000.0 / b2b_lat["mean"]) + 1
+        if need > warm_iterations:
+            say(f"Back-to-back: {need} iterations for a {B2B_MIN_POWER_S:g} s power average...")
+            b2b = run_harness(pipe, source=getattr(pipe, "source", None),
+                              iterations=min(need, 1_000_000), warmup=10,
+                              telemetry_interval_s=telemetry_interval_s, attach_ids=False,
+                              pipeline_source=pipeline_source,
+                              max_seconds=3 * B2B_MIN_POWER_S)
+            b2b_lat = b2b["latency"]
     b2b_inference_ms = b2b_lat.get("p50")
 
-    rows, results = [], []
+    rows, results, steady_counts = [], [], []
     for period in periods_ms:
         say(f"Periodic: {iterations} inferences every {period:g} ms "
             f"(~{iterations * period / 1000:.0f} s)...")
@@ -140,9 +179,25 @@ def run_periodic(pipe, periods_ms, iterations=30, warm_iterations=200, idle_base
         if b2b_inference_ms and st.get("p50") is not None:
             row["penalty_ratio_p50"] = round(st["p50"] / b2b_inference_ms, 3)
             row["penalty_ms_p50"] = round(st["p50"] - b2b_inference_ms, 3)
-        row.update(_energy_row(res, period, idle_w, len(steady)))
         rows.append(row)
         results.append(res)
+        steady_counts.append(len(steady))
+
+    # Idle again after the rows: the drift between the two is the uncertainty
+    # of every "extra above idle" figure; their mean is the baseline.
+    idle_before, idle_after, idle_drift = idle_w, None, None
+    if idle_w is not None:
+        say(f"Measuring idle power again for {idle_baseline_s:g} s...")
+        idle_after = measure_idle_power(idle_baseline_s, reader)
+        if idle_after is not None:
+            idle_drift = abs(idle_after - idle_before)
+            idle_w = (idle_before + idle_after) / 2.0
+    b2b_en = b2b.get("energy") or {}
+    ceiling_w = (b2b_en.get("power_w_mean")
+                 if b2b_en.get("available") and not b2b_en.get("low_confidence") else None)
+    for row, res, n in zip(rows, results, steady_counts):
+        row.update(_energy_row(res, row["period_ms"], idle_w, n, idle_drift_w=idle_drift,
+                               ceiling_w=ceiling_w))
 
     # The LONGEST period is the reference ("primary"): the real, slowest rate
     # (e.g. 1000 ms) — compare / validate / the trade-off use it.
@@ -155,6 +210,12 @@ def run_periodic(pipe, periods_ms, iterations=30, warm_iterations=200, idle_base
                      f"sampling interval ({sample_ms:.0f} ms): energy per inference is derived "
                      f"from average power over the periods, not observed per inference "
                      f"(moderate evidence; >= {MIN_PERIODS_FOR_ENERGY} periods).")
+    bad = [r for r in rows if r.get("dynamic_energy_not_attributable")]
+    if bad:
+        which = ", ".join(f"every {r['period_ms']:g} ms" for r in bad)
+        notes.append(f"Extra energy per inference not reported ({which}): "
+                     f"{bad[0]['dynamic_energy_not_attributable']}. Energy per period is "
+                     f"still measured.")
     if not has_power:
         notes.append("No readable power sensor: latency only (Jetson: see `edgelens doctor`).")
     railgate = gpu_railgate()
@@ -166,8 +227,12 @@ def run_periodic(pipe, periods_ms, iterations=30, warm_iterations=200, idle_base
                          "energy_per_inference_mj": (
                              round(b2b["energy"]["energy_per_iteration_j"] * 1000.0, 3)
                              if (b2b.get("energy") or {}).get("available") else None),
-                         "power_w_mean": (b2b.get("energy") or {}).get("power_w_mean")},
+                         "power_w_mean": b2b_en.get("power_w_mean"),
+                         "power_sample_count": b2b_en.get("power_sample_count")},
         "idle_power_w": round(idle_w, 3) if idle_w is not None else None,
+        "idle_power_before_w": round(idle_before, 3) if idle_before is not None else None,
+        "idle_power_after_w": round(idle_after, 3) if idle_after is not None else None,
+        "idle_drift_w": round(idle_drift, 3) if idle_drift is not None else None,
         "periods": rows,
         "primary": rows[primary_idx],
         "duty_cycle_penalty": bool(penalized),

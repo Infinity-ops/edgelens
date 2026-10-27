@@ -16,7 +16,8 @@ collects them in one place. What was checked on which board:
   are reported as unavailable (`n/a`, `null`), never as 0. Containers often
   hide thermal zones and power sensors too.
 - **Hardware verification is partial.** See [jetson.md](jetson.md): the v0.1
-  scope on a Jetson Nano and the onnxruntime CPU path on an AGX Orin 32GB.
+  scope on a Jetson Nano and the v0.2 gates on the onnxruntime CPU path of an
+  AGX Orin 32GB (shared board: clocks not pinned, no power mode set).
   CUDA / TensorRT / DLA on Orin, Xavier and Orin Nano / NX have not been
   run by the maintainers: reports from those boards are very welcome.
 
@@ -34,7 +35,10 @@ collects them in one place. What was checked on which board:
   count (or a longer `telemetry_interval_s=` in the Python API) if tail
   latency matters.
 - Pure-Python pipelines that hold the GIL can starve the sampler; the
-  result then warns "Telemetry starved".
+  result then warns "Telemetry starved". Very short runs do too: the quick
+  start's 1000 windows take about 0.6 s on an AGX Orin, so its board
+  telemetry is a few samples and its energy is not measured. Use more
+  iterations when telemetry or energy matters.
 - Percentiles need enough samples: p99 needs at least 100 iterations, p99.9
   at least 1000; below that they are reported as missing, not estimated.
 - Paced runs (`--pace`, `periodic`) count from the scheduled release time, so
@@ -56,6 +60,19 @@ collects them in one place. What was checked on which board:
   derived from average power, not observed per inference; `periodic` says
   when the extra energy per inference is below the sensor's resolution.
   Fewer than 3 power samples: energy is NOT_MEASURED.
+- "Extra energy above idle" is only as good as the idle baseline, and board
+  power drifts by tenths of a watt over minutes. At 1 Hz that drift is far
+  larger than one short inference costs (an AGX Orin printed 57 to 376 mJ
+  for the same 0.3 ms inference in 0.2.0rc1). `periodic` therefore measures
+  idle before and after its rows, reports a bound when the excess is within
+  that drift, and no figure at all when a row draws more power than the same
+  work run back to back. Energy per period (idle included) is unaffected.
+- Small energy changes in `compare` need care: on the AGX Orin, ten
+  identical runs (A, B, A, B, ...) read mean power +1.8% and energy +3.8%
+  "REGRESSED" for B, while latency showed no change. B always ran right
+  after A on a warming board. Treat energy changes under about 5% as
+  unproven unless the runs were interleaved in both orders (A B B A) and
+  repeated.
 
 ## Long runs (`soak`)
 

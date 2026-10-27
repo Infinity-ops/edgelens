@@ -1,10 +1,6 @@
 # Changelog
 
-## 0.2.0rc1 — release candidate for 0.2.0 (Alpha)
-
-0.2.0 final follows when its exit criteria hold: the hardware matrix's
-measured rows backed by publishable evidence, and the advertised features
-reproduced by someone outside the project ([release-checklist.md](docs/release-checklist.md)).
+## 0.2.0 — 2026-10-27 (Alpha)
 
 v0.2 adds evidence and workflow on top of v0.1's measurement: assumption
 contracts, the real inference rate (`periodic`), long runs (`soak`), backend
@@ -14,12 +10,30 @@ statistical `compare`, real model inputs and accuracy on the device, and,
 experimental, decision latency for windowed sensor pipelines.
 
 What has been verified on real hardware is listed per gate in
-[docs/jetson.md](docs/jetson.md): in short, the v0.1 scope on a Jetson Nano,
-and the onnxruntime CPU path on a Jetson AGX Orin 32GB (benchmark, threads,
-`periodic`, `compare`, `contract run`, a 30-minute `soak`). CUDA / TensorRT /
-DLA on Orin and most v0.2 gates are still open. Known limitations:
+[docs/jetson.md](docs/jetson.md): the v0.1 scope on a Jetson Nano, and the
+v0.2 gate script on the onnxruntime CPU path of a Jetson AGX Orin 32GB with
+the repository's own workloads (configuration ORIN-2: selftest, statistical
+compare, markers, attach and leak detection, `periodic`, `sweep`, contracts
+with each assumption violated, Perfetto export, the CI gate script).
+CUDA / TensorRT / DLA on Orin, ROS 2, bag replay and the experimental stream
+commands are still open. Known limitations:
 [docs/limitations.md](docs/limitations.md). Interface freeze for 0.2.x:
 [docs/stability.md](docs/stability.md).
+
+### Fixed — from the AGX Orin gate run (0.2.0rc1)
+
+- `periodic` printed "extra energy per inference" of 57, 114 and 376 mJ for
+  the same 0.3 ms inference at 1 Hz on a quiet board (376 mJ in a 4 ms
+  inference would be ~100 W). The figure is (mean power - idle) x period,
+  and idle had drifted between the baseline and the rows. Idle is now
+  measured before and after the rows (baseline = their mean, drift recorded
+  as `idle_drift_w`); an excess within that drift is a bound, "< N mJ"; a row
+  that draws more than the same work run back to back gets no figure and a
+  note. The back-to-back phase runs at least 2 s when a power sensor is read
+  (200 inferences of 0.3 ms were less than one power sample). New fields:
+  `idle_power_before_w`, `idle_power_after_w`, `idle_drift_w`,
+  `back_to_back.power_sample_count`, `dynamic_energy_below_reason`,
+  `dynamic_energy_not_attributable`. A run takes one idle baseline longer.
 
 ### Upgrading from 0.1
 

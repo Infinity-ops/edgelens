@@ -61,7 +61,7 @@ def _run(cmd, timeout=5):
 # Module part numbers in /proc/device-tree/compatible -> marketing name.
 # The compatible string survives custom carrier boards and non-Ubuntu
 # rootfs images (Yocto/meta-tegra), where the model string is the
-# integrator's own ("Taipur Orin") and /etc/nv_tegra_release is absent.
+# integrator's own ("Example Orin") and /etc/nv_tegra_release is absent.
 _MODULE_NAMES = {
     "p3701-0000": "Jetson AGX Orin",
     "p3701-0004": "Jetson AGX Orin 32GB",

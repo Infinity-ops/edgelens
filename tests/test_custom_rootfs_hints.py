@@ -49,14 +49,14 @@ def test_readiness_warns_about_an_unset_clock():
 
 
 def _env(**kw):
-    e = {"board": "Taipur Orin", "module": "Jetson AGX Orin 32GB", "is_jetson": True}
+    e = {"board": "Example Orin", "module": "Jetson AGX Orin 32GB", "is_jetson": True}
     e.update(kw)
     return {"environment": e}
 
 
 def test_board_assumption_checks_the_module_too():
     r = contract.check_assumption(_env(), "board", {"value": "AGX Orin 32GB"})
-    assert r["status"] == contract.HOLDS and r["measured"] == "Taipur Orin (Jetson AGX Orin 32GB)"
+    assert r["status"] == contract.HOLDS and r["measured"] == "Example Orin (Jetson AGX Orin 32GB)"
     r = contract.check_assumption(_env(), "board", {"value": "AGX Orin Industrial"})
     assert r["status"] == contract.VIOLATED
     r = contract.check_assumption(_env(module=None, board="NVIDIA Jetson Nano Developer Kit"),

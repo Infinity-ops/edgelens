@@ -91,7 +91,7 @@ What has been checked on real hardware, and what has not
 | | Verified | Not yet verified |
 | --- | --- | --- |
 | **Jetson Nano** (JetPack 4.6) | the v0.1 scope: engine, statistics, deadlines, telemetry, INA3221 power and energy, CPU / CUDA / TensorRT providers, `compare --strict-env` | the v0.2 gates (development runs only) |
-| **Jetson AGX Orin 32GB** (Yocto image, shared board) | onnxruntime CPU provider: benchmark, threads, `periodic`, `compare`, `contract run` (PASS path), a 30 min `soak`; sum-of-rails power | CUDA / TensorRT / DLA on Orin, the soak memory verdict, clock A/B (not possible on a shared board), most v0.2 gates |
+| **Jetson AGX Orin 32GB** (Yocto image, shared board) | onnxruntime CPU provider, repository workloads: `selftest`, `benchmark`, `periodic`, statistical `compare` (A/A and a known change), Python markers, `watch` and leak detection, `soak` leak detection, `sweep` (CPU row), contracts with every assumption deliberately violated, Perfetto export, the CI gate script; sum-of-rails power | CUDA / TensorRT / DLA on Orin, C++ markers, ROS 2, bag replay, clock A/B (not possible on a shared board), the CI runner end to end, the experimental stream commands |
 | **Linux x86-64** (CI) | the full test suite on Python 3.8–3.13 | — |
 
 Known limitations: [docs/limitations.md](https://github.com/Infinity-ops/edgelens/blob/main/docs/limitations.md).
@@ -193,7 +193,7 @@ Full examples for all three, plus scenario packs (`vision`, `timeseries`,
 | `edgelens compare before.json after.json`    | Before/after diff of any pipeline; PASS/REGRESSION; warns when the environment differs (`--strict-env` → exit code 2)                                                       |
 | `edgelens validate run.json --p99-ms 10 ...` | Requirements → PASS / FAIL / INCONCLUSIVE with measured values; on FAIL the limiting stage and why. Never PASSes a requirement the run cannot measure. Exit codes 0 / 1 / 2 |
 | `edgelens contract init / check / run`       | Requirements **and** the conditions they hold under, in one file; `run` measures what the contract needs and writes an evidence record |
-| `edgelens sweep`                             | One model on several backends (CPU, CUDA, TensorRT, FP16, DLA): latency, energy, and whether the outputs and decisions changed |
+| `edgelens sweep`                             | One model on several backends (CPU, CUDA, TensorRT, FP16, DLA): latency, energy, and whether the outputs and decisions changed. GPU backends are implemented; `sweep` has not yet been run with them on a board |
 | `edgelens periodic`                          | Latency and energy at the real inference rate (e.g. 1 Hz), not back to back |
 | `edgelens soak`                              | Long runs in windows: drift, throttling, memory growth, time to out-of-memory; crash-safe JSONL |
 | `edgelens record -- CMD` / `watch`           | Applications EdgeLens doesn't run: markers from C/C++ or Python, per-process CPU / memory, board telemetry |

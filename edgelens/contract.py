@@ -295,7 +295,7 @@ def check_assumption(result, key, spec):
         if not board:
             return _row(key, label, want, None, NOT_VERIFIED, "the result has no board "
                         "information", spec=spec)
-        # The model string is the carrier's own on custom boards ("Taipur
+        # The model string is the carrier's own on custom boards ("Example
         # Orin"); the module name comes from the part number in the device
         # tree ("Jetson AGX Orin 32GB"). Either may carry the wanted name.
         module = env.get("module")

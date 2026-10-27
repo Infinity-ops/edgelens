@@ -1,6 +1,6 @@
 """Detection on a custom-carrier Jetson running a Yocto (OE4Tegra) rootfs.
 
-Reproduces a real AGX Orin 32GB ("Taipur Orin" carrier): model string has
+Reproduces a real AGX Orin 32GB on a custom carrier ("Example Orin" here): model string has
 no "jetson", no /etc/nv_tegra_release, CUDA only at /usr/local/cuda-12.6,
 TensorRT libs in /usr/lib, no dpkg. v0.1.0 reported "Is Jetson: no" and
 missed CUDA and TensorRT there.
@@ -13,7 +13,7 @@ from edgelens.hardware import detector
 
 COMPATIBLE = b"nvidia,p3737-0000+p3701-0004\x00nvidia,p3701-0004\x00nvidia,tegra234\x00"
 FILES = {
-    "/proc/device-tree/model": "Taipur Orin\x00",
+    "/proc/device-tree/model": "Example Orin\x00",
     "/sys/devices/soc0/family": "Tegra\n",
     "/usr/local/cuda-12.6/version.json": '{"cuda": {"name": "CUDA SDK", "version": "12.6.68"}}',
 }
@@ -61,7 +61,7 @@ def test_is_jetson_from_compatible():
 
 def test_module_and_soc():
     board = _run(detector.detect_board)
-    assert board["model"] == "Taipur Orin"
+    assert board["model"] == "Example Orin"
     assert board["module"] == "Jetson AGX Orin 32GB"
     assert board["soc"] == "tegra234"
 

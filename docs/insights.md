@@ -59,9 +59,13 @@ edgelens periodic --model lstm.onnx --period-ms 10 --period-ms 100 --period-ms 1
 - **Energy / period** = mean power x period, idle time included (what the battery pays);
   **extra / inference** is above the measured idle baseline (what the model
   costs). With inferences much shorter than the 100 ms power sampling, energy
-  per inference is an average over the periods: >= 30 periods. When the extra
-  power is below what the sensor resolves (max(20 mW, 1% of idle)), it is
-  reported as a bound, "< N mJ", never as 0.
+  per inference is an average over the periods: >= 30 periods. Idle is
+  measured before and after the rows: the baseline is their mean. When the
+  extra power is below what the sensor resolves (max(20 mW, 1% of idle)) or
+  below the drift between the two idle readings, it is reported as a bound,
+  "< N mJ", never as 0. When a row draws more power than the same work run
+  back to back (at least 2 s of it), the excess is not the model's: the
+  table says "n/a (see note)" and gives the reason.
 - The **longest** period is the reference result (`primary`) that `compare`
   and `validate` use: the real rate.
 - **DUTY_CYCLE_PENALTY** when periodic p50 >= 1.5x back-to-back and >= 0.5 ms more.

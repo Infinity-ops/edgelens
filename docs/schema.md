@@ -44,6 +44,7 @@ Percentiles are `null` when the run has too few samples to support them
 | `protocol` | 0.2.0 | how the numbers were taken: `warmup_iterations`, `warmup_policy`, `iterations_requested` / `iterations_timed`, `time_box_s`, `paced`, `period_ms`, `gc_mode`, `telemetry_interval_s`, `repeats` (+ `repeat_index`, `cooldown_s` with `--repeat`) |
 | `quality` | 0.2.0 | `--model --inputs --labels`: RMSE / MAE / accuracy (top-1, top-5), per level or class, `samples_predicted`, `full_pass` |
 | `process_note` | 0.2.0 | `record -- CMD` when the command exited before process sampling started |
+| `periodic` | 0.2.0 | `edgelens periodic` only: `back_to_back` (p50 / p99, power and its `power_sample_count`), `idle_power_w` (mean of `idle_power_before_w` and `idle_power_after_w`, with `idle_drift_w`), `periods[]` and `primary` (service p50 / p99, OS wake-up, `energy_per_period_mj`, `dynamic_energy_per_inference_mj` or a bound `dynamic_energy_below_mj` + `dynamic_energy_below_reason`, or `dynamic_energy_not_attributable`), `duty_cycle_penalty`, `gpu_railgate`, `notes` |
 
 `mode` values: `hardware`, `demo`, `markers`, `attach`, `imported-log`,
 `ros2`.

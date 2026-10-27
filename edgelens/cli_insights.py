@@ -227,7 +227,7 @@ def periodic(
     pipe, source, model_path = _build_pipe(model, pipeline, provider, input_shape, inputs, labels,
                                            threads, inputs_order, image_prep)
     total = sum(periods) * (iterations + 1) / 1000.0
-    console.print(f"[dim]This takes about {total + idle_baseline + 5:.0f} s "
+    console.print(f"[dim]This takes about {total + 2 * idle_baseline + 7:.0f} s "
                   f"({len(periods)} period(s) x {iterations} inferences).[/dim]")
     try:
         Path(save).parent.mkdir(parents=True, exist_ok=True)
@@ -251,7 +251,17 @@ def periodic(
     console.print(f"[green]Saved →[/green] {save}")
 
 
+def _extra_cell(r):
+    if r.get("dynamic_energy_not_attributable"):
+        return "n/a (see note)"
+    if r.get("dynamic_energy_below_mj") is not None:
+        why = r.get("dynamic_energy_below_reason") or "sensor resolution"
+        return f"< {r['dynamic_energy_below_mj']:g} mJ (below {why.split(' (')[0]})"
+    return _fmt(r.get("dynamic_energy_per_inference_mj"), 3, " mJ")
+
+
 def print_periodic(result):
+    from . import periodic as per
     p = result["periodic"]
     b = p["back_to_back"]
     t = Table(title="EdgeLens periodic — latency and energy at the real rate")
@@ -269,18 +279,18 @@ def print_periodic(result):
             rs = f"[bold red]{rs}[/bold red]"
         t.add_row(f"every {r['period_ms']:g} ms ({hz:g} Hz)", _ms(r["p50_ms"]), _ms(r["p99_ms"]),
                   rs, _ms(r.get("wake_delay_p50_ms")), _fmt(r.get("energy_per_period_mj"), 4, " mJ"),
-                  (f"< {r['dynamic_energy_below_mj']:g} mJ (below sensor resolution)"
-                   if r.get("dynamic_energy_below_mj") is not None
-                   else _fmt(r.get("dynamic_energy_per_inference_mj"), 3, " mJ")),
+                  _extra_cell(r),
                   _fmt(r.get("power_w_mean"), 3, " W"))
     console.print(t)
     console.print("[dim]p50 / p99 = the pipeline's own work per inference (service time). OS "
                   "wake-up = how late the loop started after its release time — a separate "
                   "cost, not the model's.[/dim]")
     if p.get("idle_power_w") is not None:
-        console.print(f"[dim]Idle baseline: {p['idle_power_w']} W. Energy / period includes "
-                      f"idle time (what the battery pays); extra / inference is above idle "
-                      f"(what the model costs).[/dim]")
+        drift = (f" (before {p['idle_power_before_w']} W, after {p['idle_power_after_w']} W)"
+                 if p.get("idle_power_after_w") is not None else "")
+        console.print(f"[dim]Idle baseline: {p['idle_power_w']} W{drift}. Energy / period "
+                      f"includes idle time (what the battery pays); extra / inference is above "
+                      f"idle (what the model costs).[/dim]")
     first = p["primary"]
     if p["duty_cycle_penalty"]:
         worst = max(p["periods"], key=lambda r: r.get("penalty_ratio_p50") or 0)
@@ -296,8 +306,11 @@ def print_periodic(result):
             f"compare` both files — it shows the latency gained AND the power it costs.[/cyan]",
             title="DUTY_CYCLE_PENALTY", border_style="yellow"))
     elif first.get("penalty_ratio_p50") is not None:
-        console.print(f"[green]No duty-cycle penalty: periodic p50 is "
-                      f"{first['penalty_ratio_p50']:.2f}x the back-to-back p50.[/green]")
+        ratio, extra = first["penalty_ratio_p50"], first.get("penalty_ms_p50") or 0.0
+        why = (f" — only {extra:+.3f} ms, under the {per.PENALTY_MIN_MS:g} ms that counts"
+               if ratio >= per.PENALTY_RATIO else "")
+        console.print(f"[green]No duty-cycle penalty: periodic p50 is {ratio:.2f}x the "
+                      f"back-to-back p50{why}.[/green]")
     for n in p.get("notes") or []:
         console.print(f"[dim]{n}[/dim]")
     for r in p["periods"]:
