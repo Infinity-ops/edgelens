@@ -68,7 +68,6 @@ on, nothing wider):
 | ID | Board | Software | Runtimes run | EdgeLens | Date | Evidence publishable |
 | --- | --- | --- | --- | --- | --- | --- |
 | **NANO-1** | Jetson Nano | JetPack 4.6 / L4T R32.7.6, Python 3.8 venv | onnxruntime-gpu: CPU, CUDA, TensorRT | 0.1.0 | before 2026-10-07 | yes (repository fixtures) |
-| **ORIN-1** | Jetson AGX Orin 32GB, custom carrier | Yocto / OE4Tegra, Python 3.13 venv, shared board | onnxruntime: CPU only | 0.2.0.dev4 / dev5 | 2026-10-22 | **no**: third-party model and data; rerun with the repository's workloads pending |
 | **ORIN-2** | Jetson AGX Orin 32GB, custom carrier | Yocto / OE4Tegra, kernel 6.12, Python 3.11 venv, onnxruntime 1.31 (CPU build; CUDA 12.6 and TensorRT 10.3 on the image, not used), shared board | onnxruntime: CPU only | 0.2.0rc1 | October 2026 (board clock unset) | yes (repository workloads only) |
 | **CI-X86** | GitHub-hosted runner | Ubuntu 22.04, Python 3.8–3.13 | onnxruntime: CPU | every commit | every commit | yes (Actions logs) |
 
@@ -128,28 +127,15 @@ on that measurement; the other gates' results are from the quiet board.
 | `periodic` extra energy per inference at 1 Hz | three runs on the quiet board printed 57, 114 and 376 mJ for the same 0.3 ms inference; 376 mJ in a 4 ms inference would be ~100 W on a board drawing 4–9 W. The idle baseline had moved, not the model: 0.2.0 measures idle before and after, and reports no figure when the row draws more than the same work back to back (see the changelog) |
 | `contract run`, 5 min at 1 Hz (`examples/ci-jetson`) | PASS: board, clocks as declared, input period, start temperature 42.9 C, background load 0.09%; p99 8.09 ms, 0 of 301 misses, peak 42.9 C |
 
-### What was measured on the AGX Orin (ORIN-1)
+### Development runs on the same AGX Orin
 
-One small LSTM (ONNX, about 2 ms per inference on the CPU), onnxruntime CPU
-execution provider, EdgeLens 0.2.0.dev4/dev5, 2026-10-22. The raw results
-are kept by the maintainer and not published (the model belongs to a third
-party), so these numbers are a record, not yet reproducible by others: the
-same gates will be rerun with the repository's own workloads.
-
-| Run | Result |
-| --- | --- |
-| Back to back, onnxruntime default threads (one per core) | p50 2.09 ms, p99 2.65 ms · CPU 98% of all 8 cores · 11.2 W · 23.7 mJ per inference |
-| Same, 4 intra-op threads | p50 2.15 ms, p99 2.45 ms · CPU 49% · 8.8 W · **19.3 mJ** per inference |
-| Same, 2 / 1 threads | p50 3.12 / 5.14 ms · CPU 27% / 13% · 23.3 / 35.1 mJ per inference |
-| EdgeLens vs a bare onnxruntime loop, same model | p50 within 0.7–2.3%. p99 34–41% higher in EdgeLens: it ran 2437 iterations with its telemetry sampler thread while onnxruntime's default threads kept every core busy; the bare loop ran 600 without a sampler. Which of the two explains the tail is not yet separated |
-| `periodic`, 1 Hz vs back to back (default threads) | p50 6.15 ms vs 2.21 ms (**2.8x**); OS wake-up p50 0.35 ms; 5.15 J per period incl. idle (5.23 W idle); energy above idle per inference below the sensor's resolution |
-| Paced 1 Hz, default vs 1 thread | p50 7.6 ms vs 32.9 ms at the same mean power (5.3 / 5.2 W): one thread is slower **and** not cheaper at 1 Hz |
-| `contract run`, 5 min at 1 Hz | PASS: every assumption held (board, clocks not pinned, input period, start temperature 43.6 C, background load 0.13%); p99 20.3 ms, 0 of 301 deadline misses, 5.2 W mean, 44.3 C peak |
-| `soak`, 30 min at 1 Hz, 4 threads | drift +39% p50 (not significant: the windows alternate between ~7 ms and ~31 ms levels); no throttling; peak 44.3 C |
-| `soak` memory | 0.2.0.dev4 reported LEAK SUSPECTED (+221 MB/h). The growth matches, to within 3%, the bytes of input windows read in order from a memory-mapped data file during the run: file pages, not a leak. 0.2.0.dev5 separates private memory from mapped files; **a rerun to confirm this is pending** |
-
-Open on this board: the latency levels' cause (dev5 records the CPU clock
-per level), the soak rerun, the deliberate leak, and the remaining gates.
+Before ORIN-2, development builds ran on this board with a model and data
+that are not public; those results are not published and no claim rests on
+them. They found the bugs listed under "found on an AGX Orin" in the
+[changelog](../CHANGELOG.md). One behaviour was checked there and nowhere
+else yet: on a 30 min soak reading a memory-mapped input file, 0.2.0rc1
+reported the mapped-file growth as file pages and private memory as flat,
+where 0.2.0.dev4 had called the same growth a leak.
 
 ## Real results on a Jetson Nano
 
