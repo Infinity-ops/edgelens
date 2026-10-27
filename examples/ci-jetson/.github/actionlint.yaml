@@ -1,0 +1,4 @@
+self-hosted-runner:
+  # the label the workflow asks for (README step 1)
+  labels:
+    - jetson

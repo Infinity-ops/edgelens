@@ -154,6 +154,28 @@ def requirements_diff(before, after):
     a_pack = (after.get("pipeline") or {}).get("pack")
     if b_pack != a_pack:
         diffs.append({"field": "pack", "label": "pack", "before": b_pack, "after": a_pack})
+    # Files without a "gc" block (before 0.2.0) ran with the collector as is.
+    b_gc = (before.get("gc") or {}).get("mode", "normal")
+    a_gc = (after.get("gc") or {}).get("mode", "normal")
+    if b_gc != a_gc:
+        diffs.append({"field": "gc_mode", "label": "Python GC mode (--gc)",
+                      "before": b_gc, "after": a_gc, "kind": "setup"})
+    # --model runs: onnxruntime threads and the input data change what is measured
+    b_cfg = (before.get("pipeline") or {}).get("config") or {}
+    a_cfg = (after.get("pipeline") or {}).get("config") or {}
+    if "threads" in b_cfg or "threads" in a_cfg:
+        bt, at = b_cfg.get("threads", "default"), a_cfg.get("threads", "default")
+        if bt != at:
+            diffs.append({"field": "threads", "label": "onnxruntime threads (--threads)",
+                          "before": bt, "after": at, "kind": "setup"})
+
+    def _data(cfg):
+        i = cfg.get("inputs")
+        return i.get("sha256") if isinstance(i, dict) else i
+    if ("inputs" in b_cfg or "inputs" in a_cfg) and _data(b_cfg) != _data(a_cfg):
+        diffs.append({"field": "inputs", "label": "input data (--inputs)",
+                      "before": _data(b_cfg) or "synthetic", "after": _data(a_cfg) or "synthetic",
+                      "kind": "data"})
     return diffs
 
 

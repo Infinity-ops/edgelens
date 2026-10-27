@@ -39,3 +39,7 @@ observer.html
 *.cast
 
 ROADMAP.md
+# the frozen v0.1.0 result: schema-stability test fixture (docs/schema.md)
+!tests/fixtures/result_v0_1_0.json
+# the 0.2.x interface snapshot (docs/stability.md, tests/test_frozen_interfaces.py)
+!tests/fixtures/frozen_v0_2.json

@@ -8,7 +8,9 @@ underlying /proc, /sys and /etc sources directly).
 
 Validation: these readers (/proc/device-tree/model, /etc/nv_tegra_release,
 /usr/local/cuda/version.json, dpkg/header/library TensorRT fallbacks) are
-verified on a Jetson Nano (JetPack 4.6 / L4T R32.7.6). Other modules follow
+verified on a Jetson Nano (JetPack 4.6 / L4T R32.7.6). The compatible /
+soc0 / versioned-CUDA / /usr/lib fallbacks come from an AGX Orin 32GB on a
+custom carrier running a Yocto (OE4Tegra) rootfs. Other modules follow
 NVIDIA's documented layout but are not yet verified — please open an issue
 with your `edgelens doctor` output if anything looks wrong.
 """
@@ -56,14 +58,85 @@ def _run(cmd, timeout=5):
         return None
 
 
+# Module part numbers in /proc/device-tree/compatible -> marketing name.
+# The compatible string survives custom carrier boards and non-Ubuntu
+# rootfs images (Yocto/meta-tegra), where the model string is the
+# integrator's own ("Example Orin") and /etc/nv_tegra_release is absent.
+_MODULE_NAMES = {
+    "p3701-0000": "Jetson AGX Orin",
+    "p3701-0004": "Jetson AGX Orin 32GB",
+    "p3701-0005": "Jetson AGX Orin 64GB",
+    "p3701-0008": "Jetson AGX Orin Industrial",
+    "p3767-0000": "Jetson Orin NX 16GB",
+    "p3767-0001": "Jetson Orin NX 8GB",
+    "p3767-0003": "Jetson Orin Nano 8GB",
+    "p3767-0004": "Jetson Orin Nano 4GB",
+    "p3767-0005": "Jetson Orin Nano 8GB (devkit)",
+    "p3448-0000": "Jetson Nano (devkit)",
+    "p3448-0002": "Jetson Nano (eMMC)",
+}
+
+
+def _read_compatible():
+    """/proc/device-tree/compatible: NUL-separated, most specific first."""
+    try:
+        with open("/proc/device-tree/compatible", "rb") as f:
+            raw = f.read()
+    except Exception:
+        return []
+    return [c for c in raw.decode("ascii", "replace").split("\x00") if c]
+
+
+def detect_soc():
+    """'tegra234' / 'tegra210' / ... from the compatible list, else None."""
+    for entry in _read_compatible():
+        m = re.match(r"nvidia,(tegra\d+)$", entry)
+        if m:
+            return m.group(1)
+    return None
+
+
+def detect_module():
+    """Jetson module name from its part number, e.g. 'Jetson AGX Orin 32GB'."""
+    for entry in _read_compatible():
+        m = re.match(r"nvidia,(p\d{4}-\d{4})$", entry)
+        if m and m.group(1) in _MODULE_NAMES:
+            return _MODULE_NAMES[m.group(1)]
+    return None
+
+
 def is_jetson() -> bool:
-    """Best-effort Jetson detection. True only on real Jetson hardware."""
+    """Best-effort Jetson detection. True only on real Jetson hardware.
+
+    Checks, in order: the board model string (NVIDIA devkits), the L4T
+    release file (NVIDIA's Ubuntu rootfs), the device-tree compatible list
+    and the SoC family in sysfs. The last two also catch custom carrier
+    boards running Yocto/meta-tegra, seen on an AGX Orin 32GB whose model
+    string is the integrator's own and whose rootfs has no nv_tegra_release.
+    """
     model = _read_file("/proc/device-tree/model")
     if model and ("jetson" in model.lower() or "tegra" in model.lower()):
         return True
     if os.path.exists("/etc/nv_tegra_release"):
         return True
+    if detect_soc() is not None:
+        return True
+    family = _read_file("/sys/devices/soc0/family")
+    if family and family.strip().lower() == "tegra":
+        return True
     return False
+
+
+def _cpu_name():
+    """CPU model from /proc/cpuinfo, else the machine type (x86_64, aarch64)."""
+    text = _read_file("/proc/cpuinfo") or ""
+    for key in ("model name", "Model", "Hardware", "cpu model"):
+        for line in text.splitlines():
+            if line.split(":")[0].strip() == key and ":" in line:
+                name = " ".join(line.split(":", 1)[1].split())
+                if name:
+                    return name
+    return platform.machine() or "unknown CPU"
 
 
 def detect_board():
@@ -71,7 +144,11 @@ def detect_board():
     l4t_raw = _read_file("/etc/nv_tegra_release")
     return {
         "is_jetson": is_jetson(),
-        "model": model or f"Non-Jetson host ({platform.node()})",
+        # Never the hostname: the board name is part of environment_id and of
+        # every result file people share. The CPU model identifies the hardware.
+        "model": model or f"Non-Jetson host ({_cpu_name()})",
+        "module": detect_module(),
+        "soc": detect_soc(),
         "l4t_release_raw": l4t_raw,
     }
 
@@ -84,12 +161,30 @@ def detect_jetpack():
     return raw.replace("# ", "").strip()
 
 
+def _cuda_version_json_paths():
+    """/usr/local/cuda first, then versioned dirs newest first. Yocto
+    (meta-tegra) installs /usr/local/cuda-12.6 without the symlink."""
+    paths = ["/usr/local/cuda/version.json"]
+    versioned = glob.glob("/usr/local/cuda-*/version.json")
+
+    def _key(path):
+        m = re.search(r"cuda-(\d+)\.(\d+)", path)
+        return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+    paths += sorted(versioned, key=_key, reverse=True)
+    return paths
+
+
 def detect_cuda():
-    version_json = _read_file("/usr/local/cuda/version.json")
-    if version_json:
+    for path in _cuda_version_json_paths():
+        version_json = _read_file(path)
+        if not version_json:
+            continue
         try:
             data = json.loads(version_json)
-            return data.get("cuda", {}).get("version")
+            version = data.get("cuda", {}).get("version")
+            if version:
+                return version
         except Exception:
             pass
     nvcc_out = _run(["nvcc", "--version"])
@@ -97,7 +192,45 @@ def detect_cuda():
         for line in nvcc_out.splitlines():
             if "release" in line.lower():
                 return line.strip()
-    return None
+    # Runtime-only installs (Yocto/meta-tegra images, containers) can lack
+    # version.json and nvcc. Fall back to the libcudart file name, then to
+    # the versioned install directory. Only reached when everything above
+    # found nothing, so hosts that were detected before are unaffected.
+    return _cuda_version_from_cudart() or _cuda_version_from_dir()
+
+
+_CUDART_GLOBS = (
+    "/usr/local/cuda*/lib64/libcudart.so.*",
+    "/usr/local/cuda*/targets/*/lib/libcudart.so.*",
+    "/usr/lib/aarch64-linux-gnu/libcudart.so.*",
+    "/usr/lib/x86_64-linux-gnu/libcudart.so.*",
+    "/usr/lib/libcudart.so.*",
+)
+
+
+def _cuda_version_from_cudart():
+    """'12.6.68' from libcudart.so.12.6.68 (longest version wins)."""
+    best = None
+    for pattern in _CUDART_GLOBS:
+        for path in glob.glob(pattern):
+            m = re.search(r"libcudart\.so\.(\d+(?:\.\d+)*)$", path)
+            if m and (best is None or len(m.group(1)) > len(best)):
+                best = m.group(1)
+    # "12" alone (the soname link) says less than the directory name does
+    return best if best and "." in best else None
+
+
+def _cuda_version_from_dir():
+    """'12.6' from /usr/local/cuda-12.6 (newest if several)."""
+    found = []
+    for path in glob.glob("/usr/local/cuda-*"):
+        m = re.search(r"/cuda-(\d+)\.(\d+)$", path)
+        if m and os.path.isdir(path):
+            found.append((int(m.group(1)), int(m.group(2))))
+    if not found:
+        return None
+    major, minor = max(found)
+    return "%d.%d" % (major, minor)
 
 
 # Where the apt-installed TensorRT C++ library and header live on Jetson.
@@ -105,10 +238,12 @@ _TRT_HEADER_CANDIDATES = (
     "/usr/include/aarch64-linux-gnu/NvInferVersion.h",   # JetPack 4.x / 5.x / 6.x
     "/usr/include/x86_64-linux-gnu/NvInferVersion.h",    # x86 apt installs
     "/usr/local/cuda/include/NvInferVersion.h",
+    "/usr/include/NvInferVersion.h",                     # Yocto / meta-tegra
 )
 _TRT_LIB_GLOBS = (
     "/usr/lib/aarch64-linux-gnu/libnvinfer.so.*",
     "/usr/lib/x86_64-linux-gnu/libnvinfer.so.*",
+    "/usr/lib/libnvinfer.so.*",                          # Yocto / meta-tegra
 )
 # apt package names that carry the TensorRT version, most specific first.
 _TRT_DPKG_PACKAGES = ("tensorrt", "libnvinfer10", "libnvinfer8", "libnvinfer7")

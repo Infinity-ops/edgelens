@@ -1,0 +1,79 @@
+# EdgeLens performance gate on a Jetson (self-hosted runner).
+# Blocks a merge when the pipeline breaks its assumption contract:
+#   PASS -> green · FAIL -> red · INCONCLUSIVE (setup not as the contract assumes) -> red
+# Make it required: Settings -> Branches -> branch protection -> "Require status
+# checks" -> "edgelens / performance gate".
+#
+# SECURITY: a self-hosted runner executes the code of every job it picks up.
+# Use it on a PRIVATE repository, or require approval for workflows from forks
+# (Settings -> Actions -> General). Never on a public repo without that.
+name: edgelens
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One measurement at a time on the board: a second job running in parallel is
+# background load, and the contract would (rightly) call that INCONCLUSIVE.
+concurrency:
+  group: jetson-board-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  perf:
+    name: performance gate
+    runs-on: [self-hosted, linux, ARM64, jetson]
+    timeout-minutes: 45
+    env:
+      EDGELENS_CONTRACT: perf/anomaly.contract.yaml
+      EDGELENS_TARGET: --pipeline pipeline.py
+      EDGELENS_OUT: edgelens-out
+      EDGELENS_COOLDOWN_S: "300"        # wait up to 5 min for a hot board / leftover load
+      # The runner's Python environment with EdgeLens (on a Nano: your Python 3.8 venv).
+      EDGELENS_VENV: ${{ vars.EDGELENS_VENV || '~/.edgelens-ci' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: EdgeLens environment
+        run: |
+          VENV="${EDGELENS_VENV/#\~/$HOME}"
+          if [ ! -x "$VENV/bin/python" ]; then
+            # --system-site-packages: keeps JetPack's onnxruntime-gpu / TensorRT visible
+            python3 -m venv --system-site-packages "$VENV"
+          fi
+          . "$VENV/bin/activate"
+          # Keep an EdgeLens 0.2+ that is already installed (e.g. `pip install -e` of a
+          # checkout, before 0.2 is on PyPI); otherwise install it.
+          # Never the [onnx] extra on a Jetson: it replaces the Jetson onnxruntime-gpu.
+          python -c "import sys, edgelens as e; sys.exit(0 if tuple(int(x) for x in e.__version__.split('.')[:2]) >= (0, 2) else 1)" \
+            || pip install --quiet --upgrade "edgelens>=0.2"
+          echo "$VENV/bin" >> "$GITHUB_PATH"
+          echo "PYTHON=$VENV/bin/python" >> "$GITHUB_ENV"
+          edgelens doctor
+
+      - name: Pin clocks (the contract assumes clocks_pinned)
+        run: |
+          sudo -n jetson_clocks --store "$RUNNER_TEMP/clocks.conf"
+          sudo -n jetson_clocks
+
+      - name: Performance gate
+        run: bash ci/perf_gate.sh
+
+      - name: Restore clocks
+        if: always()
+        run: sudo -n jetson_clocks --restore "$RUNNER_TEMP/clocks.conf" || true
+
+      - name: Evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: edgelens-evidence-${{ github.run_id }}
+          path: edgelens-out/
+          if-no-files-found: warn
+          retention-days: 90

@@ -4,10 +4,11 @@
 # Without this file setuptools ships tests/test_*.py but NOT tests/__init__.py
 # or tests/fixtures/ (the .onnx models), so the test suite inside the sdist
 # fails. Distro / conda-forge packagers build and test from the sdist.
-include LICENSE README.md CHANGELOG.md CITATION.cff CONTRIBUTING.md ROADMAP.md
+include LICENSE README.md CHANGELOG.md CITATION.cff CONTRIBUTING.md
 include requirements.txt
-recursive-include tests *.py *.onnx
+recursive-include tests *.py *.onnx *.json
 recursive-include examples *.py
 recursive-include scripts *.sh
+recursive-include examples *.yaml *.yml *.md *.sh *.c *.cpp *.h *.json *.html
 prune docs
 global-exclude __pycache__ *.py[cod] *.so .DS_Store

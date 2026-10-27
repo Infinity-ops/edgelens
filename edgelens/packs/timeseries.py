@@ -51,12 +51,17 @@ class TimeseriesPack(Pack):
             raise ValueError("timeseries pack: sample_rate_hz must be > 0")
         if not win or win <= 0:
             raise ValueError("timeseries pack: window (samples) must be > 0")
-        if not hop or hop <= 0 or hop > win:
-            raise ValueError("timeseries pack: hop must be in 1..window")
+        if not hop or hop <= 0:
+            raise ValueError("timeseries pack: hop (samples) must be > 0")
         config["hop"] = hop
         config["hop_period_ms"] = round(1000.0 * hop / sr, 4)
         config["window_duration_ms"] = round(1000.0 * win / sr, 4)
-        config["overlap_pct"] = round(100.0 * (1 - hop / win), 2)
+        # hop > window is valid (v0.2): predict less often than the sensor
+        # delivers, e.g. 0.5 s of 100 Hz history once per second.
+        # Overlap is then 0 and the samples between windows are not used.
+        config["overlap_pct"] = round(max(0.0, 100.0 * (1 - hop / win)), 2)
+        if hop > win:
+            config["skipped_samples_per_hop"] = hop - win
         return config
 
     def default_deadline_ms(self, config):

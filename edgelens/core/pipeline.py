@@ -37,7 +37,8 @@ ROLES = ("input", "preprocess", "transfer", "inference", "postprocess", "decisio
 _ROLE_PREFIXES = (
     ("transfer", ("h2d", "d2h", "copy", "upload", "download", "transfer", "memcpy")),
     ("inference", ("infer", "model", "predict", "forward", "engine", "prefill",
-                   "generate", "classif", "detect")),
+                   "generate", "classif", "detect", "lstm", "gru", "rnn", "cnn", "dnn",
+                   "eddl", "tensorrt", "trt", "onnx", "anomal", "ensemble")),
     ("input", ("capture", "acquire", "acquisition", "grab", "read", "sensor", "camera",
                "ingest", "receive", "source")),
     ("postprocess", ("post", "nms", "argmax", "detoken", "track")),
@@ -187,7 +188,7 @@ class Pipeline:
 
     def run(self, iterations=100, warmup=10, source=None, deadline_ms=None,
             period_ms=None, pace=False, telemetry=True, telemetry_interval_s=0.1,
-            idle_baseline_s=None, pipeline_source=None):
+            idle_baseline_s=None, pipeline_source=None, gc_mode="normal"):
         """Harness mode: EdgeLens drives the loop. Returns a result dict
         (see edgelens.core.result.build_result)."""
         from .harness import run_harness
@@ -197,5 +198,5 @@ class Pipeline:
             deadline_ms=deadline_ms, period_ms=period_ms, pace=pace,
             telemetry=telemetry, telemetry_interval_s=telemetry_interval_s,
             idle_baseline_s=idle_baseline_s, pipeline_source=pipeline_source,
-            model_path=getattr(self, "_model_path", None),
+            model_path=getattr(self, "_model_path", None), gc_mode=gc_mode,
         )

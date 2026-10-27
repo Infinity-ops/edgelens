@@ -1,0 +1,410 @@
+{
+ "_comment": "Interfaces frozen for EdgeLens 0.2.x (docs/stability.md). tests/test_frozen_interfaces.py fails if any of these is removed or renamed; additions are allowed. Regenerate only for a new minor version: python scripts/freeze_interfaces.py",
+ "cli": {
+  "benchmark": [
+   "--cooldown",
+   "--deadline-ms",
+   "--demo",
+   "--gc",
+   "--idle-baseline",
+   "--image-prep",
+   "--input-shape",
+   "--inputs",
+   "--inputs-order",
+   "--iterations",
+   "--labels",
+   "--model",
+   "--pace",
+   "--period-ms",
+   "--pipeline",
+   "--provider",
+   "--repeat",
+   "--save",
+   "--scenario",
+   "--threads",
+   "--warmup"
+  ],
+  "compare": [
+   "--metric",
+   "--min-effect",
+   "--strict-env"
+  ],
+  "contract check": [],
+  "contract init": [
+   "--force"
+  ],
+  "contract run": [
+   "--dry-run",
+   "--evidence",
+   "--image-prep",
+   "--input-shape",
+   "--inputs",
+   "--inputs-order",
+   "--labels",
+   "--model",
+   "--perfetto",
+   "--pipeline",
+   "--provider",
+   "--run-anyway",
+   "--save",
+   "--threads"
+  ],
+  "detect": [
+   "--markdown",
+   "--mean-steps",
+   "--save",
+   "--slew-per-step",
+   "--threshold",
+   "--thresholds"
+  ],
+  "diagnose": [],
+  "doctor": [
+   "--forget-storage-errors",
+   "--no-cache",
+   "--recheck"
+  ],
+  "envelope check": [
+   "--envelope",
+   "--save"
+  ],
+  "envelope fit": [
+   "--margin",
+   "--out",
+   "--quantile"
+  ],
+  "export": [
+   "--align",
+   "--perfetto"
+  ],
+  "import-log": [
+   "--deadline-ms",
+   "--name",
+   "--regex",
+   "--save",
+   "--stage"
+  ],
+  "include": [],
+  "monitor": [
+   "--duration",
+   "--interval"
+  ],
+  "parity": [
+   "--reference",
+   "--reference-outputs",
+   "--save",
+   "--steps"
+  ],
+  "periodic": [
+   "--deadline-ms",
+   "--idle-baseline",
+   "--image-prep",
+   "--input-shape",
+   "--inputs",
+   "--inputs-order",
+   "--iterations",
+   "--labels",
+   "--model",
+   "--period-ms",
+   "--pipeline",
+   "--provider",
+   "--save",
+   "--threads",
+   "--warm-iterations"
+  ],
+  "perturb": [
+   "--faults",
+   "--init",
+   "--markdown",
+   "--save"
+  ],
+  "record": [
+   "--deadline-ms",
+   "--duration",
+   "--idle-baseline",
+   "--interval",
+   "--name",
+   "--pack",
+   "--period-ms",
+   "--save",
+   "--socket"
+  ],
+  "replay": [
+   "--deadline-ms",
+   "--features",
+   "--max-steps",
+   "--no-telemetry",
+   "--save",
+   "--save-dir",
+   "--speed",
+   "--telemetry"
+  ],
+  "report": [
+   "--output"
+  ],
+  "ros2 latency": [
+   "--deadline-ms",
+   "--duration",
+   "--from",
+   "--same-machine",
+   "--save",
+   "--source-bound-ms",
+   "--to"
+  ],
+  "selftest": [
+   "--no-c",
+   "--quick",
+   "--save"
+  ],
+  "soak": [
+   "--deadline-ms",
+   "--duration",
+   "--image-prep",
+   "--input-shape",
+   "--inputs",
+   "--inputs-order",
+   "--labels",
+   "--model",
+   "--name",
+   "--period-ms",
+   "--pid",
+   "--pipeline",
+   "--provider",
+   "--report",
+   "--save",
+   "--threads",
+   "--window"
+  ],
+  "stream check": [
+   "--model",
+   "--no-model"
+  ],
+  "stream fit-scaler": [
+   "--kind",
+   "--out"
+  ],
+  "stream init": [],
+  "sweep": [
+   "--atol",
+   "--backends",
+   "--deadline-ms",
+   "--decision",
+   "--eval-samples",
+   "--export-inputs",
+   "--external",
+   "--image-prep",
+   "--input-shape",
+   "--inputs",
+   "--iterations",
+   "--labels",
+   "--min-agreement",
+   "--model",
+   "--no-trt-cache",
+   "--reference",
+   "--rtol",
+   "--save",
+   "--threads",
+   "--threshold",
+   "--trt-cache"
+  ],
+  "validate": [
+   "--contract",
+   "--evidence",
+   "--max-energy-mj",
+   "--max-energy-per-period-mj",
+   "--max-false-alarms-per-h",
+   "--max-latency-drift-pct",
+   "--max-latency-ms",
+   "--max-mem-growth-mb-per-h",
+   "--max-miss-ratio",
+   "--max-missed-events",
+   "--max-output-error",
+   "--max-power-w",
+   "--max-rmse",
+   "--max-temp-c",
+   "--max-throttled-windows",
+   "--max-time-to-detect-s",
+   "--min-accuracy",
+   "--min-decision-agreement",
+   "--min-fps",
+   "--p50-ms",
+   "--p95-ms",
+   "--p99-ms",
+   "--p99.9-ms"
+  ],
+  "version": [],
+  "watch": [
+   "--children",
+   "--deadline-ms",
+   "--duration",
+   "--interval",
+   "--markers",
+   "--name",
+   "--no-children",
+   "--no-markers",
+   "--pid",
+   "--process-interval",
+   "--save",
+   "--socket"
+  ]
+ },
+ "contract_assumptions": [
+  "board",
+  "clocks_pinned",
+  "input_period_ms",
+  "max_background_cpu_pct",
+  "max_start_temp_c",
+  "max_temp_c",
+  "min_in_envelope_pct",
+  "model_sha256",
+  "power_mode",
+  "provider",
+  "stream_spec_sha256"
+ ],
+ "contract_top_keys": [
+  "assumes",
+  "contract",
+  "description",
+  "guarantees",
+  "min_duration",
+  "min_iterations",
+  "requirements_doc",
+  "version"
+ ],
+ "perturb_fault_kinds": [
+  "bias",
+  "dropout",
+  "gain",
+  "gap",
+  "noise",
+  "rate",
+  "spike",
+  "stuck"
+ ],
+ "result_modes": [
+  "attach",
+  "demo",
+  "detect",
+  "hardware",
+  "imported-log",
+  "markers",
+  "ros2"
+ ],
+ "result_schema_version": 1,
+ "result_top_level_keys": [
+  "backlog",
+  "clock",
+  "deadline",
+  "edgelens_version",
+  "energy",
+  "environment",
+  "fps",
+  "identity",
+  "iterations",
+  "latency",
+  "latency_p50_ms",
+  "latency_p95_ms",
+  "latency_p99_ms",
+  "mode",
+  "pipeline",
+  "pipeline_source",
+  "protocol",
+  "requirements",
+  "schema_version",
+  "service_latency",
+  "stage_avg_ms",
+  "stage_stats_ms",
+  "telemetry",
+  "telemetry_series",
+  "throughput_basis",
+  "total_latency_ms",
+  "trace"
+ ],
+ "stream_spec_section_keys": {
+  "data": [
+   "columns",
+   "max_gap_s",
+   "rate_hz",
+   "target",
+   "time_column"
+  ],
+  "decision": [
+   "alarm_when",
+   "healthy_level",
+   "threshold",
+   "truth_threshold"
+  ],
+  "deployment": [
+   "period_ms"
+  ],
+  "envelope": [
+   "file",
+   "invalid_pct"
+  ],
+  "features": [
+   "block",
+   "layout",
+   "padding",
+   "sequence",
+   "stats"
+  ],
+  "model": [
+   "onnx",
+   "output_index",
+   "provider",
+   "python",
+   "threads"
+  ],
+  "output": [
+   "mean_steps",
+   "slew_per_step"
+  ],
+  "scaler": [
+   "center",
+   "columns",
+   "file",
+   "kind",
+   "scale"
+  ],
+  "target": [
+   "columns",
+   "reduce",
+   "scale"
+  ]
+ },
+ "stream_spec_top_keys": [
+  "data",
+  "decision",
+  "deployment",
+  "description",
+  "envelope",
+  "features",
+  "model",
+  "name",
+  "output",
+  "scaler",
+  "version"
+ ],
+ "validate_requirements": [
+  "max_energy_mj",
+  "max_energy_per_period_mj",
+  "max_false_alarms_per_h",
+  "max_latency_drift_pct",
+  "max_latency_ms",
+  "max_mem_growth_mb_per_h",
+  "max_miss_ratio",
+  "max_missed_events",
+  "max_output_error",
+  "max_power_w",
+  "max_rmse",
+  "max_temp_c",
+  "max_throttled_windows",
+  "max_time_to_detect_s",
+  "min_accuracy",
+  "min_decision_agreement",
+  "min_fps",
+  "p50_ms",
+  "p95_ms",
+  "p99_9_ms",
+  "p99_ms"
+ ]
+}

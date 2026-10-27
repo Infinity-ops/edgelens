@@ -1,7 +1,9 @@
 """
 edgelens.cli
 -------------
-Command-line interface: doctor, monitor, benchmark, diagnose, report, compare.
+Command-line interface: doctor, monitor, benchmark, diagnose, report, compare,
+validate; v0.2: record, watch, import-log, include, selftest, ros2; sweep,
+periodic, soak; contract, export.
 """
 
 import json
@@ -84,6 +86,101 @@ def _tensorrt_cell(sw):
     )
 
 
+TINY_STAGE_MS = 0.005     # per-stage % change is not shown below this
+
+# --model with real data (edgelens.benchmark.real_inputs); shared by benchmark,
+# periodic, soak and contract run
+INPUTS_HELP = ("--model only: real input samples, one per iteration: a folder of images "
+               "(or one image; resized and normalised per --image-prep), or arrays as .npy, "
+               ".npz (one array per input) or raw .bin in the model's input dtype, first "
+               "dimension = sample, fed as given. For raw CSV recordings use `edgelens replay`.")
+LABELS_HELP = ("With --inputs: ground truth, one row per sample (.npy, raw float32 .bin, "
+               ".csv; `subfolders` = the class folder of each image), scored against the model's first output: values -> RMSE/MAE "
+               "(0/1 labels also accuracy, precision, recall); class indices -> top-1/top-5 "
+               "accuracy. Checked by `validate --max-rmse / --min-accuracy` and contracts.")
+THREADS_HELP = ("--model only: onnxruntime intra-op threads (default: one per core, all "
+                "busy). Fewer threads often keep the latency and free CPU for the rest of "
+                "the system; recorded in the result so `compare` shows the effect.")
+IMAGE_PREP_HELP = ("With --inputs images: a preset (unit [default], imagenet, yolo, signed, "
+                   "raw) and/or key=value overrides: resize=stretch|crop|letterbox, "
+                   "scale=unit|signed|raw, mean=a/b/c, std=a/b/c, channels=rgb|bgr. "
+                   "E.g. imagenet  or  yolo,channels=bgr.")
+ORDER_HELP = ("With --inputs: sequential (file order) or spread (every sample once per "
+              "pass, scattered, so a short run already covers the whole data set).")
+
+
+def _print_inputs(result):
+    """One line on what the model was fed (real inputs only)."""
+    d = ((result.get("pipeline") or {}).get("config") or {}).get("inputs")
+    if not isinstance(d, dict):
+        return
+    what = f"{d.get('samples')} {'images' if d.get('format') == 'images' else 'samples'}"
+    extra = ""
+    if d.get("format") == "images":
+        ip = d.get("image_prep") or {}
+        cls = d.get("classes")
+        if cls:
+            extra += (f", {len(cls)} classes ({', '.join(cls[:5])}{', ...' if len(cls) > 5 else ''})"
+                      if isinstance(cls, list) else f", {cls} classes")
+        extra += (f" · prep {ip.get('spec')}: resize {ip.get('resize')}, scale {ip.get('scale')}"
+                  f"{', mean/std' if ip.get('mean') else ''}, {ip.get('channels')}, "
+                  f"{d.get('layout')}")
+    else:
+        extra = f" ({d.get('format')})"
+    console.print(f"[dim]Inputs: {d.get('path')}: {what}{extra} · order {d.get('order')} · "
+                  f"sha256 {d.get('sha256')}[/dim]")
+
+
+def _print_quality(q):
+    if not q:
+        return
+    part = (f"{q['samples_predicted']} of {q['samples']} samples"
+            + ("" if q.get("full_pass") else " [yellow](not a full pass: --iterations "
+               f"{q['samples']} or --inputs-order spread)[/yellow]"))
+    if q.get("error"):
+        console.print(f"[red]Accuracy not computed:[/red] {q['error']}")
+        return
+    if q.get("task") == "classification":
+        top5 = (f" · top-5 {q['top5_accuracy'] * 100:.2f}%"
+                if q.get("top5_accuracy") is not None else "")
+        console.print(f"[bold]Accuracy:[/bold] top-1 {q['accuracy'] * 100:.2f}%{top5} "
+                      f"({q['classes']} classes) over {part}")
+        for c in q.get("per_class") or []:
+            console.print(f"[dim]  class {c['class']}: {c['samples']} samples, "
+                          f"{c['accuracy'] * 100:.1f}%[/dim]")
+        return
+    if q.get("rmse") is None:
+        return
+    console.print(f"[bold]Accuracy:[/bold] RMSE {q['rmse']} · MAE {q['mae']} · worst "
+                  f"|error| {q['max_abs_error']} over {part}")
+    if q.get("per_output_rmse"):
+        console.print(f"[dim]  RMSE per output: {', '.join(map(str, q['per_output_rmse']))}[/dim]")
+    if q.get("task") == "binary":
+        pr = lambda v: "-" if v is None else f"{v * 100:.1f}%"   # noqa: E731
+        console.print(f"[bold]  At > {q['threshold']}:[/bold] accuracy {pr(q['accuracy'])} · "
+                      f"precision {pr(q['precision'])} · recall {pr(q['recall'])} · "
+                      f"{q['false_positives']} false alarm(s), {q['false_negatives']} missed")
+    for lv in q.get("per_level") or []:
+        console.print(f"[dim]  label {lv['label']:g}: {lv['samples']} samples, RMSE "
+                      f"{lv['rmse']}, mean prediction {lv['mean_prediction']}[/dim]")
+
+
+def _print_gc(gcb):
+    """One line on Python GC during the timed loop; yellow when it hit a deadline."""
+    worst = max(gcb.get("pauses") or [], key=lambda p: p["dur_ms"], default=None)
+    c = gcb.get("collections") or {}
+    line = (f"GC ({gcb.get('mode')}): {c.get('gen0', 0)}/{c.get('gen1', 0)}/{c.get('gen2', 0)} "
+            f"collections (gen0/1/2) · longest pause {gcb.get('max_pause_ms')} ms")
+    if worst and worst.get("iter") is not None:
+        line += f" (gen {worst['generation']}, iteration {worst['iter']})"
+    hit = gcb.get("deadline_misses_during_gc")
+    if hit:
+        console.print(f"[yellow]{line} · caused {hit} of {gcb.get('deadline_misses')} deadline "
+                      f"miss(es) — see `edgelens diagnose`[/yellow]")
+    else:
+        console.print(f"[dim]{line}[/dim]")
+
+
 def _ort_providers_cell(is_jetson):
     try:
         from .benchmark.onnx_pipeline import available_providers, unloadable_providers
@@ -137,12 +234,28 @@ def _load_result_or_exit(path):
         console.print(f"[red]Cannot read {path} as an EdgeLens result: "
                       f"{type(e).__name__}: {e}[/red]")
         raise typer.Exit(1)
-    if not isinstance(data, dict) or "stage_avg_ms" not in data:
-        console.print(f"[red]{path} is JSON but not an EdgeLens benchmark/trace result "
-                      f"(no 'stage_avg_ms'). Pass the file written by `edgelens benchmark` "
-                      f"or `edgelens.trace(..., save=...)`.[/red]")
+    from .core.schema import problems
+    issues = problems(data)
+    if issues:
+        console.print(f"[red]{path} can't be used as an EdgeLens result: {issues[0]}. Pass "
+                      f"a file written by `edgelens benchmark`, `record`, `watch` or "
+                      f"`edgelens.trace(..., save=...)`.[/red]")
         raise typer.Exit(1)
     return data
+
+
+def _print_integrity_issues(issues):
+    """Problems with the measurement itself, shown before anyone trusts it."""
+    for i in issues or []:
+        style = {"blocks_pass": "yellow", "warn": "yellow"}.get(i["severity"], "dim")
+        console.print(f"[{style}]Measurement: {i['code']} — {i['detail']}[/{style}]")
+
+
+def _sibling(path, kind):
+    """run.json -> run.<kind>.json; base.r01.json -> base.r01.<kind>.json
+    (repeated runs must not overwrite each other's verdicts)."""
+    name = path.name[:-5] if path.name.endswith(".json") else path.name
+    return path.with_name(f"{name}.{kind}.json")
 
 
 def _ms(v):
@@ -153,7 +266,12 @@ def _print_benchmark(result):
     pipe = result.get("pipeline") or {}
     roles = {s["name"]: s.get("role", "") for s in pipe.get("stages", [])}
     stats = result.get("stage_stats_ms") or {}
-    table = Table(title=f"EdgeLens Benchmark ({result['mode']} mode, {pipe.get('pack', 'custom')} "
+    pack = pipe.get("pack", "custom")
+    if pack == "vision" and str(result.get("pipeline_source", "")).startswith("onnxruntime:"):
+        # --model always uses the six-stage template; it says nothing about
+        # the model (an LSTM on time series was labelled "vision pack")
+        pack = "vision-template"
+    table = Table(title=f"EdgeLens Benchmark ({result['mode']} mode, {pack} "
                         f"pack, {result['pipeline_source']})")
     table.add_column("Stage")
     table.add_column("Role", style="dim")
@@ -194,6 +312,11 @@ def _print_benchmark(result):
             f"{dl['worst_ms']} ms (overrun {dl['worst_overrun_ms']} ms) · longest burst "
             f"{dl['max_consecutive_misses']}",
             title="Deadline", border_style=style, style=style))
+    gcb = result.get("gc")
+    if gcb:
+        _print_gc(gcb)
+    _print_inputs(result)
+    _print_quality(result.get("quality"))
     bl = result.get("backlog")
     if bl:
         console.print(f"[dim]Backlog at {bl['period_ms']} ms period ({bl['method']}): "
@@ -212,7 +335,11 @@ def _print_benchmark(result):
     if not en.get("available") and pw.get("reason") == "permission_denied":
         console.print(f"[yellow]Power: sensor is root-only, not measured. Fix: "
                       f"{pw.get('fix')}  (details: edgelens doctor)[/yellow]")
-    if en.get("available"):
+    if en.get("available") and en.get("low_confidence"):
+        # a number from one or two readings is not a measurement: don't print it
+        # (seen: "0.00 mJ/iteration · 1000000.0 iterations/J" from 2 samples)
+        console.print(f"[yellow]Energy: not measured — {en['low_confidence']}[/yellow]")
+    elif en.get("available"):
         line = (f"[bold]Power:[/bold] {en['power_w_mean']} W mean · "
                 f"[bold]Energy:[/bold] {en['energy_per_iteration_j']*1000:.2f} mJ/iteration · "
                 f"{en['iterations_per_joule']} iterations/J [dim]({en['method']})[/dim]")
@@ -220,18 +347,26 @@ def _print_benchmark(result):
             line += (f" · dynamic {en['dynamic_energy_per_iteration_j']*1000:.2f} mJ/it "
                      f"over {en['idle_power_w']} W idle")
         console.print(line)
-        if en.get("low_confidence"):
-            console.print(f"[yellow]Energy: {en['low_confidence']}[/yellow]")
 
     tel = result.get("telemetry", {})
     if tel:
+        def _mp(kind):
+            m, p = tel.get(f"{kind}_percent_mean"), tel.get(f"{kind}_percent_peak")
+            return "n/a" if m is None else f"mean {m}% / peak {p}%"
+        temp = tel.get("max_temp_c")
         console.print(
             f"[dim]Telemetry over {tel.get('sample_count', 0)} samples "
             f"({tel.get('duration_s', 0)}s, sampler {tel.get('sampler_cpu_ms_mean')} ms CPU/sample): "
-            f"CPU mean {tel.get('cpu_percent_mean')}% / peak {tel.get('cpu_percent_peak')}% · "
-            f"GPU mean {tel.get('gpu_percent_mean')}% / peak {tel.get('gpu_percent_peak')}% · "
-            f"peak temp {tel.get('max_temp_c')}C[/dim]"
+            f"CPU {_mp('cpu')} · GPU {_mp('gpu')} · "
+            f"peak temp {f'{temp}C' if temp else 'n/a'}[/dim]"
         )
+        st = tel.get("starved")
+        if st:
+            console.print(
+                f"[yellow]Telemetry starved: {st['samples']} sample(s) in {st['recording_s']} s "
+                f"(expected ~{st['expected']}); one sample took {st['sampler_wall_ms_mean']} ms "
+                f"wall for {st['sampler_cpu_ms_mean']} ms CPU — {st['likely_cause']}. CPU, GPU, "
+                f"temperature and power above describe a few moments, not the run.[/yellow]")
     ident = result.get("identity") or {}
     if ident:
         console.print(f"[dim]environment_id {ident.get('environment_id')} · experiment_id "
@@ -239,8 +374,22 @@ def _print_benchmark(result):
 
 
 @app.command()
-def doctor():
+def doctor(
+    no_cache: bool = typer.Option(False, "--no-cache", "--recheck",
+                                  help="Ignore the cached GPU-provider check and test again "
+                                       "(after reinstalling onnxruntime / a driver)."),
+    forget_storage_errors: bool = typer.Option(False, "--forget-storage-errors",
+                                               help="Forget storage errors remembered for "
+                                                    "the SD card / disk (after testing it)."),
+):
     """Environment + hardware fingerprint."""
+    if forget_storage_errors:
+        from .hardware.storage import forget
+        forget()
+        console.print("[dim]Forgot the remembered storage errors.[/dim]")
+    if no_cache:
+        from .benchmark.onnx_pipeline import forget_cuda_probe
+        forget_cuda_probe()
     fp = detector.full_fingerprint()
     hw, sw = fp["hardware"], fp["software"]
 
@@ -248,8 +397,16 @@ def doctor():
     table.add_column(style="dim")
     table.add_column()
     table.add_row("Board", hw["model"])
+    if hw.get("module") or hw.get("soc"):
+        table.add_row("Module / SoC", " · ".join(x for x in (hw.get("module"), hw.get("soc")) if x))
     table.add_row("Is Jetson", "[green]yes[/green]" if hw["is_jetson"] else "[yellow]no[/yellow]")
-    table.add_row("L4T / JetPack", sw["jetpack_l4t"] or "[dim]not detected[/dim]")
+    if sw["jetpack_l4t"]:
+        l4t_cell = sw["jetpack_l4t"]
+    elif hw["is_jetson"]:
+        l4t_cell = "[dim]no /etc/nv_tegra_release (custom rootfs, e.g. Yocto/meta-tegra)[/dim]"
+    else:
+        l4t_cell = "[dim]not detected[/dim]"
+    table.add_row("L4T / JetPack", l4t_cell)
     table.add_row("CUDA", sw["cuda"] or "[dim]not detected[/dim]")
     table.add_row("TensorRT", _tensorrt_cell(sw))
     table.add_row("ORT providers", _ort_providers_cell(hw["is_jetson"]))
@@ -264,11 +421,30 @@ def doctor():
         pkg_table.add_row(pkg, ver or "[dim]not installed[/dim]")
     console.print(pkg_table)
 
+    _print_ort_install_problems()
     src = _print_telemetry_sources()
     _print_readiness(hw["is_jetson"], src["power_ina3221"])
 
     if not hw["is_jetson"]:
         _non_jetson_notice()
+
+
+def _print_ort_install_problems():
+    try:
+        from .benchmark.onnx_pipeline import cuda_probe, cuda_probe_kind, ort_install_problems
+        problems = ort_install_problems()
+        kind = cuda_probe_kind()
+        reason = cuda_probe()[1]
+    except Exception as e:                       # never let doctor die on a broken ORT
+        problems, kind, reason = [], "error", f"{type(e).__name__}: {e}"
+    lines = [f"• {p['problem']}\n  [cyan]Fix:[/cyan] {p['fix']}" for p in problems]
+    if kind in ("crash", "hang"):
+        lines.append(f"• {reason}")
+        lines.append("  [cyan]Check again after a fix:[/cyan] edgelens doctor --no-cache")
+    if lines:
+        title = ("❌ ONNX Runtime installation is broken" if problems
+                 else "❌ ONNX Runtime GPU provider is unusable")
+        console.print(Panel("\n".join(lines), title=title, border_style="red"))
 
 
 def _print_readiness(is_jetson, power_probe):
@@ -316,6 +492,10 @@ def _print_telemetry_sources():
     pw = src["power_ina3221"]
     if pw["total_w"] is not None:
         status, value = "[green]ok[/green]", f"{pw['total_w']:.2f} W ({pw['method']})"
+        if pw["method"] == "sum_of_rails" and pw.get("rails_w"):
+            # say WHAT was added up: tegrastats may print fewer rails (AGX Orin
+            # on a Yocto image: 3 shown, 4 summed)
+            value += " = " + " + ".join(f"{k} {v:.2f}" for k, v in pw["rails_w"].items())
     elif pw.get("permission_denied"):
         status, value = "[yellow]found, root-only[/yellow]", "fix under Benchmark readiness"
     elif pw["rails_found"]:
@@ -381,6 +561,8 @@ def monitor(
 @app.command()
 def benchmark(
     iterations: int = typer.Option(50, min=1, help="Number of timed iterations."),
+    warmup: int = typer.Option(10, "--warmup", min=0, help="Untimed iterations before the "
+                               "timed loop (recorded in the result's protocol block)."),
     model: str = typer.Option(None, "--model", help="Path to a real .onnx model — runs a "
                                "real ONNX Runtime session (CPU on a laptop, CUDA/TensorRT "
                                "on Jetson if available)."),
@@ -413,8 +595,26 @@ def benchmark(
     idle_baseline: float = typer.Option(0.0, "--idle-baseline", help="Seconds of idle power "
                                         "measurement before the run, to report dynamic "
                                         "(workload-only) energy. Needs INA3221 (Jetson)."),
+    repeat: int = typer.Option(1, "--repeat", min=1, help="Independent repeated runs, saved "
+                               "as NAME.r01.json ... For a statistical `compare` verdict "
+                               "use 3 or more (5 recommended)."),
+    cooldown: float = typer.Option(0.0, "--cooldown", help="Seconds to wait between "
+                                   "repeats (lets temperature settle)."),
+    gc_mode: str = typer.Option("normal", "--gc", help="Python garbage collector during "
+                                "the timed loop: normal (as in your app; pauses are "
+                                "recorded), freeze (gc.freeze() after warmup, like a tuned "
+                                "real-time app) or off (lower bound only)."),
+    inputs: str = typer.Option(None, "--inputs", help=INPUTS_HELP),
+    labels: str = typer.Option(None, "--labels", help=LABELS_HELP),
+    threads: int = typer.Option(None, "--threads", help=THREADS_HELP),
+    inputs_order: str = typer.Option("sequential", "--inputs-order", help=ORDER_HELP),
+    image_prep: str = typer.Option(None, "--image-prep", help=IMAGE_PREP_HELP),
 ):
     """Run a benchmark; measure per-stage latency, tail, deadlines, power and energy."""
+    from .core.gcwatch import GC_MODES
+    if gc_mode not in GC_MODES:
+        console.print(f"[red]--gc must be one of: {', '.join(GC_MODES)}[/red]")
+        raise typer.Exit(2)
     is_jetson = detector.is_jetson()
 
     if not demo and model is None and pipeline is None and not is_jetson:
@@ -431,18 +631,27 @@ def benchmark(
         console.print(f"[red]Cannot create output folder for {save}: {e}[/red]")
         raise typer.Exit(1)
 
-    with console.status("Running benchmark..."):
-        try:
-            result = run_benchmark(
-                iterations=iterations, demo=demo, demo_scenario=scenario,
-                model_path=model, provider=provider, pipeline_path=pipeline,
-                input_shapes=parse_input_shapes(input_shape),
-                deadline_ms=deadline_ms, period_ms=period_ms, pace=pace,
-                idle_baseline_s=idle_baseline or None,
-            )
-        except RuntimeError as e:
-            console.print(f"[red]{e}[/red]")
-            raise typer.Exit(1)
+    def _one_run(label="Running benchmark..."):
+        with console.status(label):
+            try:
+                return run_benchmark(
+                    iterations=iterations, warmup=warmup, demo=demo, demo_scenario=scenario,
+                    model_path=model, provider=provider, pipeline_path=pipeline,
+                    input_shapes=parse_input_shapes(input_shape),
+                    deadline_ms=deadline_ms, period_ms=period_ms, pace=pace,
+                    idle_baseline_s=idle_baseline or None, gc_mode=gc_mode,
+                    inputs=inputs, labels=labels, threads=threads, inputs_order=inputs_order,
+                    image_prep=image_prep,
+                )
+            except RuntimeError as e:
+                console.print(f"[red]{e}[/red]")
+                raise typer.Exit(1)
+
+    if repeat > 1:
+        _run_repeats(_one_run, repeat, cooldown, save)
+        return
+
+    result = _one_run()
 
     if result["mode"] == "demo":
         _demo_banner()
@@ -454,6 +663,53 @@ def benchmark(
 
     if result["mode"] == "demo":
         _demo_banner()
+
+
+def repeat_paths(save, n):
+    p = Path(save)
+    stem = p.name[:-len(p.suffix)] if p.suffix else p.name
+    return [p.with_name(f"{stem}.r{i:02d}{p.suffix or '.json'}") for i in range(1, n + 1)]
+
+
+def _run_repeats(one_run, n, cooldown, save):
+    """N independent runs, one file each, plus the run-to-run spread."""
+    from .compare.stats import environments
+    paths = repeat_paths(save, n)
+    runs = []
+    table = Table(title=f"EdgeLens Benchmark — {n} repeated runs")
+    for col in ("Run", "Mean", "p50", "p99", "Max", "Misses", "Energy/it", "File"):
+        table.add_column(col)
+    for i, path in enumerate(paths, 1):
+        if i > 1 and cooldown:
+            time.sleep(cooldown)
+        r = one_run(f"Run {i}/{n}...")
+        if isinstance(r.get("protocol"), dict):
+            r["protocol"].update(repeats=n, repeat_index=i, cooldown_s=cooldown)
+        runs.append(r)
+        _write_or_exit(path, json.dumps(r, indent=2))
+        lat, dl, en = r.get("latency") or {}, r.get("deadline"), r.get("energy") or {}
+        table.add_row(str(i), _ms(lat.get("mean")), _ms(lat.get("p50")), _ms(lat.get("p99")),
+                      _ms(lat.get("max")), f"{dl['misses']}/{dl['iterations']}" if dl else "-",
+                      f"{en['energy_per_iteration_j'] * 1000:.2f} mJ" if en.get("available")
+                      else "-", str(path))
+    console.print(table)
+    if runs and runs[0]["mode"] == "demo":
+        _demo_banner()
+    import numpy as _np
+    for key in ("p99", "mean"):
+        vals = [(x.get("latency") or {}).get(key) for x in runs]
+        vals = [v for v in vals if v is not None]
+        if len(vals) >= 2 and _np.mean(vals) > 0:
+            cv = 100 * _np.std(vals, ddof=1) / _np.mean(vals)
+            console.print(f"Run-to-run spread of {key}: {min(vals):.3f}–{max(vals):.3f} ms "
+                          f"(CV {cv:.1f}%)")
+    envs = environments(runs)
+    if len(envs) > 1:
+        console.print(f"[yellow]The environment changed between repeats ({', '.join(envs)}): "
+                      f"power mode or clocks moved during the series.[/yellow]")
+    first = str(paths[0]).replace(".r01", ".r*")
+    console.print(f"[green]Saved {n} runs →[/green] {first}\n[dim]Compare with: edgelens "
+                  f"compare '{first}' 'OTHER.r*.json'[/dim]")
 
 
 @app.command()
@@ -483,8 +739,9 @@ def diagnose(
     for f in verdict["secondary"]:
         console.print(f"  also considered: [bold]{f['type']}[/bold] "
                        f"({f['evidence_strength']} evidence) — {f['detail']}")
+    _print_integrity_issues(verdict.get("measurement_integrity"))
 
-    out = path.with_suffix("").with_suffix(".diagnosis.json")
+    out = _sibling(path, "diagnosis")
     _write_or_exit(out, json.dumps(verdict, indent=2))
     console.print(f"[green]Saved →[/green] {out}")
 
@@ -521,15 +778,51 @@ def report(
         console.print("[dim]The HTML report itself is also watermarked as simulated.[/dim]")
 
 
+_DERIVED = (".diagnosis.json", ".validation.json", ".selftest.json", ".fingerprint.json")
+
+
+def _expand(pattern):
+    """Glob for result files; skips files EdgeLens derived from results
+    (diagnose / validate output next to base.r01.json)."""
+    import glob as _glob
+    if any(ch in pattern for ch in "*?["):
+        return sorted(f for f in _glob.glob(pattern) if not f.endswith(_DERIVED))
+    return [pattern]
+
+
 @app.command()
 def compare(
-    before_file: str = typer.Argument(..., help="Path to the 'before' benchmark JSON file."),
-    after_file: str = typer.Argument(..., help="Path to the 'after' benchmark JSON file."),
+    runs: List[str] = typer.Argument(..., help="BEFORE AFTER: two result files, or two "
+                                     "QUOTED glob patterns of repeated runs, e.g. "
+                                     "'base.r*.json' 'pinned.r*.json'."),
     strict_env: bool = typer.Option(False, "--strict-env", help="Exit with code 2 when the "
                                     "two runs come from different environments (power "
                                     "mode, clocks, board, JetPack, versions)."),
+    metric: str = typer.Option(None, "--metric", help="Primary metric for the statistical "
+                               "verdict: p99 (default when every run has >= 100 "
+                               "iterations), p50, mean, max, miss_ratio, energy_mj, fps."),
+    min_effect: float = typer.Option(2.0, "--min-effect", help="Smallest change (%) of the "
+                                     "primary metric treated as a regression (exit 1)."),
 ):
-    """Compare two benchmark runs (before/after) and flag regressions."""
+    """Compare before/after. Two files: the v0.1 comparison plus within-run
+    noise. Two groups of repeated runs (benchmark --repeat N): a statistical
+    verdict IMPROVED / REGRESSED / NO DETECTABLE CHANGE."""
+    if len(runs) != 2:
+        console.print(f"[red]compare takes exactly two arguments (BEFORE AFTER); got "
+                      f"{len(runs)}. If you passed a glob, QUOTE it so the shell doesn't "
+                      f"expand it: edgelens compare 'base.r*.json' 'new.r*.json'[/red]")
+        raise typer.Exit(2)
+    before_files, after_files = _expand(runs[0]), _expand(runs[1])
+    for pat, files in ((runs[0], before_files), (runs[1], after_files)):
+        if not files:
+            console.print(f"[red]No files match {pat}[/red]")
+            raise typer.Exit(1)
+    if len(before_files) > 1 or len(after_files) > 1:
+        _compare_groups([_load_result_or_exit(f) for f in before_files],
+                        [_load_result_or_exit(f) for f in after_files],
+                        strict_env, metric, min_effect)
+        return
+    before_file, after_file = before_files[0], after_files[0]
     before = _load_result_or_exit(before_file)
     after = _load_result_or_exit(after_file)
 
@@ -547,13 +840,25 @@ def compare(
             "These runs were taken in DIFFERENT environments, so differences below may "
             "come from the environment, not from your change:\n" + lines,
             title="⚠️  Environment mismatch", style="yellow", border_style="yellow"))
-    if result.get("requirements_differences"):
-        lines = "\n".join(f"  {d['label']}: {d['before']} -> {d['after']}"
-                          for d in result["requirements_differences"])
+    diffs = result.get("requirements_differences") or []
+    req = [d for d in diffs if d.get("kind") not in ("setup", "data")]
+    setup = [d for d in diffs if d.get("kind") == "setup"]
+    data = [d for d in diffs if d.get("kind") == "data"]
+    if req:
+        lines = "\n".join(f"  {d['label']}: {d['before']} -> {d['after']}" for d in req)
         console.print(Panel(
             "These runs measured DIFFERENT requirements, so deadline/miss figures are "
             "not comparable:\n" + lines,
             title="ℹ️  Different experiments", style="cyan", border_style="cyan"))
+    if data:
+        lines = "\n".join(f"  {d['label']}: {d['before']} -> {d['after']}" for d in data)
+        console.print(Panel("The runs used DIFFERENT input data: a latency or accuracy change "
+                            "may come from the data, not the change you made.\n" + lines,
+                            title="ℹ️  Different data", style="cyan", border_style="cyan"))
+    if setup:
+        lines = "\n".join(f"  {d['label']}: {d['before']} -> {d['after']}" for d in setup)
+        console.print(f"[cyan]Setup changed between the runs (what this comparison shows the "
+                      f"effect of):[/cyan]\n[cyan]{lines}[/cyan]")
     if env["comparable"] is None:
         console.print("[dim]Environment not recorded in one or both files (pre-v0.1.0); "
                       "cannot check that the runs are comparable.[/dim]")
@@ -578,9 +883,35 @@ def compare(
             stage_table.add_row(stage, _ms(d["before_ms"]), _ms(d["after_ms"]), d["status"])
             continue
         change = f"{d['pct_change']:+.1f}%" if d["pct_change"] is not None else "n/a"
+        if max(d["before_ms"] or 0.0, d["after_ms"] or 0.0) < TINY_STAGE_MS:
+            # 0.001 -> 0.002 ms printed as "+100%" on the Orin: that is the
+            # display rounding, not a change. The verdict never used it.
+            change = "~ (below 5 µs)"
         stage_table.add_row(stage, f"{d['before_ms']:.3f}", f"{d['after_ms']:.3f}", change)
     console.print(stage_table)
 
+    from .periodic import tradeoff, tradeoff_sentence
+    t = tradeoff(before, after)
+    if t:
+        pinned = any(d["field"] in ("cpu_clocks_locked", "gpu_clocks_locked")
+                     for d in env["differences"])
+        sentence = tradeoff_sentence(t, "pinning the clocks" if pinned else "this change")
+        if sentence:
+            console.print(Panel(sentence + ("\nBoth sides of the decision: faster inference "
+                                            "and the power the board no longer saves while "
+                                            "idle." if pinned else ""),
+                                title="Trade-off (periodic runs)", border_style="cyan"))
+    from .compare.stats import within_run_ci
+    cis = [within_run_ci(r.get("latency_series_ms"), "p99") for r in (before, after)]
+    if all(cis):
+        console.print(f"[dim]Within-run 95% interval of p99 (block bootstrap): before "
+                      f"{cis[0][0]:.3f}–{cis[0][1]:.3f} ms, after {cis[1][0]:.3f}–"
+                      f"{cis[1][1]:.3f} ms. This is one run's sampling noise only; "
+                      f"run-to-run noise is usually larger. For a statistical verdict, "
+                      f"benchmark both sides with --repeat 5.[/dim]")
+    else:
+        console.print("[dim]Single runs: for a statistical verdict, benchmark both sides "
+                      "with --repeat 5 and compare the two groups.[/dim]")
     if result["verdict"] == "REGRESSION":
         console.print(Panel(
             "\n".join(result["reasons"]),
@@ -594,6 +925,75 @@ def compare(
         raise typer.Exit(2)
     if result["verdict"] == "REGRESSION":
         raise typer.Exit(1)
+
+
+def _compare_groups(before, after, strict_env, metric, min_effect):
+    from .compare import stats as cstats
+    from .compare.engine import environment_diff
+    env_b, env_a = cstats.environments(before), cstats.environments(after)
+    for label, envs in (("before", env_b), ("after", env_a)):
+        if len(envs) > 1:
+            console.print(f"[yellow]The {label} runs come from {len(envs)} different "
+                          f"environments ({', '.join(envs)}).[/yellow]")
+    diffs = environment_diff(before[0], after[0]) or []
+    if diffs:
+        lines = "\n".join(f"  {d['label']}: {d['before']} -> {d['after']}" for d in diffs)
+        console.print(Panel("The two groups were taken in DIFFERENT environments; a change "
+                            "below may come from the environment, not your change:\n" + lines,
+                            title="⚠️  Environment mismatch", style="yellow",
+                            border_style="yellow"))
+    try:
+        res = cstats.compare_groups(before, after, primary=metric, min_effect_pct=min_effect)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(2)
+    table = Table(title=f"EdgeLens Compare — {res['n_before']} vs {res['n_after']} runs")
+    for col in ("Metric", "Before (mean of runs)", "After", "Change [95% CI]",
+                "Smallest detectable", "Verdict"):
+        table.add_column(col)
+    style = {cstats.IMPROVED: "green", cstats.REGRESSED: "red", cstats.NO_CHANGE: "white",
+             cstats.INSUFFICIENT: "yellow"}
+    for m, row in res["metrics"].items():
+        if row["verdict"] == cstats.INSUFFICIENT:
+            table.add_row(row["label"], "-", "-", "-", "-",
+                          f"[yellow]{row['verdict']}[/yellow]")
+            continue
+        unit = row["unit"]
+        ci = row["ci95_pct"]
+        change = (f"{row['change_pct']:+.2f}% [{ci[0]:+.2f}, {ci[1]:+.2f}]"
+                  if row["change_pct"] is not None else f"{row['change']:+.4g}")
+        bold = "bold " if m == res["primary_metric"] else ""
+        table.add_row(f"{bold and '[bold]'}{row['label']}{bold and '[/bold]'}",
+                      f"{row['before_mean']:.4g} {unit} (CV {row['before_cv_pct']}%)",
+                      f"{row['after_mean']:.4g} {unit} (CV {row['after_cv_pct']}%)", change,
+                      f"±{row['min_detectable_change_pct']}%"
+                      if row["min_detectable_change_pct"] is not None else "-",
+                      f"[{style[row['verdict']]}]{row['verdict']}[/{style[row['verdict']]}]")
+    console.print(table)
+    prim = res["metrics"].get(res["primary_metric"]) or {}
+    v = res["verdict"]
+    if v == cstats.INSUFFICIENT:
+        body = prim.get("reason") or "Not enough repeated runs."
+    elif v == cstats.NO_CHANGE:
+        body = (f"No detectable change in {prim['label']}. With {prim['n_before']} + "
+                f"{prim['n_after']} runs, a change smaller than about "
+                f"±{prim['min_detectable_change_pct']}% could have been missed; more "
+                f"repeats narrow that.")
+    else:
+        body = (f"{prim['label']}: {prim['before_mean']:.4g} → {prim['after_mean']:.4g} "
+                f"{prim['unit']} ({prim['change_pct']:+.2f}%, 95% CI "
+                f"{prim['ci95_pct'][0]:+.2f}% to {prim['ci95_pct'][1]:+.2f}%).")
+    body += "".join("\n" + n for n in res["notes"])
+    title = {cstats.IMPROVED: "✅ IMPROVED", cstats.REGRESSED: "❌ REGRESSED",
+             cstats.NO_CHANGE: "NO DETECTABLE CHANGE",
+             cstats.INSUFFICIENT: "⚠️  INSUFFICIENT REPEATS"}[v]
+    console.print(Panel(body, title=title, border_style=style[v]))
+    if strict_env and diffs:
+        raise typer.Exit(2)
+    if res["regression"]:
+        raise typer.Exit(1)
+    if v == cstats.INSUFFICIENT:
+        raise typer.Exit(2)
 
 
 @app.command()
@@ -615,16 +1015,82 @@ def validate(
     max_power_w: float = typer.Option(None, "--max-power-w", help="Max mean board power (W)."),
     max_energy_mj: float = typer.Option(None, "--max-energy-mj",
                                         help="Max energy per iteration (mJ)."),
+    max_output_error: float = typer.Option(None, "--max-output-error", help="Max |output "
+                                           "error| vs the reference backend (sweep results)."),
+    min_decision_agreement: float = typer.Option(None, "--min-decision-agreement",
+                                                 help="Min fraction of decisions equal to the "
+                                                      "reference backend, e.g. 1.0."),
+    max_temp_c: float = typer.Option(None, "--max-temp-c", help="Max peak temperature (C)."),
+    max_latency_drift_pct: float = typer.Option(None, "--max-latency-drift-pct",
+                                                help="Max p50 change first->last window "
+                                                     "(soak results)."),
+    max_mem_growth_mb_per_h: float = typer.Option(None, "--max-mem-growth-mb-per-h",
+                                                  help="Max process memory growth (soak)."),
+    max_throttled_windows: int = typer.Option(None, "--max-throttled-windows",
+                                              help="Max windows with thermal throttling "
+                                                   "(soak), e.g. 0."),
+    max_energy_per_period_mj: float = typer.Option(None, "--max-energy-per-period-mj",
+                                                   help="Max energy per inference period, idle "
+                                                        "included (periodic results)."),
+    max_time_to_detect_s: float = typer.Option(None, "--max-time-to-detect-s",
+                                               help="Max seconds from the event to the alarm "
+                                                    "(replay / detect results)."),
+    max_false_alarms_per_h: float = typer.Option(None, "--max-false-alarms-per-h",
+                                                 help="Max alarms per hour while the ground "
+                                                      "truth is healthy (replay / detect)."),
+    max_missed_events: int = typer.Option(None, "--max-missed-events",
+                                          help="Max events that never raised the alarm."),
+    max_rmse: float = typer.Option(None, "--max-rmse", help="Max output error vs ground "
+                                   "truth (replay / detect, or --model --inputs --labels)."),
+    min_accuracy: float = typer.Option(None, "--min-accuracy", help="Min accuracy (0..1) "
+                                       "vs --labels: top-1 for classifiers, > 0.5 for 0/1 "
+                                       "detectors (--model --inputs --labels)."),
+    contract: str = typer.Option(None, "--contract", help="Assumption contract (.yaml / "
+                                 ".json): requirements AND the conditions they hold under. "
+                                 "A violated assumption gives INCONCLUSIVE, never PASS. "
+                                 "See docs/contracts.md."),
+    evidence_path: str = typer.Option(None, "--evidence", help="Also write a Markdown evidence "
+                                 "record (one row per requirement ID) to this file."),
 ):
     """Check a run against requirements: PASS / FAIL / INCONCLUSIVE, with evidence.
 
     Exit codes: 0 PASS, 1 FAIL, 2 INCONCLUSIVE (a requirement this run cannot
-    measure, or a --demo result)."""
+    measure, a violated contract assumption, or a --demo result)."""
     path = Path(benchmark_file)
     data = _load_result_or_exit(path)
+    flags = {k: v for k, v in dict(
+        p50_ms=p50_ms, p95_ms=p95_ms, p99_ms=p99_ms, p99_9_ms=p99_9_ms,
+        max_latency_ms=max_latency_ms, max_miss_ratio=max_miss_ratio, min_fps=min_fps,
+        max_power_w=max_power_w, max_energy_mj=max_energy_mj, max_output_error=max_output_error,
+        min_decision_agreement=min_decision_agreement, max_temp_c=max_temp_c,
+        max_latency_drift_pct=max_latency_drift_pct,
+        max_mem_growth_mb_per_h=max_mem_growth_mb_per_h,
+        max_throttled_windows=max_throttled_windows,
+        max_energy_per_period_mj=max_energy_per_period_mj,
+        max_time_to_detect_s=max_time_to_detect_s, max_false_alarms_per_h=max_false_alarms_per_h,
+        max_missed_events=max_missed_events, max_rmse=max_rmse,
+        min_accuracy=min_accuracy).items() if v is not None}
+    if contract:
+        from .cli_evidence import validate_with_contract
+        if flags:
+            console.print("[red]Give requirements either as a --contract or as flags, not "
+                          "both (the contract is the evidence record; put "
+                          f"{', '.join(flags)} into it).[/red]")
+            raise typer.Exit(2)
+        raise typer.Exit(validate_with_contract(path, data, contract, evidence_path))
     reqs = {"p50_ms": p50_ms, "p95_ms": p95_ms, "p99_ms": p99_ms, "p99_9_ms": p99_9_ms,
             "max_latency_ms": max_latency_ms, "max_miss_ratio": max_miss_ratio,
-            "min_fps": min_fps, "max_power_w": max_power_w, "max_energy_mj": max_energy_mj}
+            "min_fps": min_fps, "max_power_w": max_power_w, "max_energy_mj": max_energy_mj,
+            "max_output_error": max_output_error,
+            "min_decision_agreement": min_decision_agreement, "max_temp_c": max_temp_c,
+            "max_latency_drift_pct": max_latency_drift_pct,
+            "max_mem_growth_mb_per_h": max_mem_growth_mb_per_h,
+            "max_throttled_windows": max_throttled_windows,
+            "max_energy_per_period_mj": max_energy_per_period_mj,
+            "max_time_to_detect_s": max_time_to_detect_s,
+            "max_false_alarms_per_h": max_false_alarms_per_h,
+            "max_missed_events": max_missed_events, "max_rmse": max_rmse,
+            "min_accuracy": min_accuracy}
     try:
         verdict = run_validate(data, reqs)
     except ValueError as e:
@@ -639,7 +1105,7 @@ def validate(
             return "—"
         if unit == "":
             return f"{v * 100:.3f}%"
-        return f"{v:g} {unit}"
+        return f"{v:g} {unit}" if unit else f"{v:g}"
 
     style = {"PASS": "green", "FAIL": "red", "NOT_MEASURED": "yellow"}
     table = Table(title="Requirements")
@@ -677,15 +1143,22 @@ def validate(
     else:
         console.print(Panel("\n".join(verdict["notes"]),
                             title="⚠️  INCONCLUSIVE", style="yellow", border_style="yellow"))
+    _print_integrity_issues([i for i in verdict.get("integrity") or []
+                             if i["severity"] != "info"])
 
     run = verdict["run"]
     console.print(f"[dim]{run['iterations']} iterations · {run.get('board') or 'unknown board'}"
                   f"{' · ' + run['power_mode'] if run.get('power_mode') else ''} · "
                   f"environment_id {run.get('environment_id')} · run_id {run.get('run_id')}[/dim]")
 
-    out = path.with_suffix("").with_suffix(".validation.json")
+    out = _sibling(path, "validation")
     _write_or_exit(out, json.dumps(verdict, indent=2))
     console.print(f"[green]Saved →[/green] {out}")
+    if evidence_path:
+        from .contract import evidence_markdown
+        _write_or_exit(evidence_path, evidence_markdown(dict(verdict, contract={
+            "name": "requirements given as flags"}), str(path)))
+        console.print(f"[green]Evidence →[/green] {evidence_path}")
     raise typer.Exit(validate_exit_code(verdict["verdict"]))
 
 
@@ -695,5 +1168,15 @@ def version():
     console.print(f"EdgeLens v{__version__}")
 
 
+# v0.2 command groups register themselves on `app` (kept in separate modules).
+from . import cli_observe  # noqa: E402,F401
+from . import cli_insights  # noqa: E402,F401
+from . import cli_evidence  # noqa: E402,F401
+from . import cli_stream  # noqa: E402,F401
+
+
 if __name__ == "__main__":
-    app()
+    # `python -m edgelens.cli` runs this file as __main__, a second copy of the
+    # module; the v0.2 commands registered on the importable copy's app.
+    from edgelens.cli import app as _registered_app
+    _registered_app()

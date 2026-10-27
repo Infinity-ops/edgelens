@@ -2,7 +2,8 @@ name: tests
 
 on:
   push:
-    branches: [main]
+    # development branches too: a release branch must not reach main untested
+    branches: [main, "v*-dev", "release/**"]
   pull_request:
   workflow_dispatch:
 
@@ -49,6 +50,7 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: pip install -e ".[${{ matrix.extras }}]"
+      - run: pip check
       - run: python -m pytest -q -ra
 
   package:
@@ -67,12 +69,28 @@ jobs:
         run: |
           python -m venv /tmp/wheel-venv
           /tmp/wheel-venv/bin/pip install dist/*.whl
+          /tmp/wheel-venv/bin/pip check
+          cp examples/quickstart/quickstart.py examples/quickstart/check_result.py /tmp/
           cd /tmp
+          V=$(/tmp/wheel-venv/bin/python -c "import edgelens; print(edgelens.__version__)")
+          test "$V" = "$(grep -m1 '^version' $GITHUB_WORKSPACE/pyproject.toml | cut -d'"' -f2)"
           /tmp/wheel-venv/bin/edgelens --help
           /tmp/wheel-venv/bin/edgelens doctor
           /tmp/wheel-venv/bin/edgelens benchmark --demo --iterations 20 --save /tmp/demo.json
           /tmp/wheel-venv/bin/edgelens diagnose /tmp/demo.json
+          # the README quick start, exactly as a new user runs it
+          /tmp/wheel-venv/bin/edgelens benchmark --pipeline quickstart.py --iterations 1000 --save run.json
+          /tmp/wheel-venv/bin/edgelens diagnose run.json
+          /tmp/wheel-venv/bin/edgelens validate run.json --p99-ms 32 --max-miss-ratio 0
+          /tmp/wheel-venv/bin/python check_result.py run.json
           /tmp/wheel-venv/bin/python -c "import edgelens as el; p = el.Pipeline('smoke'); p.add_stage('a', lambda: None); print(p.run(iterations=5, warmup=0, telemetry=False)['schema_version'])"
+      - name: Test suite from the source distribution (what distro packagers build)
+        run: |
+          python -m venv /tmp/sdist-venv
+          mkdir /tmp/sdist && tar xzf dist/*.tar.gz -C /tmp/sdist
+          cd /tmp/sdist/edgelens-*
+          /tmp/sdist-venv/bin/pip install ".[dev,onnx,images]"
+          /tmp/sdist-venv/bin/python -m pytest -q -ra
       - uses: actions/upload-artifact@v4
         with:
           name: dist

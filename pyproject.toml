@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "edgelens"
-version = "0.1.0"
+version = "0.2.0"
 description = "Measure, diagnose and validate AI pipelines on edge devices: stage-level latency, tail and deadlines, power and energy, evidence-based diagnosis. Deep NVIDIA Jetson support."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -12,8 +12,9 @@ license = { text = "MIT" }
 authors = [{ name = "EdgeLens contributors" }]
 keywords = ["jetson", "nvidia", "edge-ai", "profiling", "tensorrt", "cuda", "benchmark", "real-time", "energy", "latency", "deadline"]
 classifiers = [
-    # Alpha: every v0.1.0 hardware path passed scripts/validate_on_jetson.sh
-    # on a Jetson Nano (JetPack 4.6). Orin is implemented, not yet validated.
+    # Alpha: the v0.1 hardware paths are verified on a Jetson Nano (JetPack
+    # 4.6); v0.2 on an AGX Orin 32GB only for the onnxruntime CPU path, see
+    # docs/jetson.md. Interfaces frozen for 0.2.x: docs/stability.md.
     # NOTE: license uses the TOML-table form `{ text = "MIT" }` on purpose:
     # the SPDX string form needs setuptools>=77, which doesn't support
     # Python 3.8. Newer setuptools accepts the
@@ -40,6 +41,7 @@ dependencies = [
     "rich>=13.0.0",
     "psutil>=5.9.0",
     "numpy>=1.21.0",
+    "pyyaml>=5.3",
 ]
 
 [project.optional-dependencies]
@@ -53,8 +55,15 @@ dependencies = [
 dev = ["pytest>=7.0.0"]
 onnx = ["onnxruntime>=1.16.0"]
 fixtures = ["onnx>=1.14.0"]
+# Reading ROS 1 .bag and ROS 2 .db3/.mcap files without a ROS install
+# (examples/rosbag_to_windows.py). Live ROS 2 (`edgelens ros2`) needs rclpy
+# from your ROS 2 installation instead; it is not on PyPI.
+rosbag = ["rosbags>=0.9.20"]
+# `--inputs images/`: decoding JPEG / PNG folders for vision models
+images = ["pillow>=9.1"]
 
 [project.urls]
+Documentation = "https://github.com/Infinity-ops/edgelens#readme"
 Homepage = "https://github.com/Infinity-ops/edgelens"
 Repository = "https://github.com/Infinity-ops/edgelens"
 Issues = "https://github.com/Infinity-ops/edgelens/issues"
@@ -65,3 +74,7 @@ edgelens = "edgelens.cli:app"
 
 [tool.setuptools.packages.find]
 include = ["edgelens*"]
+
+[tool.setuptools.package-data]
+# The C/C++ marker header ships in the wheel:  -I$(edgelens include)
+edgelens = ["include/*.h"]

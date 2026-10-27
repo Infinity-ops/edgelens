@@ -1,0 +1,19 @@
+# A windowed time-series pipeline, exactly as trained (docs/stream.md).
+name: toy-motor-health
+version: "1"
+data:
+  time_column: time
+  rate_hz: 20
+  columns: [vib, steer, aux]
+  target: {columns: [health], reduce: min, scale: 0.01}
+scaler: {file: scaler.json}       # edgelens stream fit-scaler ... --out scaler.json
+features:
+  block: 15                       # 0.75 s per model step
+  stats: [min, std, max, mean, last]
+  sequence: 40                    # 30 s of history
+  padding: zeros
+model: {python: toy_model.py:predict}
+output: {slew_per_step: 0.01, mean_steps: 20}
+decision: {threshold: 0.5, alarm_when: below, healthy_level: 1.0}
+deployment: {period_ms: 1000}     # the deployed loop runs at 1 Hz: CADENCE_MISMATCH
+# envelope: {file: envelope.json} # edgelens envelope fit ... --out envelope.json

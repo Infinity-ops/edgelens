@@ -21,7 +21,7 @@ and Jetson Orin, Xavier and Orin Nano reports are especially wanted.
 git clone https://github.com/Infinity-ops/edgelens
 cd edgelens
 pip install -e ".[dev,onnx]"     # on Jetson: pip install -e ".[dev]" + NVIDIA's onnxruntime-gpu wheel
-python -m pytest -q
+python3 -m pytest -q
 ruff check --select E9,F edgelens tests examples
 ```
 

@@ -79,36 +79,298 @@ def available_providers():
     return ort.get_available_providers()
 
 
-def cuda_probe():
-    """(usable, reason): can this process actually use the CUDA provider?
-
-    get_available_providers() lists compiled-in providers only. Found on a
-    real laptop: onnxruntime-gpu listed Tensorrt+CUDA, but libcublasLt was not
-    installed; sessions silently fell back to CPU and the first device copy
-    crashed. Allocating one CUDA tensor loads the provider library, which is
-    the cheapest real check. Cached per process.
-    """
-    global _cuda_probe_result
-    if _cuda_probe_result is None:
-        if ort is None or "CUDAExecutionProvider" not in available_providers():
-            _cuda_probe_result = (False, "CUDAExecutionProvider is not in this onnxruntime build")
+# The probe runs in a CHILD process. Loading the CUDA provider can crash the
+# whole interpreter (SIGBUS / SIGSEGV) when onnxruntime is broken — found on
+# a real Jetson Nano where `pip install onnxruntime` had been laid over the
+# Jetson onnxruntime-gpu wheel, mixing two builds in one package folder. A
+# crash in the child is a diagnosis; in this process it would take every
+# EdgeLens command down. Cached on disk per onnxruntime install.
+# The probe does what a real benchmark does: create a CUDA session on a tiny
+# model and run it once (v0.2.0.dev1 allocated a bare CUDA tensor instead, which
+# crashes the Jetson Nano's onnxruntime-gpu 1.11 build although sessions work —
+# a false "broken install"). Each STEP is printed first, so a crash names the
+# step that crashed.
+_PROBE_MODEL_B64 = ("CAQSDmVkZ2VsZW5zLXByb2JlOj8KDAoBeBIBeSIEUmVsdRIFcHJvYmVaEwoBeBIOCgwIARIICgIIAQoC"
+                    "CARiEwoBeRIOCgwIARIICgIIAQoCCARCBAoAEAk=")      # Relu, x/y float[1,4]
+_PROBE_CODE = r"""
+import base64, sys
+print("STEP import", flush=True)
+import numpy as np, onnxruntime as ort
+ort.set_default_logger_severity(4)
+p = ort.get_available_providers()
+print("LISTED " + ",".join(p), flush=True)
+if "CUDAExecutionProvider" in p:
+    print("STEP session", flush=True)
+    s = ort.InferenceSession(base64.b64decode(sys.argv[1]),
+                             providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+    used = s.get_providers()
+    print("USED " + ",".join(used), flush=True)
+    if used and used[0] == "CUDAExecutionProvider":
+        print("STEP run", flush=True)
+        y = s.run(None, {"x": np.array([[-1.0, 2.0, -3.0, 4.0]], np.float32)})[0]
+        if y.tolist() == [[0.0, 2.0, 0.0, 4.0]]:
+            print("CUDA_OK", flush=True)
         else:
-            ort.set_default_logger_severity(4)      # our message replaces ORT's log spam
+            print("CUDA_WRONG " + repr(y.tolist()), flush=True)
+"""
+PROBE_VERSION = 2               # part of the cache key: a new probe ignores old verdicts
+PROBE_TIMEOUT_S = 180            # EDGELENS_PROBE_TIMEOUT_S overrides
+
+
+def _probe_cache_path():
+    import os
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "edgelens", "ort_cuda_probe.json")
+
+
+_CUDA_DRIVER_GLOBS = ("/usr/lib/aarch64-linux-gnu/tegra/libcuda.so*",     # Jetson (JetPack 4/5)
+                      "/usr/lib/aarch64-linux-gnu/nvidia/libcuda.so*",    # Jetson (JetPack 6)
+                      "/usr/lib/x86_64-linux-gnu/libcuda.so*",            # desktop
+                      "/usr/lib64/libcuda.so*", "/usr/lib/wsl/lib/libcuda.so*")
+
+
+def _cuda_driver_files():
+    import glob
+    import os
+    out = {}
+    for pattern in _CUDA_DRIVER_GLOBS:
+        for f in glob.glob(pattern):
+            real = os.path.realpath(f)
             try:
-                ort.OrtValue.ortvalue_from_numpy(np.zeros(1, dtype=np.float32), "cuda", 0)
-                _cuda_probe_result = (True, None)
-            except Exception as e:
-                msg = str(e)
-                if "not available" in msg or "cannot open shared object" in msg:
-                    # ORT's own text is a source path + C++ signature; say it plainly.
-                    reason = "the CUDA/cuDNN libraries this onnxruntime-gpu build needs could not be loaded"
-                else:
-                    lines = msg.strip().splitlines()
-                    reason = (lines[-1] if lines else type(e).__name__)[:200]
-                _cuda_probe_result = (False, reason)
-            finally:
-                ort.set_default_logger_severity(3)
-    return _cuda_probe_result
+                st = os.stat(real)
+            except OSError:
+                continue
+            out[real] = [st.st_size, int(st.st_mtime)]
+    return out
+
+
+def _boot_id():
+    try:
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def _install_key():
+    """Identifies this onnxruntime install: versions of every onnxruntime
+    distribution plus the mtime of its native library folder."""
+    import os
+    import sys
+    key = {"probe": PROBE_VERSION, "python": sys.executable,
+           "ort_version": getattr(ort, "__version__", None),
+           "ort_file": getattr(ort, "__file__", None), "dists": ort_distributions(),
+           # a driver reinstall / JetPack upgrade / reflash changes these ...
+           "cuda_driver": _cuda_driver_files(),
+           # ... and a reboot changes this: a verdict never outlives the boot
+           "boot_id": _boot_id(),
+           # the environment decides which CUDA libraries / devices load
+           "ld_library_path": os.environ.get("LD_LIBRARY_PATH"),
+           "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES")}
+    try:
+        capi = os.path.join(os.path.dirname(ort.__file__), "capi")
+        key["capi_mtime"] = max(os.path.getmtime(os.path.join(capi, f))
+                                for f in os.listdir(capi))
+    except (OSError, ValueError, TypeError, AttributeError):
+        key["capi_mtime"] = None
+    return key
+
+
+def _probe_timeout():
+    import os
+    try:
+        return float(os.environ.get("EDGELENS_PROBE_TIMEOUT_S") or PROBE_TIMEOUT_S)
+    except ValueError:
+        return float(PROBE_TIMEOUT_S)
+
+
+def _last_step(stdout):
+    steps = [ln[5:].strip() for ln in (stdout or "").splitlines() if ln.startswith("STEP ")]
+    return steps[-1] if steps else "start"
+
+
+_STEP_TEXT = {"start": "starting Python", "import": "importing onnxruntime",
+              "session": "creating a CUDA session", "run": "running a CUDA session"}
+
+
+def _run_isolated_probe():
+    import signal as _signal
+    import subprocess
+    import sys
+    try:
+        out = subprocess.run([sys.executable, "-c", _PROBE_CODE, _PROBE_MODEL_B64],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             universal_newlines=True, timeout=_probe_timeout())
+    except subprocess.TimeoutExpired as e:
+        step = _last_step(e.stdout if isinstance(e.stdout, str) else
+                          (e.stdout or b"").decode("utf-8", "replace"))
+        return (False, f"{_STEP_TEXT.get(step, step)} hung for more than {_probe_timeout():g} s "
+                       f"(test model, isolated process)", "hang")
+    if out.returncode < 0:
+        try:
+            sig = _signal.Signals(-out.returncode).name
+        except ValueError:
+            sig = f"signal {-out.returncode}"
+        step = _last_step(out.stdout)
+        from ..hardware.storage import kernel_storage_errors
+        st = kernel_storage_errors() if sig == "SIGBUS" else {"count": 0}
+        if not st.get("count") and st.get("remembered"):
+            r = st["remembered"][0]
+            st = dict(st, count=r["count"], source=f"an earlier boot, {r['device']}",
+                      lines=[r.get("last_line") or ""])
+        if st.get("count"):
+            return (False, f"{_STEP_TEXT.get(step, step)} crashed Python ({sig}), and the "
+                           f"kernel log ({st['source']}) shows {st['count']} storage error(s), "
+                           f"e.g. \"{st['lines'][-1][:120]}\". A failing SD card / disk makes "
+                           f"memory-mapped libraries crash with SIGBUS: replace the card before "
+                           f"reinstalling anything. EdgeLens uses the CPU provider meanwhile",
+                    "crash")
+        if len(ort_distributions()) > 1:
+            why = ("two onnxruntime packages are installed over each other (see the fix "
+                   "above)")
+        else:
+            why = ("the onnxruntime-gpu build does not match this JetPack / CUDA, or its "
+                   "files were damaged by an earlier install; reinstall the wheel for your "
+                   "JetPack: pip install --force-reinstall --no-deps <onnxruntime_gpu wheel>")
+            if sig == "SIGBUS" and not st.get("readable", True):
+                why += ("; SIGBUS is also what a failing SD card causes — check "
+                        "`sudo dmesg | grep -i 'I/O error'` first")
+        return (False, f"{_STEP_TEXT.get(step, step)} crashed Python ({sig}) in an isolated "
+                       f"test process — {why}. EdgeLens itself is unaffected: it uses the CPU "
+                       f"provider until this is fixed", "crash")
+    if "CUDA_OK" in out.stdout:
+        return (True, None, "ok")
+    listed = next((ln[7:] for ln in out.stdout.splitlines() if ln.startswith("LISTED ")), None)
+    if listed is not None and "CUDAExecutionProvider" not in listed.split(","):
+        return (False, "CUDAExecutionProvider is not in this onnxruntime build", "absent")
+    if "CUDA_WRONG" in out.stdout:
+        return (False, "a CUDA session ran but returned wrong results (broken install)",
+                "error")
+    if "USED " in out.stdout and "CUDA_OK" not in out.stdout:
+        used = next(ln[5:] for ln in out.stdout.splitlines() if ln.startswith("USED "))
+        if "CUDAExecutionProvider" not in used.split(","):
+            return (False, "the CUDA/cuDNN libraries this onnxruntime-gpu build needs could not "
+                           "be loaded (a CUDA session fell back to the CPU)", "error")
+    lines = (out.stderr or "").strip().splitlines()
+    msg = lines[-1] if lines else "unknown error"
+    if "not available" in msg or "cannot open shared object" in msg:
+        msg = "the CUDA/cuDNN libraries this onnxruntime-gpu build needs could not be loaded"
+    return (False, msg[:200], "error")
+
+
+def forget_cuda_probe():
+    """Drop the cached verdict (this process and on disk): the next call re-probes."""
+    import os
+    global _cuda_probe_result, _cuda_probe_meta
+    _cuda_probe_result = None
+    _cuda_probe_meta = {}
+    try:
+        os.remove(_probe_cache_path())
+    except OSError:
+        pass
+
+
+_cuda_probe_meta = {}            # {"cached_at": iso time} when the verdict came from disk
+
+
+def cuda_probe(force=False):
+    """(usable, reason): can this machine actually use the CUDA provider?
+
+    get_available_providers() lists compiled-in providers only (found on a
+    real laptop: onnxruntime-gpu listed CUDA without libcublasLt installed).
+    A CUDA session on a tiny model is created and run in a child process (see
+    above).
+
+    Only SUCCESS is cached on disk, keyed by the interpreter, the onnxruntime
+    install, the CUDA driver file and the boot: a failure is exactly the result
+    that changes once something is fixed, so it is re-tested every time (about
+    1-2 s, and only on a system with a problem). force=True ignores the cache."""
+    global _cuda_probe_result, _cuda_probe_meta
+    if force:
+        _cuda_probe_result = None
+    if _cuda_probe_result is not None:
+        return _cuda_probe_result[:2]
+    _cuda_probe_meta = {}
+    if ort is None or "CUDAExecutionProvider" not in available_providers():
+        _cuda_probe_result = (False, "CUDAExecutionProvider is not in this onnxruntime build",
+                              "absent")
+        return _cuda_probe_result[:2]
+    import datetime
+    import json
+    import os
+    key = _install_key()
+    path = _probe_cache_path()
+    if not force:
+        try:
+            with open(path) as f:
+                cached = json.load(f)
+            if cached.get("key") == key and tuple(cached["result"])[2] == "ok":
+                _cuda_probe_result = tuple(cached["result"])
+                _cuda_probe_meta = {"cached_at": cached.get("saved_at")}
+                return _cuda_probe_result[:2]
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            pass
+    _cuda_probe_result = _run_isolated_probe()
+    if _cuda_probe_result[2] == "ok":
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                json.dump({"key": key, "result": list(_cuda_probe_result),
+                           "saved_at": datetime.datetime.now().isoformat(timespec="minutes")},
+                          f)
+        except OSError:
+            pass
+    else:
+        try:
+            os.remove(path)                  # a stale success must not come back
+        except OSError:
+            pass
+    return _cuda_probe_result[:2]
+
+
+def cuda_probe_cached_at():
+    """When the current verdict was cached ("2026-10-17T16:12"), or None if it
+    was measured in this process."""
+    return _cuda_probe_meta.get("cached_at")
+
+
+def cuda_probe_kind():
+    """'ok' | 'absent' | 'error' | 'crash' | 'hang' (after cuda_probe())."""
+    cuda_probe()
+    return _cuda_probe_result[2]
+
+
+def ort_distributions():
+    """Installed distributions that provide the `onnxruntime` package."""
+    try:
+        from importlib import metadata
+    except ImportError:                     # pragma: no cover
+        return {}
+    found = {}
+    for dist in metadata.distributions():
+        name = (dist.metadata.get("Name") or "").lower()
+        if name == "onnxruntime" or name.startswith("onnxruntime-") or name.startswith("onnxruntime_"):
+            if name not in ("onnxruntime-extensions", "onnxruntime-tools"):
+                found[name] = dist.version
+    return found
+
+
+def ort_install_problems():
+    """Human-readable problems with the onnxruntime installation itself."""
+    dists = ort_distributions()
+    problems = []
+    if len(dists) > 1:
+        names = ", ".join(f"{k} {v}" for k, v in sorted(dists.items()))
+        gpu = [k for k in dists if k != "onnxruntime"]
+        keep = gpu[0] if gpu else "onnxruntime"
+        problems.append({
+            "problem": f"{len(dists)} onnxruntime packages are installed over each other "
+                       f"({names}). They share one `onnxruntime` folder, so the files are a "
+                       f"mix of two builds — this crashes or silently misbehaves.",
+            "fix": f"pip uninstall -y {' '.join(sorted(dists))} && reinstall ONE of them "
+                   f"(on Jetson: the {keep} wheel for your JetPack, e.g. from the Jetson "
+                   f"Zoo). Never install edgelens with the [onnx] extra on a Jetson."})
+    return problems
 
 
 def unloadable_providers():
@@ -141,16 +403,32 @@ def pick_provider(prefer=None):
     return usable[0]
 
 
-def _session_with(model_path, provider):
+def session_options(threads=None):
+    """onnxruntime SessionOptions for a thread count, or None for its default
+    (one intra-op thread per core). Found on an AGX Orin: a 2 ms LSTM ran as
+    fast on 4 threads as on the default 8, at half the CPU and 18% less energy
+    per inference; at one window per second 4 threads cut p99 by 32%."""
+    if not threads:
+        return None
+    so = ort.SessionOptions()
+    so.intra_op_num_threads = int(threads)
+    so.inter_op_num_threads = 1
+    return so
+
+
+def _session_with(model_path, provider, options=None, sess_options=None):
     """(session, fallback_message). onnxruntime does not fail when a provider
     can't be enabled: it silently falls back to CPU (and prints an 'EP Error'
     banner). Return the session plus what it printed, so the caller can
-    check which provider is really active."""
+    check which provider is really active. `options`: provider options, e.g.
+    {"trt_fp16_enable": True} for TensorRT FP16."""
     import contextlib
     import io
     captured = io.StringIO()
+    providers = [(provider, dict(options))] if options else [provider]
     with contextlib.redirect_stdout(captured):
-        session = ort.InferenceSession(model_path, providers=[provider])
+        session = ort.InferenceSession(model_path, sess_options=sess_options,
+                                       providers=providers)
     return session, captured.getvalue().strip()
 
 
@@ -257,7 +535,14 @@ class OnnxStagePipeline:
 
     GPU_PROVIDERS = ("CUDAExecutionProvider", "TensorrtExecutionProvider")
 
-    def __init__(self, model_path, provider=None, input_shape=None, input_shapes=None):
+    def __init__(self, model_path, provider=None, input_shape=None, input_shapes=None,
+                 provider_options=None, inputs=None, labels=None, threads=None,
+                 inputs_order="sequential", image_prep=None):
+        """inputs / labels: file paths (see edgelens.benchmark.real_inputs; a
+        folder of images: edgelens.benchmark.image_inputs, prepared per
+        image_prep);
+        threads: onnxruntime intra-op threads (None = its default)."""
+        inputs_path = inputs          # `inputs` is reused below for the model's inputs
         if ort is None:
             raise RuntimeError(
                 "onnxruntime is not installed. Install it with:\n"
@@ -299,10 +584,21 @@ class OnnxStagePipeline:
                           + [p for p in usable if p not in DEFAULT_PREFERENCE])
             strict = False
 
+        if threads is not None and int(threads) < 1:
+            raise RuntimeError("--threads must be 1 or more (leave it out for onnxruntime's "
+                               "default of one thread per core).")
+        self.threads = int(threads) if threads else None
+        sess_opts = session_options(self.threads)
         self.session = None
         for cand in candidates:
             try:
-                session, banner = _session_with(model_path, cand)
+                opts = provider_options if (provider_options and cand == provider) else None
+                extra = {}
+                if opts:
+                    extra["options"] = opts
+                if sess_opts is not None:
+                    extra["sess_options"] = sess_opts
+                session, banner = _session_with(model_path, cand, **extra)
             except Exception as e:
                 raise RuntimeError(f"onnxruntime could not load '{model_path}': {e}") from e
             active = session.get_providers()
@@ -361,6 +657,30 @@ class OnnxStagePipeline:
             # capture bottleneck (found on real hardware).
             self._static_inputs[inp.name] = _synthetic_tensor(shape, dtype, rng)
 
+        from .real_inputs import (InputError, Predictions, SampleOrder, open_inputs,
+                                  resolve_labels)
+        from .real_inputs import _task as _label_task
+        self.real = self.labels = self.preds = self.order = None
+        self.labels_path = labels
+        self._i = 0
+        self._k = None
+        try:
+            if inputs_path:
+                self.real = open_inputs(inputs_path, self.inputs, image_prep)
+                self.order = SampleOrder(self.real.n, inputs_order)
+                self.preds = Predictions(self.real.n, self.session.get_outputs()[0].name)
+                if labels:
+                    self.labels = resolve_labels(labels, self.real)
+                    oshape = self.session.get_outputs()[0].shape
+                    if all(isinstance(d, int) and d > 0 for d in oshape):
+                        _label_task(self.labels, int(np.prod(oshape)))   # fail before the run
+            elif labels:
+                raise InputError("--labels needs --inputs: labels belong to real input samples.")
+            elif image_prep:
+                raise InputError("--image-prep needs --inputs with images.")
+        except InputError as e:
+            raise RuntimeError(str(e)) from e
+
         # Backward-compatible attributes (first input).
         self.input_name = self.inputs[0][0]
         self.input_shape = self.inputs[0][1]
@@ -377,17 +697,45 @@ class OnnxStagePipeline:
     def input_summary(self):
         return [{"name": n, "shape": list(s), "dtype": np.dtype(d).name} for n, s, d in self.inputs]
 
+    def config(self):
+        """What describes this run beyond the model: recorded in the result's
+        pipeline config (and so in experiment_id) and compared by `compare`."""
+        c = {"threads": self.threads or "default"}
+        if self.real is not None:
+            c["inputs"] = dict(self.real.describe(), order=self.order.order)
+            if self.labels is not None:
+                c["labels"] = self.labels_path
+        else:
+            c["inputs"] = "synthetic"
+        return c
+
+    def quality(self):
+        """Accuracy against the labels over the samples predicted so far."""
+        if self.labels is None or self.preds is None:
+            return None
+        return self.preds.quality(self.labels, self.labels_path)
+
     # ---- stage functions (each does real, timeable work) ----
 
     def capture(self):
-        """Synthetic source: references pre-generated tensors (near-zero
-        cost). Real capture latency can't be honestly approximated by a
+        """Real inputs: the next sample, copied out of the file (what a
+        receiver holds). Synthetic: references pre-generated tensors (near-zero
+        cost); real capture latency can't be honestly approximated by a
         default — use --pipeline with your real source for that."""
-        self._raw = self._static_inputs
+        if self.real is not None:
+            self._k = self.order.index(self._i)
+            self._i += 1
+            self._raw = self.real.sample(self._k)
+        else:
+            self._raw = self._static_inputs
 
     def preprocess(self):
-        """Minimal, honest preprocessing: min-max normalise float inputs;
+        """Real arrays pass through unchanged (they are model inputs already);
+        images get their colour order, scaling and layout here (--image-prep). Synthetic: min-max normalise float inputs;
         integer/bool inputs pass through unchanged."""
+        if self.real is not None:
+            self._prepped = self.real.prepare(self._raw)
+            return
         out = {}
         for name, arr in self._raw.items():
             if np.issubdtype(arr.dtype, np.floating):
@@ -425,9 +773,12 @@ class OnnxStagePipeline:
         # CPU provider: outputs are already host-side from inference(). ~0 ms.
 
     def postprocess(self):
-        """Minimal, honest postprocessing: touch every output tensor."""
+        """Minimal, honest postprocessing: touch every output tensor; with real
+        inputs, keep this sample's prediction (preallocated, no allocation)."""
         for out in self._outputs:
             _ = np.asarray(out).sum()
+        if self.preds is not None:
+            self.preds.record(self._k, self._outputs)
 
     def stage_fns(self):
         return {

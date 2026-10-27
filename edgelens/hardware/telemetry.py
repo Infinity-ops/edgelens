@@ -23,6 +23,7 @@ v0.1.0 design (replaces the per-sample subprocess approach):
 """
 
 import glob
+import os
 import re
 import shutil
 import statistics
@@ -33,6 +34,7 @@ import time
 import psutil
 
 from . import power as power_mod
+from ..core.clock import now_ns as _now_ns
 
 # GPU load nodes, per-mille (0..1000). Paths differ across Jetson modules
 # and JetPack releases; the first readable one wins.
@@ -80,33 +82,98 @@ def read_gpu_percent_sysfs():
         return None
 
 
+SLOW_ZONE_MS = 1.0          # a zone read slower than this is "slow" (firmware / I2C)
+SLOW_ZONE_EVERY = 20        # read slow zones only every Nth sample
+
+
+def _read_zone(path):
+    with open(path) as f:
+        return int(f.read().strip()) / 1000.0
+
+
 def _zones():
+    """[(name, path, cost_ms)] — each zone's read cost measured once.
+
+    Some thermal zones are read through firmware or I2C and take
+    milliseconds (laptop Wi-Fi chips, a Jetson PMIC): read every sample, they
+    made the sampler cost 7-15 ms of CPU per sample on real machines."""
     global _thermal_zones
     if _thermal_zones is None:
         zones = []
         for zone in sorted(glob.glob("/sys/class/thermal/thermal_zone*")):
             try:
                 with open(f"{zone}/type") as f:
-                    zones.append((f.read().strip(), f"{zone}/temp"))
+                    name = f.read().strip()
             except Exception:
                 continue
+            path = f"{zone}/temp"
+            costs = []
+            for _ in range(2):
+                c0 = time.perf_counter()
+                try:
+                    _read_zone(path)
+                except Exception:
+                    pass
+                costs.append((time.perf_counter() - c0) * 1000.0)
+            zones.append((name, path, min(costs)))
         _thermal_zones = zones
     return _thermal_zones
 
 
-def read_temps():
+def slow_zones():
+    return [(n, round(c, 3)) for n, _, c in _zones() if c > SLOW_ZONE_MS]
+
+
+_temp_cache = {}
+_temp_calls = [0]
+
+
+def read_temps(include_slow=None):
+    """Temperatures of all plausible zones. Slow zones are re-read only every
+    SLOW_ZONE_EVERY calls (their last value is reused in between)."""
+    _temp_calls[0] += 1
+    if include_slow is None:
+        include_slow = _temp_calls[0] % SLOW_ZONE_EVERY == 1
     temps = {}
-    for name, path in _zones():
+    for name, path, cost in _zones():
+        if cost > SLOW_ZONE_MS and not include_slow:
+            if name in _temp_cache:
+                temps[name] = _temp_cache[name]
+            continue
         try:
-            with open(path) as f:
-                val = int(f.read().strip()) / 1000.0
+            val = _read_zone(path)
         except Exception:
             continue
         # Disabled/virtual zones report sentinel values (e.g. -40 C or 100+ C
         # on the Nano's PMIC zone); keep only physically plausible readings.
         if -30.0 < val < 130.0:
             temps[name] = val
+            _temp_cache[name] = val
     return temps
+
+
+def profile_sampler(n=10):
+    """CPU ms per call of each sampler part (for `edgelens selftest`)."""
+    pr = power_mod.PowerReader()
+    parts = {
+        "cpu_percent": lambda: psutil.cpu_percent(interval=None),
+        "memory": psutil.virtual_memory,
+        "swap": psutil.swap_memory,
+        "thermal (fast zones)": lambda: read_temps(include_slow=False),
+        "thermal (all zones)": lambda: read_temps(include_slow=True),
+        "gpu load": read_gpu_percent_sysfs,
+        "power sensors": pr.read,
+    }
+    out = {}
+    for name, fn in parts.items():
+        c0 = time.thread_time()
+        for _ in range(n):
+            try:
+                fn()
+            except Exception:
+                pass
+        out[name] = round((time.thread_time() - c0) / n * 1000.0, 3)
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -216,12 +283,51 @@ def read_gpu_percent_tegrastats():
 # --------------------------------------------------------------------------
 # sampling
 
+_swap_cache = [None, 0]
+
+
+def _swap():
+    """Swap changes slowly and psutil reads several /proc files for it:
+    refresh every 10th sample."""
+    _swap_cache[1] += 1
+    if _swap_cache[0] is None or _swap_cache[1] % 10 == 0:
+        _swap_cache[0] = psutil.swap_memory()
+    return _swap_cache[0]
+
+
+_gpu_devfreq = [False]          # not looked up yet
+
+
+def _gpu_freq_path():
+    """devfreq cur_freq of the integrated GPU, or None (not a Jetson)."""
+    if _gpu_devfreq[0] is False:
+        _gpu_devfreq[0] = None
+        for d in sorted(glob.glob("/sys/class/devfreq/*")):
+            name = os.path.basename(d).lower()
+            dev = os.path.realpath(d).lower()
+            if any(k in name or k in dev for k in ("gpu", "gv11b", "ga10b", "gp10b", "gm20b")):
+                _gpu_devfreq[0] = os.path.join(d, "cur_freq")
+                break
+    return _gpu_devfreq[0]
+
+
+def read_gpu_freq_mhz():
+    path = _gpu_freq_path()
+    if not path:
+        return None
+    try:
+        with open(path) as f:
+            return int(f.read().strip()) / 1e6
+    except (OSError, ValueError):
+        return None
+
+
 def snapshot(stream=None, power_reader=None):
     """One telemetry sample. Safe on any host (Jetson or not), non-blocking."""
     t0 = time.perf_counter()
     c0 = time.thread_time()
     mem = psutil.virtual_memory()
-    swap = psutil.swap_memory()
+    swap = _swap()
     teg = stream.latest() if stream is not None else None
 
     gpu = read_gpu_percent_sysfs()
@@ -244,10 +350,15 @@ def snapshot(stream=None, power_reader=None):
         "swap_used_gb": round(swap.used / 1e9, 2),
         "temps_c": read_temps(),
         "gpu_percent": gpu,
+        "gpu_freq_mhz": read_gpu_freq_mhz(),
         "emc_percent": teg.get("emc_percent") if teg else None,
         "rails_w": rails or {},
         "power_w": power_mod.total_power_w(rails) if rails else None,
         "timestamp": time.time(),
+        # The one clock (CLOCK_MONOTONIC) — what markers and stage timings use.
+        # Series and energy integration use this, never wall time, which
+        # jumps when chrony/NTP corrects it.
+        "mono_ns": _now_ns(),
     }
     # Wall time includes waiting for the GIL while the workload thread runs,
     # so it overstates the sampler's real cost; CPU time is what it steals.
@@ -278,6 +389,141 @@ class TelemetryRecorder:
         self._power = power_mod.PowerReader() if use_power else None
         self._power_denied = self._power.denied if self._power is not None else []
         self.start_time = None
+        self.start_mono_ns = None
+        # Background load: CPU time of everything EXCEPT this process (its
+        # children included) and the processes registered with track_pid()
+        # (the application under test). See background_load().
+        self._own = {}                 # pid -> [first cpu s, last cpu s]
+        self._sys0 = None
+        self._bg = None
+        self._procs0 = None
+
+    def track_pid(self, pid):
+        """Count this process (the application being measured) as part of
+        the workload, not as background load."""
+        if pid and pid not in self._own:
+            self._own[pid] = [None, None]
+            self._touch(pid, first=True)
+
+    def _touch(self, pid, first=False):
+        try:
+            p = psutil.Process(pid)
+            t = p.cpu_times()
+            v = t.user + t.system + getattr(t, "children_user", 0.0) + \
+                getattr(t, "children_system", 0.0)
+        except (psutil.Error, OSError):
+            return
+        rec = self._own.setdefault(pid, [None, None])
+        if first or rec[0] is None:
+            rec[0] = v
+        rec[1] = v
+
+    @staticmethod
+    def _sys_busy():
+        t = psutil.cpu_times()
+        idle = t.idle + getattr(t, "iowait", 0.0)
+        total = sum(t)
+        # guest time is already inside user/nice on Linux: don't count it twice
+        total -= getattr(t, "guest", 0.0) + getattr(t, "guest_nice", 0.0)
+        return total - idle
+
+    @staticmethod
+    def _all_cpu():
+        """{pid: (name, cpu seconds, create_time)} of every process — twice per
+        run, not per sample. create_time (not the name) tells a reused PID from
+        the same process: kernel workers rename themselves after the work
+        they are doing ("kworker/4:2-events" -> "kworker/4:2-mm_percpu_wq")."""
+        out = {}
+        for p in psutil.process_iter(["name", "cpu_times", "create_time"]):
+            try:
+                t = p.info["cpu_times"]
+                if t is not None:
+                    out[p.pid] = (p.info["name"] or "?", t.user + t.system,
+                                  p.info.get("create_time"))
+            except (psutil.Error, OSError, KeyError):
+                continue
+        return out
+
+    @staticmethod
+    def _window_cpu(before, now, window_start_wall, elapsed):
+        """CPU seconds a process used inside the window, or None to skip it.
+
+        Same process (same create_time): the difference. A process that
+        started inside the window: all of its CPU time. Anything else (a
+        process that existed before the window but was not in the first
+        snapshot, or one whose start time can't be read) is skipped rather
+        than charged with its whole lifetime — that was the bug that put a
+        kworker at "5 cores" on a laptop. Same process is decided by
+        create_time; psutil derives it from boot time + start ticks, so a 1 s
+        tolerance absorbs rounding."""
+        _name, cpu, created = now
+        if before is not None:
+            b_cpu, b_created = before[1], (before[2] if len(before) > 2 else None)
+            if created is None or b_created is None or abs(created - b_created) < 1.0:
+                return max(0.0, cpu - b_cpu)
+        if created is not None and created >= window_start_wall - 1.0:
+            return cpu if cpu <= elapsed * (psutil.cpu_count() or 1) else None
+        return None
+
+    def _bg_start(self):
+        self._own = {pid: [None, None] for pid in self._own}
+        for pid in list(self._own) + [os.getpid()]:
+            self._touch(pid, first=True)
+        try:
+            self._procs0 = self._all_cpu()
+        except Exception:
+            self._procs0 = None
+        self._bg_wall0 = time.time()
+        self._sys0 = (self._sys_busy(), _now_ns())
+
+    def _bg_stop(self):
+        if self._sys0 is None:
+            return None
+        self._touch(os.getpid())
+        for pid in list(self._own):
+            self._touch(pid)
+        busy0, t0 = self._sys0
+        elapsed = (_now_ns() - t0) / 1e9
+        if elapsed <= 0:
+            return None
+        sys_busy = self._sys_busy() - busy0
+        own = sum((b - a) for a, b in self._own.values() if a is not None and b is not None)
+        ncpu = psutil.cpu_count(logical=True) or 1
+        other = max(0.0, sys_busy - own)
+        top = []
+        if getattr(self, "_procs0", None):
+            # who the background load is (fourth Nano run: ~0.9 cores of "other
+            # processes" and no way to tell what they were)
+            try:
+                now = self._all_cpu()
+                mine = set(self._own) | {os.getpid()}       # same rule as the total
+                wall0 = getattr(self, "_bg_wall0", time.time() - elapsed)
+                for pid, cur in now.items():
+                    if pid in mine:
+                        continue
+                    name = cur[0]
+                    used = self._window_cpu(self._procs0.get(pid), cur, wall0, elapsed)
+                    if used is None:
+                        continue
+                    if used / elapsed >= 0.01:
+                        top.append({"pid": pid, "name": name, "cores": round(used / elapsed, 3)})
+                top.sort(key=lambda r: -r["cores"])
+                top = top[:5]
+            except Exception:
+                top = []
+        return {
+            "cpu_pct": round(other / (elapsed * ncpu) * 100.0, 2),     # % of the whole machine
+            "cores": round(other / elapsed, 3),
+            "workload_cores": round(own / elapsed, 3),
+            "interval_s": round(elapsed, 2),
+            "workload_pids": sorted(self._own),
+            "top": top,                    # the biggest other processes in this window
+            "method": ("system CPU time minus EdgeLens and the measured application "
+                       "(psutil cpu_times; children included once they exit)"),
+        }
+
+    def background_load(self):
+        return self._bg
 
     def start(self):
         self._samples = []
@@ -295,7 +541,9 @@ class TelemetryRecorder:
             self._stream = TegrastatsStream(interval_ms=max(50, int(self.interval_s * 1000)))
             self._stream.start()
         psutil.cpu_percent(interval=None)   # reset the CPU% window to "now"
+        self._bg_start()
         self.start_time = time.time()
+        self.start_mono_ns = _now_ns()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -304,11 +552,15 @@ class TelemetryRecorder:
             try:
                 if len(self._samples) < MAX_SERIES_SAMPLES:
                     self._samples.append(snapshot(self._stream, self._power))
+                if self._own and len(self._samples) % 10 == 0:
+                    for pid in list(self._own):      # last value seen if it exits
+                        self._touch(pid)
             except Exception:
                 pass
             self._stop_event.wait(self.interval_s)
 
     def stop(self):
+        self._stop_mono_ns = _now_ns()
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
@@ -319,23 +571,61 @@ class TelemetryRecorder:
             pass
         if self._stream is not None:
             self._stream.stop()
+        try:
+            self._bg = self._bg_stop()
+        except Exception:
+            self._bg = None
         return self.summarize()
 
+    def _starvation(self, n, costs, cpu_costs):
+        """Too few samples for the recording's length, or None.
+
+        The sampler is a thread: every sysfs read releases Python's GIL, and a
+        pipeline that runs pure Python never hands it back before the 5 ms
+        switch interval. Found on an AGX Orin: a ~1 s pure-Python benchmark got
+        2 samples, the first finishing at the very end (sandbox: 0.98 ms CPU but
+        34.8 ms wall per sample). Pipelines in onnxruntime / numpy release the
+        GIL and are not affected. Reported, not hidden: telemetry figures from
+        a starved recording describe a few moments, not the run."""
+        start, stop = self.start_mono_ns, getattr(self, "_stop_mono_ns", None)
+        if start is None or stop is None or not self.interval_s:
+            return None
+        elapsed = (stop - start) / 1e9
+        expected = elapsed / self.interval_s
+        if expected < 5 or n >= 0.5 * expected:
+            return None
+        wall = statistics.mean(costs) if costs else None
+        cpu = statistics.mean(cpu_costs) if cpu_costs else None
+        return {"samples": n, "expected": int(expected), "recording_s": round(elapsed, 2),
+                "sampler_wall_ms_mean": round(wall, 3) if wall is not None else None,
+                "sampler_cpu_ms_mean": round(cpu, 3) if cpu is not None else None,
+                "likely_cause": ("the pipeline holds Python's GIL (pure-Python work); the "
+                                 "sampler thread waits for it on every sensor read")}
+
     def series(self):
-        """Compact timestamped series, t_s relative to the recording start."""
-        t0 = self.start_time or (self._samples[0]["timestamp"] if self._samples else 0)
+        """Compact timestamped series. t_s is relative to the recording start
+        on CLOCK_MONOTONIC; t_mono_ns is the absolute monotonic timestamp, so
+        samples line up with marker spans from other processes."""
+        t0 = self.start_mono_ns
+        if t0 is None:
+            t0 = self._samples[0].get("mono_ns", 0) if self._samples else 0
         out = []
         for s in self._samples:
             temps = s.get("temps_c") or {}
+            mono = s.get("mono_ns")
             out.append({
-                "t_s": round(s["timestamp"] - t0, 4),
+                "t_s": round((mono - t0) / 1e9, 4) if mono is not None else None,
+                "t_mono_ns": mono,
                 "cpu_percent": s.get("cpu_percent"),
                 "gpu_percent": s.get("gpu_percent"),
+                "gpu_freq_mhz": s.get("gpu_freq_mhz"),
                 "mem_percent": s.get("mem_percent"),
                 "emc_percent": s.get("emc_percent"),
                 "max_temp_c": max(temps.values()) if temps else None,
                 "power_w": s.get("power_w"),
             })
+            if s.get("rails_w"):
+                out[-1]["rails_w"] = {k: round(v, 3) for k, v in s["rails_w"].items()}
         return out
 
     def summarize(self):
@@ -369,11 +659,17 @@ class TelemetryRecorder:
             temps_peak[k] = peak(vs)
 
         n = len(self._samples)
-        span = (self._samples[-1]["timestamp"] - self._samples[0]["timestamp"]) if n > 1 else 0.0
+        first, last = self._samples[0], self._samples[-1]
+        if n > 1 and first.get("mono_ns") is not None and last.get("mono_ns") is not None:
+            span = (last["mono_ns"] - first["mono_ns"]) / 1e9
+        else:
+            span = (last["timestamp"] - first["timestamp"]) if n > 1 else 0.0
         single = n == 1 and self._samples[0].get("_single_fallback")
 
         summary = {
             "sample_count": 0 if single else n,
+            "clock": "CLOCK_MONOTONIC",
+            "origin_mono_ns": self.start_mono_ns,
             # Core count lets diagnosis tell "one core saturated" from "all busy".
             "cpu_count": psutil.cpu_count(logical=True),
             # Wall-clock span from real timestamps, NOT n * interval_s.
@@ -383,6 +679,7 @@ class TelemetryRecorder:
             # per sample, and the wall time a sample took (incl. GIL waits).
             "sampler_cpu_ms_mean": round(statistics.mean(cpu_costs), 3) if cpu_costs else None,
             "sampler_wall_ms_mean": round(statistics.mean(costs), 3) if costs else None,
+            "starved": self._starvation(n, costs, cpu_costs),
             "cpu_percent_mean": mean(cpu_vals),
             "cpu_percent_peak": peak(cpu_vals),
             "gpu_percent_mean": mean(gpu_vals),
@@ -392,7 +689,13 @@ class TelemetryRecorder:
             "emc_percent_mean": mean(emc_vals),
             "temps_c_mean": temps_mean,
             "temps_c_peak": temps_peak,
-            "max_temp_c": max(temps_peak.values()) if temps_peak else 0,
+            # None, not 0: a result file must not say 0 C when no thermal
+            # zone was readable (laptops, containers).
+            "max_temp_c": max(temps_peak.values()) if temps_peak else None,
+            # the board's state when the run began (assumption contracts)
+            "start_temp_c": (max((first.get("temps_c") or {}).values())
+                             if (first.get("temps_c") or {}) else None),
+            "slow_thermal_zones": slow_zones(),
             # flat/legacy fields (mean-based) consumed by older readers
             "cpu_percent": mean(cpu_vals),
             "gpu_percent": mean(gpu_vals),
@@ -404,6 +707,8 @@ class TelemetryRecorder:
             reason = "permission_denied"
             fix = power_mod.permission_fix_command(self._power_denied)
         summary["power"] = power_mod.summarize_power(self._samples, reason, fix)
+        if self._bg is not None:
+            summary["background"] = self._bg
         return summary
 
 

@@ -26,16 +26,18 @@ logical stream.
 
 import json
 import threading
-import time
 from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
 
 from ..hardware import telemetry as telemetry_mod
+from .clock import now_ns
 from ..packs import get_pack
 from .harness import measure_idle_power
 from .pipeline import infer_role
-from .result import MAX_TRACE_EVENTS, build_result
+from .eventbuf import EventBuffer
+from .gcwatch import GcWatch
+from .result import build_result
 
 
 class Tracer:
@@ -56,8 +58,7 @@ class Tracer:
         self._lock = threading.Lock()
         self._stage_order = OrderedDict()
         self._samples = {}
-        self._events = []
-        self._truncated = False
+        self._events = EventBuffer()     # integer columns: nothing for the GC to scan
         self._e2e = []
         self._iter = -1
         self._iter_seen = set()
@@ -66,6 +67,9 @@ class Tracer:
         self._recorder = None
         self._idle_w = None
         self.result = None
+        # Observer mode measures the user's own application: the collector is
+        # only watched (pauses recorded per iteration), never changed.
+        self._gcw = GcWatch("normal")
 
     # ---- lifecycle ----
 
@@ -75,11 +79,13 @@ class Tracer:
         if self._telemetry:
             self._recorder = telemetry_mod.TelemetryRecorder(interval_s=self._telemetry_interval_s)
             self._recorder.start()
-        self._origin = time.perf_counter_ns()
+        self._origin = now_ns()
+        self._gcw.start(self._origin)
         return self
 
     def __exit__(self, exc_type, exc, tb):
         self._close_auto_iteration()
+        self._gcw.stop()
         tel = self._recorder.stop() if self._recorder else {}
         series = self._recorder.series() if self._recorder else []
         desc = {
@@ -90,11 +96,12 @@ class Tracer:
         self.result = build_result(
             pipeline_desc=desc, stage_samples_ms=self._samples, e2e_ms=self._e2e,
             mode="hardware", pipeline_source=f"observer:{self.name}",
-            telemetry_summary=tel, telemetry_series=series, events=self._events,
-            events_truncated=self._truncated, deadline_ms=self.deadline_ms,
+            telemetry_summary=tel, telemetry_series=series, events=self._events.to_dicts(),
+            events_truncated=self._events.truncated, deadline_ms=self.deadline_ms,
             period_ms=self.period_ms, paced=False, idle_power_w=self._idle_w,
-            pack=self.pack,
+            pack=self.pack, trace_origin_ns=self._origin,
         )
+        self.result["gc"] = self._gcw.summary(self._e2e, self.deadline_ms)
         from .identity import attach_identity
         attach_identity(self.result)
         if self._save:
@@ -121,34 +128,37 @@ class Tracer:
         with self._lock:
             self._close_auto_iteration()
             self._iter += 1
-            self._iter_seen = set()
+            self._gcw.current_iter = self._iter
+            self._iter_seen.clear()
             self._explicit_depth += 1
-        t0 = time.perf_counter_ns()
+        t0 = now_ns()
         try:
             yield
         finally:
-            t1 = time.perf_counter_ns()
+            t1 = now_ns()
             with self._lock:
                 self._explicit_depth -= 1
                 self._e2e.append((t1 - t0) / 1e6)
 
     @contextmanager
     def stage(self, name):
-        t0 = time.perf_counter_ns()
+        t0 = now_ns()
         try:
             yield
         finally:
-            t1 = time.perf_counter_ns()
+            t1 = now_ns()
             self.record(name, t0, t1)
 
     def record(self, name, start_ns, end_ns):
-        """Record a stage interval measured elsewhere (perf_counter_ns clock)."""
+        """Record a stage interval measured elsewhere, in CLOCK_MONOTONIC ns
+        (edgelens.core.clock.now_ns(); clock_gettime(CLOCK_MONOTONIC) in C)."""
         with self._lock:
             if self._explicit_depth == 0:
                 if self._iter < 0 or name in self._iter_seen:
                     self._close_auto_iteration()
                     self._iter += 1
-                    self._iter_seen = set()
+                    self._gcw.current_iter = self._iter
+                    self._iter_seen.clear()
                 if self._iter_bounds is None:
                     self._iter_bounds = [start_ns, end_ns]
                 else:
@@ -156,13 +166,8 @@ class Tracer:
             self._iter_seen.add(name)
             self._stage_order.setdefault(name, None)
             self._samples.setdefault(name, []).append((end_ns - start_ns) / 1e6)
-            if len(self._events) < MAX_TRACE_EVENTS:
-                self._events.append({"iter": self._iter, "stage": name,
-                                     "start_ns": start_ns - self._origin,
-                                     "dur_ns": end_ns - start_ns,
-                                     "thread": threading.get_ident()})
-            else:
-                self._truncated = True
+            self._events.add(self._iter, name, start_ns - self._origin,
+                             end_ns - start_ns, threading.get_ident())
 
 
 def trace(name="pipeline", pack="custom", **kwargs):

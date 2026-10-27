@@ -1,8 +1,373 @@
 # Changelog
 
+## 0.2.0 — 2026-10-27 (Alpha)
+
+v0.2 adds evidence and workflow on top of v0.1's measurement: assumption
+contracts, the real inference rate (`periodic`), long runs (`soak`), backend
+comparison (`sweep`), applications EdgeLens doesn't run (markers, `record`,
+`watch`, ROS 2), one timeline (`export`), self-measurement (`selftest`),
+statistical `compare`, real model inputs and accuracy on the device, and,
+experimental, decision latency for windowed sensor pipelines.
+
+What has been verified on real hardware is listed per gate in
+[docs/jetson.md](docs/jetson.md): the v0.1 scope on a Jetson Nano, and the
+v0.2 gate script on the onnxruntime CPU path of a Jetson AGX Orin 32GB with
+the repository's own workloads (configuration ORIN-2: selftest, statistical
+compare, markers, attach and leak detection, `periodic`, `sweep`, contracts
+with each assumption violated, Perfetto export, the CI gate script).
+CUDA / TensorRT / DLA on Orin, ROS 2, bag replay and the experimental stream
+commands are still open. Known limitations:
+[docs/limitations.md](docs/limitations.md). Interface freeze for 0.2.x:
+[docs/stability.md](docs/stability.md).
+
+### Fixed — from the AGX Orin gate run (0.2.0rc1)
+
+- `periodic` printed "extra energy per inference" of 57, 114 and 376 mJ for
+  the same 0.3 ms inference at 1 Hz on a quiet board (376 mJ in a 4 ms
+  inference would be ~100 W). The figure is (mean power - idle) x period,
+  and idle had drifted between the baseline and the rows. Idle is now
+  measured before and after the rows (baseline = their mean, drift recorded
+  as `idle_drift_w`); an excess within that drift is a bound, "< N mJ"; a row
+  that draws more than the same work run back to back gets no figure and a
+  note. The back-to-back phase runs at least 2 s when a power sensor is read
+  (200 inferences of 0.3 ms were less than one power sample). New fields:
+  `idle_power_before_w`, `idle_power_after_w`, `idle_drift_w`,
+  `back_to_back.power_sample_count`, `dynamic_energy_below_reason`,
+  `dynamic_energy_not_attributable`. A run takes one idle baseline longer.
+
+### Upgrading from 0.1
+
+Nothing in a 0.1 command line or `--pipeline` script has to change. Results
+keep `schema_version: 1`; fields were only added, and files written by 0.1.0
+load in every command. Visible changes:
+
+- `fps` in paced, markers, attach and ROS 2 runs is the observed rate over the
+  run, not 1 / mean latency; `throughput_basis` says which.
+- `telemetry.max_temp_c` is `null`, not `0`, when no thermal zone is readable.
+- `validate` is stricter: a latency PASS becomes NOT_MEASURED when a
+  measurement-integrity issue blocks it, energy from fewer than 3 power
+  samples is NOT_MEASURED, and `--max-miss-ratio` compares the exact ratio.
+- Python 3.8 is still supported (JetPack 4 venvs); 3.8–3.13 are tested.
+
+### Experimental in 0.2
+
+`stream`, `replay`, `detect`, `envelope`, `perturb`, `parity` (Layer 4) and
+`ros2 latency`: their spec and fault file formats are frozen, their reports
+and metrics may still change in a 0.2.x release.
+
+### Added — Layer 4: windowed sensor pipelines (experimental)
+
+- **Stream spec** (`edgelens stream init | check | fit-scaler`): one YAML file
+  describes columns, rates, windowing, the scaler, features, the model and the
+  alarm rule; `stream check` reports what the pipeline implies (history,
+  warm-up, smoothing delay) and whether recordings match it (rate, gaps, dead
+  columns).
+- **`replay`**: recordings through the spec's pipeline one block at a time,
+  per-stage cost per step on the board, incremental or recompute features,
+  `--speed 1` for real-time deadline misses.
+- **`detect`**: time from event to alarm, false alarms per healthy hour,
+  missed events, and what-if threshold / smoothing changes.
+- **`envelope fit | check`**: is the model answering about data it has seen
+  in training?
+- **`perturb`**: seeded sensor-fault campaigns (noise, bias, gain, stuck,
+  dropout, spikes, gaps, rate) and the severity at which decisions break.
+- **`parity`**: train/serve skew, the deployed feature path against the
+  training tensor or a reference runtime's outputs.
+- Docs: [docs/stream.md](docs/stream.md). Requirements `max_time_to_detect_s`,
+  `max_false_alarms_per_h`, `max_rmse` in `validate` and contracts.
+
+### Added — real inputs, accuracy, threads and images
+
+- `--inputs`, `--labels`, `--inputs-order sequential|spread`, `--threads`
+  for `benchmark --model`, `periodic`, `soak`, `contract run` (and
+  `--labels` / `--threads` for `sweep`). Real inputs (.npy / .npz / raw
+  .bin) are fed as given; the result records the file, its SHA-256, the
+  order and the onnxruntime thread count.
+- Accuracy against the labels follows their shape and the model's first
+  output: RMSE / MAE / RMSE per label level (regression, one or k values per
+  sample), accuracy / precision / recall at > 0.5 (0/1 detectors), top-1 /
+  top-5 / per-class accuracy (classifiers). Labels that cannot fit the model
+  are refused before the run; partial passes over the data are flagged.
+- `--inputs images/`: JPEG / PNG / BMP / WebP folders (or one image), decoded
+  once, prepared per `--image-prep` (presets `unit`, `imagenet`, `yolo`,
+  `signed`, `raw`, with overrides) in the timed preprocess stage; `--labels
+  subfolders` for class folders; extra `edgelens[images]`.
+- `validate --max-rmse` on benchmark results; new `--min-accuracy`.
+- Every harness result records its measurement protocol (`protocol`: warm-up
+  iterations and policy, iterations requested and timed, pacing, GC mode,
+  telemetry interval, repeats); `benchmark --warmup N` sets the warm-up.
+- `compare` separates requirement, data (input SHA) and setup (threads, GC
+  mode) differences.
+- Soak: private memory (RssAnon) is checked for leaks separately from
+  memory-mapped files (RssFile); a LATENCY_LEVELS finding names runs that
+  switch between two latency levels, with the CPU clock per level.
+- `examples/quickstart/` (a NumPy pipeline, the expected output and a result
+  checker), `examples/README.md`.
+
+### Changed
+
+- Renamed examples: `examples/robot_bag_replay.py` (`BAG_*` variables),
+  `examples/ci-jetson/perf/anomaly.contract.yaml`,
+  `tests/fixtures/make_robot_bag.py`; `scripts/validate_on_jetson.sh` reads
+  `BAG_FILE`.
+- Help texts, docstrings, the contract template and the docs use generic
+  names and examples.
+
+### Fixed — release review
+
+- `validate --max-miss-ratio` compared the miss ratio rounded to 6
+  decimals: one miss in 2 million or more iterations read 0.0 and passed a
+  "no misses" requirement.
+- Dynamic energy per iteration (`--idle-baseline`) was dynamic power x mean
+  latency; in paced runs that under-read by period / latency. It is dynamic
+  power x measured window / iterations.
+- No readable thermal zone gave `max_temp_c: 0` and "GPU mean None%, peak
+  temp 0C" in the summary; now `null` and "n/a".
+- On machines without a Jetson device tree the board name contained the
+  hostname ("Non-Jetson host (alice-laptop)"). It is part of
+  `environment_id`, so identical machines got different ids, and it was
+  published in every shared result. It is now the CPU model. Results from
+  such machines get a new `environment_id` (compare warns once across the
+  change).
+- `record -- CMD` aborted with "No process with pid N" when the command
+  finished before process sampling started; markers and telemetry are kept.
+- The source distribution lacked `examples/markers/cpp_app.cpp` (a test
+  compiles it) and listed a `ROADMAP.md` that does not exist; an error
+  message pointed to that file.
+- Subprocess tests failed from a plain checkout without `pip install -e .`.
+- Contract error for a comma inside `{ ... }` explains the quoting.
+
+### Fixed — found on an AGX Orin 32GB (Yocto/OE4Tegra)
+
+- `doctor` said "Is Jetson: no" and missed CUDA and TensorRT on a Jetson whose
+  model string is the integrator's own and whose rootfs is not NVIDIA's
+  Ubuntu. Detection now also uses `/proc/device-tree/compatible`
+  (`nvidia,tegra*`) and `/sys/devices/soc0/family`; CUDA is found under
+  versioned `/usr/local/cuda-*/` without the `cuda` symlink, and on
+  runtime-only installs (no version.json, no nvcc) from `libcudart.so.X.Y.Z`
+  or the `/usr/local/cuda-X.Y` directory name; TensorRT under
+  `/usr/lib/libnvinfer.so.*` and `/usr/include/NvInferVersion.h`.
+- `doctor` shows the module and SoC from the part number
+  (e.g. `Jetson AGX Orin 32GB · tegra234`) and says why L4T is missing
+  instead of "not detected".
+- soak: a 5-minute run WITHOUT a leak (+0.9 MB warm-up) was reported as LEAK
+  SUSPECTED. A leak now also needs >= 8 MB and >= 5% real growth; below
+  that, "growing — too little to call a leak; run longer".
+- benchmark: "Telemetry starved" warning when a pure-Python pipeline keeps
+  the sampler from running; energy from < 3 power samples is "not measured".
+- doctor/selftest/contracts: unset system clock warning; power mode, clock
+  pinning and install advice for images without nvpmodel, jetson_clocks or
+  apt; the summed power rails are listed; board assumptions match the
+  module name (e.g. "Jetson AGX Orin 32GB").
+- validate_on_jetson.sh runs with BusyBox head/tail/timeout (needs bash).
+- doctor/contracts: "power mode is not set" (nvpmodel without a mode) is
+  reported as such; a contract requiring a mode is VIOLATED, not "not verified".
+- validate_on_jetson.sh runs without a `timeout` command (BusyBox images) and no
+  longer reports that as a broken onnxruntime.
+- tests: six tests no longer assume a non-Orin host or an idle machine.
+
+### Added — Layer 3: evidence and workflow
+
+- **Assumption contracts (E1):** `validate --contract c.yaml` checks
+  requirements AND the conditions they are claimed under — board, power mode,
+  pinned clocks, input period, start temperature, thermal envelope,
+  background CPU load, provider, model hash — plus `min_duration` /
+  `min_iterations` and requirement IDs. A violated or unverifiable assumption
+  gives INCONCLUSIVE, never PASS; a FAIL outside the assumptions is reported
+  but not counted as evidence. Unknown keys are errors with a suggestion.
+  `--evidence e.md` writes a Markdown evidence record (one row per
+  requirement ID). `edgelens contract init | check | run`: `run` checks the
+  assumptions it can before measuring, then measures exactly what the contract
+  needs (paced period, deadline, iterations, duration; soak or periodic when
+  the guarantees need it) and validates.
+- **Background load** is now measured in every run: CPU time of every process
+  except EdgeLens and the measured application (`telemetry.background`);
+  telemetry also records the start temperature, the GPU clock and every
+  power rail per sample.
+- **`edgelens export --perfetto` (E2):** spans of every process and thread,
+  end-to-end iterations, deadline misses, board counters (CPU/GPU load, GPU
+  clock, EMC, memory, temperature, power and each rail) and per-process
+  counters on one timeline for ui.perfetto.dev; several files share the
+  monotonic clock when recorded on the same boot. Checked against Perfetto's
+  trace processor.
+- **Performance CI (E3):** `examples/ci-jetson/` — a complete example
+  repository: GitHub Actions workflow for a self-hosted Jetson runner
+  (concurrency per board, clocks pinned and restored, evidence as job summary
+  and artifact), an example contract, the gate script (exit code = verdict) and
+  a 1 Hz anomaly-detection pipeline; docs/contracts.md, docs/timeline.md, docs/ci.md.
+- Dependency: PyYAML (contract files).
+
+### Added — Layer 2: insights nobody else gives you
+
+- **`edgelens sweep` (I3):** one model on CPU / CUDA / TensorRT FP32, FP16,
+  INT8 / DLA (+ external runtimes such as EDDL via exported inputs and saved
+  outputs): latency, energy, session start-up (TensorRT engine cache) and
+  output equivalence against a reference backend — max |error|, values within
+  tolerance, decision agreement (argmax / threshold). Verdicts EQUIVALENT /
+  NUMERIC_DRIFT / DECISIONS_DIFFER; finding OUTPUT_DRIFT; validate
+  `--max-output-error`, `--min-decision-agreement`.
+- **`edgelens periodic` (I1):** latency and energy at the real inference rate
+  (period sweep) against back-to-back, with service time and OS wake-up delay
+  kept apart, energy per period (idle included) and extra energy per
+  inference over a measured idle baseline; finding DUTY_CYCLE_PENALTY; GPU
+  railgate state; `compare` of two periodic runs prints the trade-off both
+  ways; validate `--max-energy-per-period-mj`.
+- **`edgelens soak` (I2):** time-boxed windows streamed to JSONL (crash-safe,
+  `--report` rebuilds), for EdgeLens-driven pipelines and observed
+  applications; drift (significance-tested trend), thermal throttling (cooling
+  devices, clock drops), process RSS and Jetson NvMap growth, available-memory
+  trend and time to OOM, swap; findings LATENCY_DRIFT, THERMAL_THROTTLING,
+  MEMORY_LEAK, GPU_MEMORY_GROWTH, OUT_OF_MEMORY_RISK, SWAP_IN_USE; validate
+  `--max-latency-drift-pct`, `--max-mem-growth-mb-per-h`,
+  `--max-throttled-windows`, `--max-temp-c`.
+- `tests/fixtures/lstm_anomaly.onnx` (a small LSTM stand-in),
+  `examples/soak_leak_demo.py`; docs/insights.md.
+
+### Fixed — from the second Jetson Nano run
+
+- The GPU-provider check reported "SIGBUS: broken install" with a single,
+  sound onnxruntime-gpu 1.11 (JetPack 4.6): it allocated a bare CUDA tensor.
+  It now creates and runs a CUDA session on a tiny embedded model and names
+  the step that failed; "two packages" is blamed only when two are installed.
+- A SIGBUS is first checked against the kernel log: storage errors (a failing
+  SD card) are named as the cause. `doctor` has a Storage row; the validation
+  script warns that results from such a card are not evidence.
+- The check's cache can't outlive the problem: only a success is cached,
+  keyed by interpreter, onnxruntime install, CUDA driver file and boot id;
+  failures are re-tested every run. `doctor` says when a result came from the
+  cache; `doctor --no-cache` and `cuda_probe(force=True)` test again.
+- `doctor`'s GPU row shows the check's actual finding instead of always
+  "CUDA/cuDNN libraries missing".
+- The validation script's preflight no longer prints its output twice.
+
+### Fixed — from the fourth Jetson Nano run (and a laptop run)
+
+- `sweep`: the `dla` backend on a board without a DLA engine (Nano) returned
+  GPU numbers as a "DLA" result — TensorRT falls back silently. It is now
+  "unavailable" with the reason.
+- `periodic`: extra energy per inference below the sensor's resolution was
+  printed as 0.0 mJ; it is now a bound ("< 28 mJ").
+- Background load names the busiest other processes (`telemetry.background.top`),
+  and a violated `max_background_cpu_pct` assumption lists them.
+- Storage errors are remembered per SD card (CID) across reboots; a new card
+  starts clean; `doctor --forget-storage-errors`.
+- Contracts: `min_duration` used the telemetry sampler's span (up to one
+  interval short: a 1.0 s run counted as 0.9 s); it now uses the run window.
+- `export --perfetto` notes when same-boot files are far apart (`--align start`).
+- Validation script: T4 gates a known, injected change (the statistics), and
+  reports free-vs-pinned clocks as a measurement (INFO), since pinning does not
+  help every workload; E1 waits for a quiet board, names what is busy, adapts the
+  contracts' background limit, and skips (not fails) checks whose reference run
+  could not run; E2 takes board counters from any EdgeLens run.
+
+### Fixed — from the third Jetson Nano run
+
+- Validation with sudo on a board that was already pinned measured "unpinned"
+  runs with pinned clocks (`jetson_clocks --store` saves the current state, so
+  `--restore` pinned again): T4 A/B reported NO DETECTABLE CHANGE and the I1
+  trade-off compared pinned with pinned. The script now unpins explicitly
+  (re-applying the nvpmodel mode, falling back to the cpufreq / devfreq
+  minimums), checks the state from sysfs after every change, restores the
+  board's starting state on exit, and the A/B and trade-off gates fail unless
+  the saved results really differ in clock state. The physical E1 clock test
+  now runs in both directions.
+- Soak reported thermal throttling in 30 of 30 windows at 50 C: the "active"
+  cooling devices were Tegra voltage floors (CORE-floor, DFLL-floor) and
+  voltage-temperature scaling (vdd-gpu-vts), which never lower a clock. They
+  are now ignored like fans (listed as `cooling_devices_ignored`); real
+  throttling devices and lowered clock caps still count. `soak --report` of an
+  existing .jsonl applies the corrected rule.
+- Two unit tests read the machine's real kernel log, so they failed on a board
+  with a failing SD card; tests now always see a clean log unless they test
+  storage errors on purpose.
+
+### Fixed — from the first Jetson Nano run
+
+- A broken onnxruntime (two packages installed over each other) crashed every
+  command with "Bus error": the CUDA provider check now runs in a child
+  process with a timeout, cached per install; `doctor` names the conflict and
+  the fix; the validation script stops at a preflight check, gives every step
+  a timeout and stops on the first crash with a Python traceback.
+- Markers on slow CPUs: the collector receives raw and parses later; senders
+  flush overflow in 4 KB chunks with a 200 µs back-off (a full queue cost
+  234 µs per C span on the Nano); faster Python `mark.span`.
+- selftest: genuinely realistic marker rate (4000 spans/s), costs beyond the
+  kernel's sendto(), collector capacity, scheduling jitter (desktop hint),
+  sampler breakdown, implausible chrony bounds flagged.
+- Telemetry: slow thermal zones (firmware / I2C reads of several ms) are read
+  every 20th sample; swap every 10th.
+
+Tested in CI; their Jetson rows are in docs/jetson.md.
+
+### Added — Layer 0: can you trust the numbers?
+
+- **One clock (T2):** every timestamp is CLOCK_MONOTONIC: harness and
+  observer stages, markers, telemetry samples (`t_mono_ns`), energy
+  integration. New `clock` block in results with the wall↔monotonic offset
+  and its uncertainty; chrony error bounds for cross-machine comparisons.
+- **`edgelens selftest` (T3):** measures EdgeLens itself on the board:
+  clock, harness error against a known reference workload, Python and C
+  marker cost next to the kernel's `sendto()` cost, marker delivery and exact
+  loss accounting, datagram queue limit, sampler CPU, telemetry disturbance,
+  chrony.
+- **Statistical compare (T4):** `benchmark --repeat N [--cooldown S]` writes
+  NAME.r01.json…; `compare 'a.r*.json' 'b.r*.json'` gives IMPROVED /
+  REGRESSED / NO DETECTABLE CHANGE from Welch intervals over runs, with the
+  smallest change the runs could have detected; `--metric`, `--min-effect`.
+  Single-run compares show a within-run block-bootstrap interval of p99.
+  Results now carry `latency_series_ms`.
+- **Schema v1 frozen (T5):** docs/schema.md; a file written by edgelens
+  0.1.0 is a test fixture that must keep working everywhere; newer schemas
+  are refused clearly.
+- **Measurement integrity checks:** lost marker events, unsynchronised GPU
+  spans, log-sourced timing, missing latency, cross-machine clock doubt.
+  `validate` turns a latency PASS into NOT_MEASURED when an issue blocks it
+  (a FAIL stays a FAIL); `diagnose` lists them.
+
+### Added — Layer 1: systems EdgeLens doesn't run
+
+- **Markers (S1):** header-only `edgelens_mark.h` for C/C++ (`EL_SPAN`,
+  `EL_ITERATION`, `EL_SPAN_GPU`, `EL_SPAN_CUDA`, `-DEDGELENS_DISABLE`) and
+  `edgelens.mark` for Python; never-blocking UNIX datagrams with overflow
+  batching and exact loss accounting. `edgelens record [-- CMD]`,
+  `edgelens include` (for `-I`), `edgelens import-log --regex`.
+- **Attach mode (S2):** `edgelens watch --pid / --name / -- CMD`: per-process
+  CPU, memory and growth rate, threads, context switches, with board
+  telemetry on one timeline; collects markers too.
+- **ROS 2 latency (S3, experimental):** `edgelens ros2 latency --from --to`:
+  chain latency by matching header stamps (no clock sync needed), data age
+  with explicit clock uncertainty, per-topic rate, jitter and gaps.
+- **ROS bag replay (S4):** `examples/rosbag_to_windows.py` (as-of merge of
+  /imu, /odom, /cmd_vel + any topic, data-age columns, gap report;
+  extra `edgelens[rosbag]`) and `examples/robot_bag_replay.py` (1 Hz
+  stand-in LSTM pipeline with a freshness check).
+- `examples/markers/cpp_app.cpp`, `examples/markers/python_app.py`;
+  `scripts/validate_on_jetson.sh` extended with a gate per feature and a
+  SUMMARY.txt; docs/markers.md, docs/validation-v0.2.md.
+
+### Measurement correctness (from an independent pre-release review)
+
+- Throughput in markers / attach / ROS 2 / paced runs is the observed rate
+  over the run, not 1 / mean latency (`throughput_basis` says which).
+- `record -- CMD` uses a private socket; `watch --pid/--name` keeps only the
+  target's own spans. Energy per iteration in observed runs covers only the
+  active window (first to last span), not start-up.
+- Markers are fork-safe in C and Python; duplicate sequence numbers, senders
+  killed before their final message, unstored spans, multi-thread runs
+  without `@iteration`, and ROS messages missing from a chain all block a
+  latency PASS instead of passing silently.
+
+### Changed
+
+- Timeseries pack: `hop` may be larger than `window` (predict less often
+  than the sensor delivers, e.g. 0.5 s of history once per second).
+- Role inference recognises lstm/gru/rnn/cnn/eddl/trt/onnx/anomaly names as
+  inference.
+
 ## 0.1.0 — 2026-10-07
 
 ### Added
+
 - Generic `edgelens.Pipeline` engine: any named stages with roles; harness
   mode (`Pipeline.run`, `benchmark --pipeline` with `build_pipeline()`) and
   observer mode (`edgelens.trace`).
@@ -27,6 +392,7 @@
   `scripts/validate_on_jetson.sh`.
 
 ### Changed
+
 - `evidence_strength` is now categorical (`weak`/`moderate`/`strong`); the
   numeric ordering value moved to `rank_score`.
 - Diagnosis rules use stage roles, not the six fixed stage names.
@@ -37,11 +403,12 @@
 - `fingerprint_id` is now an alias of `environment_id`.
 
 ### Added after Jetson Nano validation
+
 - `doctor` shows **Benchmark readiness**: power mode, clock pinning, GPU
   inference providers and power-sensor access, each with a copyable fix.
   Built from the three issues hit on a real Nano (unpinned clocks, PyPI
   onnxruntime replacing the GPU build, root-only power sensor).
-- `doctor` prints a *Telemetry sources* table (GPU load, INA3221 power,
+- `doctor` prints a _Telemetry sources_ table (GPU load, INA3221 power,
   thermal zones, tegrastats) with values and read cost.
 - Diagnosis `CLOCKS_NOT_PINNED`: long tail with unpinned clocks on Jetson
   (from a real Nano run: p99 148 ms unpinned vs 9.4 ms pinned).
@@ -49,6 +416,7 @@
   requirements (deadline/period/pacing/pack).
 
 ### Fixed after Jetson Nano validation
+
 - Paced mode: real-time factor used response time (incl. queueing) and the
   hop period instead of service time and the actual period (Nano run showed
   RTF 10.4 instead of ~2.7). An explicit `--period-ms` now also sets the
@@ -73,6 +441,7 @@
   of a traceback.
 
 ### Project
+
 - GitHub Actions: lint, tests on Python 3.8–3.13 (with and without
   onnxruntime), wheel build + clean-venv smoke test; release workflow with
   PyPI trusted publishing (manual run -> TestPyPI, GitHub Release -> PyPI).
@@ -81,6 +450,7 @@
   architecture diagram, measured headline result. Classifier: Alpha.
 
 ### Added: `edgelens validate`
+
 - Checks a saved run against requirements given as flags (latency
   percentiles, worst case, deadline miss ratio, throughput, power, energy
   per iteration) and answers PASS / FAIL / INCONCLUSIVE per requirement with
@@ -91,6 +461,7 @@
   Contract files come in v0.2.
 
 ### Fixed in the pre-release review
+
 - The sdist was missing `tests/__init__.py` and `tests/fixtures/` (the test
   suite failed when run from the sdist); added `MANIFEST.in`.
 - The release workflow ran no tests before publishing; it now runs the suite
@@ -115,6 +486,7 @@
   that would silently fall back to CPU, and `doctor` warns.
 
 ### Fixed
+
 - Multi-input ONNX models crashed with a raw `ValueError`.
 - Non-image dynamic dimensions were silently set to 224.
 - A new tegrastats process was spawned for every telemetry sample.
